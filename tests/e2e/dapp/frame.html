@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><title>Drey provider iframe</title></head>
+  <body>
+    <p id="frame-status" role="status">Waiting for iframe provider…</p>
+    <button id="frame-permissions">Read permissions in iframe</button>
+    <pre id="frame-output" aria-live="polite">No iframe request yet.</pre>
+    <script>
+      const status = document.querySelector('#frame-status');
+      const output = document.querySelector('#frame-output');
+      const render = () => { status.textContent = window.drey?.isDrey ? 'Drey provider available in iframe' : 'Provider unavailable'; };
+      document.querySelector('#frame-permissions').addEventListener('click', () => {
+        output.textContent = 'Pending…';
+        window.drey.request('wallet_getCurrentPermissions').then((response) => {
+          output.textContent = JSON.stringify(
+            'error' in response ? { error: response.error.message } : response.result,
+          );
+        });
+      });
+      window.addEventListener('drey#initialized', render, { once: true });
+      render();
+    </script>
+  </body>
+</html>

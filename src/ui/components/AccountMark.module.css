@@ -1,0 +1,33 @@
+/*
+ * Account identity art.
+ *
+ * Cells take `currentColor` so the mark follows whatever it sits beside and
+ * inherits the presentation accent, and never carries a semantic
+ * danger/warning/success colour (tokens.css). It is identity, not state.
+ *
+ * Sized in rem rather than px attributes so the mark scales with OS font size
+ * alongside the text it labels (§10.4).
+ */
+
+.mark {
+  display: block;
+  flex: none;
+}
+
+.sm {
+  height: 1rem;
+  width: 1rem;
+}
+
+.md {
+  height: 1.75rem;
+  width: 1.75rem;
+}
+
+.ground {
+  fill: var(--color-surface-raised);
+}
+
+.cells {
+  fill: currentColor;
+}

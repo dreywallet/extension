@@ -1,0 +1,37 @@
+.brand {
+  align-items: center;
+  display: inline-flex;
+  flex: none;
+  gap: .7rem;
+  min-width: max-content;
+}
+
+.mark {
+  display: block;
+  flex: none;
+  height: 2.75rem;
+  object-fit: contain;
+  width: 2.75rem;
+}
+
+.wordmark {
+  color: var(--color-text);
+  font-family: var(--font-display);
+  font-size: 2.9rem;
+  font-weight: 400;
+  letter-spacing: .015em;
+  line-height: .85;
+}
+
+.compact {
+  gap: .45rem;
+}
+
+.compact .mark {
+  height: 1.85rem;
+  width: 1.85rem;
+}
+
+.compact .wordmark {
+  font-size: 2rem;
+}

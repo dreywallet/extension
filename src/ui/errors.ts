@@ -1,0 +1,92 @@
+import type { WireErrorCode } from '../messaging/extension-ops';
+import type { MessageKey } from './i18n';
+
+/** Maps RPC error codes to user-facing message keys (fallback: generic internal). */
+export function errorMessageKey(code: WireErrorCode): MessageKey {
+  switch (code) {
+    case 'ERR_WRONG_PASSWORD':
+      return 'common.error.wrongPassword';
+    case 'ERR_WEAK_PASSWORD':
+      return 'onboarding.password.tooShort';
+    case 'ERR_LOCKED':
+      return 'common.error.locked';
+    case 'ERR_VAULT_NOT_FOUND':
+      return 'unlock.error.notFound';
+    case 'ERR_PASSKEY_DUPLICATE':
+      return 'passkey.error.duplicate';
+    case 'ERR_PASSKEY_IDENTITY_MISMATCH':
+      return 'passkey.error.mismatch';
+    case 'ERR_PASSKEY_INVALID_PRF':
+      return 'passkey.error.invalidPrf';
+    case 'ERR_PASSKEY_UNAVAILABLE':
+      return 'passkey.error.unavailable';
+    case 'ERR_VAULT_COORDINATOR_UNAVAILABLE':
+      return 'vault.error.unavailable';
+    case 'ERR_VAULT_ROLE_EXISTS':
+      return 'vault.error.roleExists';
+    case 'ERR_VAULT_ROLE_MISSING':
+      return 'vault.error.roleMissing';
+    case 'ERR_VAULT_ROLE_NOT_INDEPENDENT':
+      return 'vault.error.notIndependent';
+    case 'ERR_VAULT_IMPORT_SESSION_MISSING':
+      return 'vault.error.importSessionMissing';
+    case 'ERR_VAULT_SIGNER_REJECTED':
+      return 'vault.error.signerRejected';
+    case 'ERR_VAULT_RECOVERY_C_SESSION_MISSING':
+      return 'vault.error.recoveryCSessionMissing';
+    case 'ERR_VAULT_RECOVERY_C_RESPONSE_REJECTED':
+      return 'vault.error.recoveryCResponseRejected';
+    case 'ERR_VAULT_RECOVERY_C_KIT_REQUIRED':
+      return 'vault.error.recoveryCKitRequired';
+    case 'ERR_VAULT_RECOVERY_C_BACKUP_REQUIRED':
+      return 'vault.error.recoveryCBackupRequired';
+    case 'ERR_VAULT_POLICY_EXISTS':
+      return 'vault.error.policyExists';
+    case 'ERR_VAULT_POLICY_MISSING':
+      return 'vault.error.policyMissing';
+    case 'ERR_VAULT_POLICY_INCOMPLETE':
+      return 'vault.error.policyIncomplete';
+    case 'ERR_VAULT_PLAN_MISSING':
+      return 'vault.error.planMissing';
+    case 'ERR_VAULT_PLAN_REJECTED':
+      return 'vault.error.planRejected';
+    case 'ERR_VAULT_PLAN_STALE':
+      return 'vault.error.planStale';
+    case 'ERR_VAULT_PLAN_ALREADY_BROADCAST':
+      return 'vault.error.planAlreadyBroadcast';
+    case 'ERR_VAULT_BROADCAST_INDETERMINATE':
+      return 'vault.error.broadcastIndeterminate';
+    case 'ERR_DATA_STALE':
+      return 'send.error.stale';
+    case 'ERR_INSUFFICIENT_FUNDS':
+      return 'send.error.funds';
+    case 'ERR_PLAN_EXPIRED':
+      return 'send.error.expired';
+    case 'ERR_PLAN_CHANGED':
+      return 'send.error.changed';
+    case 'ERR_FEE_QUOTE_INVALID':
+      return 'send.error.fee';
+    case 'ERR_UNSAFE_TRANSACTION':
+      return 'send.error.unsafe';
+    case 'ERR_NOT_ACCELERATABLE':
+      return 'send.error.accelerate';
+    case 'ERR_UNSUPPORTED_ADDRESS':
+      return 'send.error.address';
+    case 'ERR_INVALID_ADDRESS':
+      return 'send.error.invalidAddress';
+    case 'ERR_INVALID_PAYMENT_INSTRUCTION':
+      return 'send.error.paymentInstruction';
+    case 'ERR_UNSUPPORTED_PAYMENT_METHOD':
+      return 'send.error.paymentMethod';
+    case 'ERR_OUTPUT_DUST':
+      return 'send.error.dust';
+    case 'ERR_INSCRIPTION_INSEPARABLE':
+      return 'ordinal.error.inseparable';
+    case 'ERR_CLEAN_FEE_INPUTS_UNAVAILABLE':
+      return 'ordinal.error.cleanFees';
+    case 'ERR_NO_SWEEPABLE_EXCESS':
+      return 'ordinal.error.noExcess';
+    default:
+      return 'common.error.internal';
+  }
+}

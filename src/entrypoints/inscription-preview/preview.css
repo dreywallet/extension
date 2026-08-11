@@ -1,0 +1,6 @@
+:root { color-scheme: light dark; }
+html, body, #preview { height: 100%; margin: 0; width: 100%; }
+#preview { align-items: center; display: flex; justify-content: center; overflow: hidden; }
+img { height: 100%; object-fit: contain; width: 100%; }
+/* Opt-in fill for browse grids; see the fit rationale in main.ts. */
+#preview[data-fit='cover'] img { object-fit: cover; }

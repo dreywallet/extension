@@ -1,0 +1,168 @@
+/*
+ * DREY dark-theme design tokens with a profile-wide presentation accent.
+ * Safety state is always communicated with text or an icon as well as color.
+ * Semantic warning, success, and danger colors never follow the accent.
+ */
+@font-face {
+  font-display: swap;
+  font-family: 'Anton';
+  font-style: normal;
+  font-weight: 400;
+  src: url('/fonts/Anton-Regular.woff2') format('woff2');
+}
+
+:root {
+  color-scheme: dark;
+
+  /* surfaces */
+  --color-bg: #080808;
+  --color-surface: #101010;
+  --color-surface-raised: #181818;
+  --color-surface-subtle: #141414;
+  --color-border: #303030;
+  --color-border-strong: #f4f4ef;
+
+  /* text */
+  --color-text: #f4f4ef;
+  --color-text-muted: #aaa9a5;
+  --color-text-faint: #74736f;
+
+  /* brand accent (white is the default) */
+  --color-accent: #f4f4ef;
+  --color-accent-hover: #fff;
+  --color-accent-subtle: rgba(244, 244, 239, .13);
+  --color-on-accent: #080808;
+
+  /* semantic */
+  --color-danger: #ff5358;
+  --color-danger-subtle: rgba(255, 83, 88, .13);
+  --color-warning: #ff9818;
+  --color-warning-subtle: rgba(255, 152, 24, .13);
+  --color-warning-soft: #21170c;
+  --color-success: #66d17a;
+  --color-success-subtle: rgba(102, 209, 122, .13);
+
+  /* type scale */
+  --font-display: 'Anton', Impact, 'Arial Narrow', sans-serif;
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --text-xs: .75rem;
+  --text-sm: .875rem;
+  --text-md: .9375rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.65rem;
+  --text-2xl: 2.55rem;
+
+  /* spacing / shape */
+  --space-1: .25rem;
+  --space-2: .5rem;
+  --space-3: .75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --radius-sm: 1px;
+  --radius-md: 2px;
+  --radius-lg: 2px;
+
+  --focus-ring: 3px solid var(--color-accent);
+}
+
+[data-accent='orange'] {
+  --color-accent: #ff9818;
+  --color-accent-hover: #ffad42;
+  --color-accent-subtle: rgba(255, 152, 24, .13);
+  --color-on-accent: #080808;
+}
+
+[data-accent='green'] {
+  --color-accent: #d6f962;
+  --color-accent-hover: #e0fa89;
+  --color-accent-subtle: rgba(214, 249, 98, .13);
+  --color-on-accent: #080808;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--color-bg);
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  line-height: 1.5;
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea {
+  color: inherit;
+  font: inherit;
+}
+
+button,
+select,
+input[type='checkbox'],
+input[type='radio'] {
+  accent-color: var(--color-accent);
+}
+
+select {
+  background: var(--color-surface);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  min-height: 2.5rem;
+  padding: .35rem .55rem;
+  transition: border-color 120ms ease;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: .012em;
+  line-height: 1.05;
+}
+
+a {
+  color: var(--color-accent);
+  text-underline-offset: .2em;
+}
+
+::selection {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+}
+
+:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 3px;
+}
+
+/*
+ * Buttons keep an unambiguous keyboard focus state without an external halo.
+ * The inset treatment cannot add visual width or produce a second outline.
+ */
+button:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--color-accent);
+  outline: none;
+}
+
+/*
+ * Shared selects always have a border, so that edge becomes their focus
+ * indicator. Text fields opt into the same treatment in Field.module.css;
+ * unstyled or borderless controls retain the global ring above.
+ */
+select:focus-visible {
+  border-color: var(--color-accent);
+  outline: none;
+}

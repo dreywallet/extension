@@ -1,0 +1,26 @@
+.toggle {
+  border: 1px solid var(--color-border);
+  display: inline-flex;
+  flex: none;
+}
+
+.toggle button {
+  background: transparent;
+  border: 0;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: .68rem;
+  font-weight: 800;
+  min-height: 1.65rem;
+  padding: .15rem .45rem;
+  text-transform: uppercase;
+}
+
+.toggle button + button {
+  border-left: 1px solid var(--color-border);
+}
+
+.toggle button[aria-checked='true'] {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+}

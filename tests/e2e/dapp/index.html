@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Drey local E2E dapp</title>
+    <style>
+      body { font: 16px/1.45 system-ui, sans-serif; max-width: 68rem; margin: 2rem auto; padding: 0 1rem; }
+      section { display: flex; flex-wrap: wrap; gap: .5rem; margin-block: 1rem; }
+      button { padding: .55rem .8rem; }
+      pre { min-height: 5rem; padding: 1rem; background: #111; color: #eee; overflow: auto; }
+      iframe { width: 100%; min-height: 8rem; border: 1px solid #777; }
+    </style>
+    <script type="module" src="/dapp.js"></script>
+  </head>
+  <body>
+    <h1>Drey local E2E dapp</h1>
+    <p id="discovery" role="status">Waiting for provider…</p>
+    <section aria-label="Provider operations">
+      <button data-operation="connect">Connect</button>
+      <button data-operation="permissions">Permissions</button>
+      <button data-operation="account">Account</button>
+      <button data-operation="network">Network</button>
+      <button data-operation="addresses">Addresses</button>
+      <button data-operation="balance">Balance</button>
+      <button data-operation="sign">Sign BIP322</button>
+      <button data-operation="send">Send transfer</button>
+      <button data-operation="m9p-safe-transfer">M9P safe inscription transfer</button>
+      <button data-operation="m9p-received">M9P received inscription</button>
+      <button data-operation="unknown-marketplace">Unknown flexible marketplace</button>
+      <button data-operation="disconnect">Disconnect</button>
+      <button data-operation="reload">Reload</button>
+      <button data-operation="replace-state">Same-document navigate</button>
+    </section>
+    <pre id="output" aria-live="polite">No request yet.</pre>
+    <h2>All-frames injection</h2>
+    <iframe title="Provider iframe" src="/frame.html"></iframe>
+  </body>
+</html>

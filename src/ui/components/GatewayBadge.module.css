@@ -1,0 +1,77 @@
+.group {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.dot {
+  background: var(--color-text-faint);
+  border: 2px solid var(--color-bg);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--color-border);
+  display: inline-block;
+  height: .7rem;
+  width: .7rem;
+}
+
+.stateChecking {
+  animation: statusPulse 1.2s ease-in-out infinite;
+}
+
+.networkMarker {
+  background: var(--color-warning-subtle);
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-sm);
+  color: var(--color-warning);
+  display: inline-block;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: 1;
+  padding: .2rem .35rem;
+  text-transform: uppercase;
+}
+
+.stateConnected {
+  background: var(--color-success);
+  box-shadow: 0 0 0 1px var(--color-success);
+}
+
+/* §10.4: amber for degraded/pending/caution. */
+.stateWarning {
+  color: var(--color-warning);
+  border-color: var(--color-warning);
+  background: var(--color-warning-subtle);
+}
+
+/* §10.4: red reserved for loss risk or a blocked action (spending blocked). */
+.stateBlocked {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+  background: var(--color-danger-subtle);
+}
+
+.dot.stateWarning {
+  background: var(--color-warning);
+  border-color: var(--color-bg);
+  box-shadow: 0 0 0 1px var(--color-warning);
+}
+
+.dot.stateBlocked {
+  background: var(--color-danger);
+  border-color: var(--color-bg);
+  box-shadow: 0 0 0 1px var(--color-danger);
+}
+
+@keyframes statusPulse {
+  50% {
+    opacity: .35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stateChecking {
+    animation: none;
+  }
+}

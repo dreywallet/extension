@@ -1,0 +1,176 @@
+.trail {
+  border-bottom: 1px solid var(--color-border);
+  border-top: 1px solid var(--color-border);
+  padding: var(--space-4) 0;
+}
+
+.title {
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+.steps {
+  display: grid;
+  gap: 0;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.step {
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 1.25rem auto;
+  min-width: 0;
+  padding-right: var(--space-4);
+  position: relative;
+}
+
+.step:not(:last-child)::after {
+  background: var(--color-border);
+  content: '';
+  height: 2px;
+  left: 1.25rem;
+  position: absolute;
+  right: 0;
+  top: .58rem;
+}
+
+.step[data-state='complete']:not(:last-child)::after {
+  background: var(--color-success);
+}
+
+.marker {
+  align-items: center;
+  background: var(--color-bg);
+  border: 2px solid var(--color-border);
+  display: inline-flex;
+  font-size: .72rem;
+  font-weight: 900;
+  height: 1.25rem;
+  justify-content: center;
+  line-height: 1;
+  position: relative;
+  width: 1.25rem;
+  z-index: 1;
+}
+
+.step[data-state='complete'] .marker,
+.step[data-state='current'] .marker {
+  border-color: var(--color-success);
+  color: var(--color-success);
+}
+
+.step[data-state='complete'] .marker {
+  background: var(--color-success);
+  color: var(--color-bg);
+}
+
+.step[data-state='warning'] .marker {
+  border-color: var(--color-warning);
+  color: var(--color-warning);
+}
+
+.step[data-state='danger'] .marker {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+.copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.copy strong {
+  font-size: var(--text-sm);
+  line-height: 1.25;
+}
+
+.copy span {
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .steps {
+    gap: var(--space-3);
+    grid-template-columns: 1fr;
+  }
+
+  .step {
+    gap: var(--space-2);
+    grid-template-columns: 1.25rem minmax(0, 1fr);
+    grid-template-rows: auto;
+    padding-right: 0;
+  }
+
+  .step:not(:last-child)::after {
+    bottom: calc(var(--space-3) * -1);
+    height: auto;
+    left: .58rem;
+    right: auto;
+    top: 1.25rem;
+    width: 2px;
+  }
+}
+
+.trail.compact {
+  padding: var(--space-2) 0;
+}
+
+.compact .steps {
+  gap: 0;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.compact .step {
+  gap: var(--space-1);
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 1.25rem auto;
+  padding-right: var(--space-2);
+}
+
+.compact .step:not(:last-child)::after {
+  bottom: auto;
+  height: 2px;
+  left: 1.25rem;
+  right: 0;
+  top: .58rem;
+  width: auto;
+}
+
+.compact .copy strong {
+  font-size: var(--text-xs);
+}
+
+.step[data-settle='true'] .marker {
+  animation: block-trail-settle 200ms ease-out both;
+}
+
+@keyframes block-trail-settle {
+  from {
+    opacity: .72;
+    transform: scale(.82);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .step[data-settle='true'] .marker {
+    animation: none;
+  }
+}

@@ -1,0 +1,293 @@
+/*
+ * Sat-flow diagram styling.
+ *
+ * Safety state is communicated with text or an icon as well as colour, and the
+ * semantic danger/warning colours never follow the presentation accent
+ * (tokens.css). Red marks loss risk only — protected sats spent as fee — while
+ * amber marks an output the signature does not commit to (§10.4).
+ *
+ * No animation: the approval surface has no motion, so there is nothing for
+ * prefers-reduced-motion to disable.
+ */
+
+.flow {
+  border: 2px solid var(--color-border);
+  padding: var(--space-2) var(--space-3);
+}
+
+.head {
+  align-items: baseline;
+  display: flex;
+  gap: var(--space-3);
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+}
+
+.title {
+  color: var(--color-text-faint);
+  font-family: var(--font-display);
+  font-size: var(--text-xs);
+  font-weight: 400;
+  letter-spacing: .1em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.proof {
+  color: var(--color-text-faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+/*
+ * The canvas holds an SVG edge layer and two absolutely positioned node lists
+ * in the same coordinate space. Its aspect ratio matches the SVG viewBox, so
+ * percentage-positioned HTML nodes align with the curve endpoints at any width.
+ */
+.canvas {
+  aspect-ratio: 378 / 218;
+  position: relative;
+  width: 100%;
+}
+
+.edges {
+  height: 100%;
+  inset: 0;
+  position: absolute;
+  width: 100%;
+}
+
+.edge {
+  fill: none;
+  stroke-width: 1.25;
+}
+
+/*
+ * Every proven edge keeps full weight. Fading later ones makes them read as
+ * unproven cardinal value, which is the one distinction this diagram exists to
+ * make. Individual curves stay traceable by their labelled endpoints and by
+ * geometry, which is also why the node count is capped in sat-flow-layout.ts.
+ */
+.edgeProven {
+  stroke: var(--color-accent);
+  stroke-linecap: round;
+  stroke-width: 2;
+}
+
+.edgeValue {
+  opacity: .75;
+  stroke: var(--color-text-faint);
+}
+
+.edgeFee {
+  stroke: var(--color-text-faint);
+  stroke-dasharray: 3 3;
+}
+
+.edgeDanger {
+  stroke: var(--color-danger);
+  stroke-width: 2.25;
+}
+
+.edgeUncommitted {
+  stroke: var(--color-warning);
+  stroke-dasharray: 4 4;
+  stroke-width: 2;
+}
+
+.confluenceRing {
+  fill: var(--color-bg);
+  stroke: var(--color-border-strong);
+  stroke-width: 1.5;
+}
+
+.confluenceDot {
+  fill: var(--color-accent);
+}
+
+.nodes {
+  inset: 0;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  position: absolute;
+}
+
+/*
+ * Nodes are HTML, not SVG text: they must wrap, honour OS font scaling, and
+ * tolerate ≥35% translation growth. Overflow is clipped rather than allowed to
+ * collide with a neighbouring node.
+ */
+.node {
+  align-items: center;
+  background: var(--color-surface);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  overflow: hidden;
+  padding: 2px;
+  position: absolute;
+  text-align: center;
+}
+
+.nodeMine {
+  background: var(--color-surface-raised);
+  border-color: var(--color-border-strong);
+}
+
+.nodeFee {
+  background: transparent;
+  border-style: dashed;
+}
+
+.nodeUnproven {
+  border-style: dotted;
+}
+
+.nodeUncommitted {
+  background: var(--color-warning-subtle);
+  border-color: var(--color-warning);
+  border-style: dashed;
+}
+
+.nodeDanger {
+  background: var(--color-danger-subtle);
+  border-color: var(--color-danger);
+}
+
+.headline {
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.15;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.role {
+  color: var(--color-text-muted);
+  font-size: 9.5px;
+  line-height: 1.15;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.owner {
+  color: var(--color-text-faint);
+  font-family: var(--font-display);
+  font-size: 9px;
+  letter-spacing: .08em;
+  line-height: 1.2;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nodeMine .owner {
+  color: var(--color-accent);
+}
+
+.nodeDanger .owner {
+  color: var(--color-danger);
+}
+
+/* Movement and uncommitted state sit below the box so they never crowd it. */
+.movement,
+.uncommittedTag {
+  bottom: -13px;
+  font-family: var(--font-display);
+  font-size: 9px;
+  left: 0;
+  letter-spacing: .08em;
+  line-height: 1;
+  overflow: hidden;
+  position: absolute;
+  right: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.movement {
+  color: var(--color-text-faint);
+}
+
+.uncommittedTag {
+  color: var(--color-warning);
+}
+
+.rowLabelFrom,
+.rowLabelTo {
+  color: var(--color-text-faint);
+  font-family: var(--font-display);
+  font-size: 9px;
+  letter-spacing: .12em;
+  margin: 0;
+  position: absolute;
+  text-transform: uppercase;
+}
+
+/* Captions sit in the viewBox headroom, clear of the node rows. */
+.rowLabelFrom {
+  top: 0;
+}
+
+.rowLabelTo {
+  top: 57%;
+}
+
+/*
+ * The summary carries every fact the diagram encodes and is rendered even when
+ * the shape is too large to draw, so movement and fee information is never
+ * available only from the picture.
+ */
+.summary {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+}
+
+.summary li + li {
+  margin-top: 2px;
+}
+
+.caution {
+  background: var(--color-warning-soft);
+  border: 2px solid var(--color-warning);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2);
+}
+
+/* Red is reserved for loss risk (§10.4): protected sats spent as miner fee. */
+.risk {
+  background: var(--color-danger-subtle);
+  border: 2px solid var(--color-danger);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2);
+}
+
+.legend {
+  border-top: 2px solid var(--color-border);
+  color: var(--color-text-faint);
+  font-size: 10px;
+  letter-spacing: .04em;
+  margin: var(--space-2) 0 0;
+  padding-top: var(--space-1);
+}

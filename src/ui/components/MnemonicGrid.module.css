@@ -1,0 +1,35 @@
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-2);
+  /* §7.1: no text selection — the words never reach the clipboard */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.word {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+}
+
+.index {
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+  min-width: 1.2em;
+}
+
+.masked {
+  filter: blur(8px);
+}
+
+@media (max-width: 34rem) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
