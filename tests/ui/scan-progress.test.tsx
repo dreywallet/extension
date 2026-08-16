@@ -24,6 +24,7 @@ function statusResult(overrides: Record<string, unknown> = {}) {
       currentUnit: { source: 'standard', accountId: ACCOUNT_ID, account: 2, lane: 'ordinals' },
       boundaryUnits: [],
       failureReason: null,
+      historyPartial: false,
       ...overrides,
     },
   };
@@ -164,5 +165,59 @@ describe('ScanProgress (§8.2 full UX)', () => {
       </Providers>,
     );
     expect(await screen.findByRole('alert')).toHaveTextContent(/could not finish/u);
+  });
+
+  it('keeps an in-place retry when scan.start fails', async () => {
+    const start = vi.fn()
+      .mockReturnValueOnce({ ok: false, code: 'ERR_INTERNAL' })
+      .mockReturnValue({ ok: true, result: { scanId: 'scan-2' } });
+    installFakeChrome({
+      'scan.status': () => statusResult({ kind: 'idle', scanId: null, currentUnit: null }),
+      'scan.start': start,
+      'gateway.status': () => ({ ok: false, code: 'ERR_INTERNAL' }),
+    });
+    render(
+      <Providers>
+        <ScanProgress expectation={EXPECTATION} autoStart="rescan" />
+      </Providers>,
+    );
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not start/u);
+    await userEvent.click(screen.getByRole('button', { name: 'Retry scan' }));
+    expect(start).toHaveBeenCalledTimes(2);
+  });
+
+  it('distinguishes safety limits and reports partial history explicitly', async () => {
+    installFakeChrome({
+      'scan.status': () => statusResult({
+        kind: 'failed',
+        currentUnit: null,
+        failureReason: 'data_limit',
+      }),
+      'scan.start': () => ({ ok: true, result: { scanId: 'scan-2' } }),
+      'gateway.status': () => ({ ok: false, code: 'ERR_INTERNAL' }),
+    });
+    render(
+      <Providers>
+        <ScanProgress expectation={EXPECTATION} />
+      </Providers>,
+    );
+    expect(await screen.findByRole('alert')).toHaveTextContent(/complete balance/u);
+    expect(screen.getByRole('button', { name: 'Retry scan' })).toBeInTheDocument();
+    cleanup();
+
+    installFakeChrome({
+      'scan.status': () => statusResult({
+        kind: 'completed',
+        currentUnit: null,
+        historyPartial: true,
+      }),
+      'gateway.status': () => ({ ok: false, code: 'ERR_INTERNAL' }),
+    });
+    render(
+      <Providers>
+        <ScanProgress expectation={EXPECTATION} />
+      </Providers>,
+    );
+    expect(await screen.findByRole('status')).toHaveTextContent(/older activity is incomplete/u);
   });
 });

@@ -14,6 +14,7 @@ import { installTestCryptoProvider } from '../helpers/install-crypto-provider';
 import {
   inscriptionApprovalBatchResponseSchema,
   statusCapabilitiesSchema,
+  type SnapshotHistoryEntry,
 } from '@drey/core/domain/gateway/contract';
 import type { GatewayClient } from '@drey/core/gateway-client';
 import { getSession } from '../../src/adapters/session/session-store';
@@ -89,6 +90,8 @@ interface FakeGatewayOptions {
   skewClassifyForTxid?: string;
   /** Additional per-script history for synthetic multi-account coverage. */
   extraHistoryByScriptHash?: Record<string, unknown[]>;
+  /** Scripts whose history is intentionally bounded but still proves use. */
+  limitedHistoryScriptHashes?: string[];
   /** Transform signed classification fixtures before returning them. */
   mutateClassification?: (
     classification: Record<string, unknown>,
@@ -169,9 +172,28 @@ function makeFakeGateway(options: FakeGatewayOptions) {
           seen.add(txid);
           return true;
         });
+      const limited = req.scriptHashes.filter((hash) =>
+        options.limitedHistoryScriptHashes?.includes(hash));
+      const activeSet = new Set([
+        ...utxos.map((utxo) => (utxo as { scriptHash: string }).scriptHash),
+        ...history.flatMap((entry) => [
+          ...(entry as { fundedScriptHashes: string[] }).fundedScriptHashes,
+          ...(entry as { spentScriptHashes: string[] }).spentScriptHashes,
+        ]),
+        ...limited,
+      ]);
       return Promise.resolve({
         ok: true as const,
-        value: { ...envelope(), requestedScriptHashes: req.scriptHashes, utxos, history },
+        value: {
+          ...envelope(),
+          requestedScriptHashes: req.scriptHashes,
+          utxos,
+          history,
+          activeScriptHashes: req.scriptHashes.filter((hash) => activeSet.has(hash)),
+          historyCoverage: limited.length > 0
+            ? { status: 'partial' as const, limitedScriptHashes: limited }
+            : { status: 'complete' as const, limitedScriptHashes: [] },
+        },
         verifiedAtMs: options.clock.now,
       });
     },
@@ -845,6 +867,43 @@ describe('discovery scan end-to-end (§8.2, §10.2, §12)', () => {
     expect(home.dataGating.blockedActions).toContain('native_send');
   });
 
+  it('persists partial-history coverage while keeping used zero-balance addresses active', async () => {
+    const cache = new MemoryWalletCache();
+    const clock = { now: Date.parse('2026-07-20T00:00:05.000Z') };
+    const used = scenariosFile.derived['a0:payment:0:18'];
+    if (!used) throw new Error('missing bounded-history address fixture');
+    const fake = makeFakeGateway({
+      scenario: 'clean',
+      clock,
+      limitedHistoryScriptHashes: [used.scriptHash],
+    });
+    const harness = makeHarness(clock.now, {
+      network: 'signet',
+      walletCache: cache,
+      gateway: fake.gateway,
+    });
+    const { service, expectation } = await setupWallet(harness);
+    await service.startScan({ mode: 'initial', ...expectation });
+    expect(await waitForScanEnd(service, expectation)).toBe('completed');
+    await expect(service.scanStatus(expectation)).resolves.toMatchObject({
+      kind: 'completed',
+      historyPartial: true,
+    });
+    const home = await service.homeView(expectation);
+    expect(home.historyComplete).toBe(false);
+    expect(home.balances.availableSats).toBe('205556');
+    await expect(service.activityList({
+      ...expectation,
+      accountId: accountId(0),
+    })).resolves.toMatchObject({ historyComplete: false });
+
+    const restarted = harness.rebuild();
+    await expect(restarted.homeView(expectation)).resolves.toMatchObject({
+      historyComplete: false,
+      balances: { availableSats: '205556' },
+    });
+  });
+
   it('MV3 restart: failed scan leaves a resumable checkpoint; resume skips done units', async () => {
     const cache = new MemoryWalletCache();
     const clock = { now: Date.parse('2026-07-20T00:00:05.000Z') };
@@ -1285,7 +1344,7 @@ describe('discovery scan end-to-end (§8.2, §10.2, §12)', () => {
       height: 249_900,
       fundingSpendsOnlyRequested: false,
     });
-    const entryFor = (hash: string, deltaSats: string) => ({
+    const entryFor = (hash: string, deltaSats: string): SnapshotHistoryEntry => ({
       txid: crossTxid,
       height: 249_900,
       timestamp: null,
@@ -1316,8 +1375,8 @@ describe('discovery scan end-to-end (§8.2, §10.2, §12)', () => {
           verifiedAtMs: clock.now,
         }),
       fetchSnapshot: (req: { scriptHashes: string[] }) => {
-        const utxos = [];
-        const history = [];
+        const utxos: Array<ReturnType<typeof utxoFor>> = [];
+        const history: Array<ReturnType<typeof entryFor>> = [];
         if (req.scriptHashes.includes(h0)) {
           utxos.push(utxoFor(h0, 0, '100000'));
           history.push(entryFor(h0, '100000'));
@@ -1331,7 +1390,18 @@ describe('discovery scan end-to-end (§8.2, §10.2, §12)', () => {
         }
         return Promise.resolve({
           ok: true as const,
-          value: { ...envelope(), requestedScriptHashes: req.scriptHashes, utxos, history },
+          value: {
+            ...envelope(),
+            requestedScriptHashes: req.scriptHashes,
+            utxos,
+            history,
+            activeScriptHashes: req.scriptHashes.filter((hash) =>
+              utxos.some((utxo) => utxo.scriptHash === hash) ||
+              history.some((entry) =>
+                entry.fundedScriptHashes.includes(hash) ||
+                entry.spentScriptHashes.includes(hash))),
+            historyCoverage: { status: 'complete' as const, limitedScriptHashes: [] },
+          },
           verifiedAtMs: clock.now,
         });
       },

@@ -31,11 +31,13 @@ function home(accountId = binding.accountId): WalletHomeResult {
     wrongLaneCount: 0,
     dataGating: { state: 'fresh', blockedActions: [] },
     activity: [],
+    historyComplete: true,
     wrongLane: [],
     lastSyncedAt: 1,
     scan: {
       kind: 'completed', scanId: 'scan-1', unitsDone: 1, unitsTotal: 1,
       currentUnit: null, boundaryUnits: [], failureReason: null,
+      historyPartial: false,
     },
   };
 }

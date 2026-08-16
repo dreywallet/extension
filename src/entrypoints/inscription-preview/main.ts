@@ -40,6 +40,11 @@ async function renderMessage(event: MessageEvent<unknown>): Promise<void> {
     candidate['fit'], candidate['pngWidth'], candidate['pngHeight'],
   );
   root.replaceChildren(image);
+  window.parent.postMessage({
+    type: 'drey:inert-inscription-preview-ready',
+    protocolVersion: 1,
+    inscriptionId: candidate['inscriptionId'],
+  }, '*');
 }
 
 window.addEventListener('message', (event: MessageEvent<unknown>) => {

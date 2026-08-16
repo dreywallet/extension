@@ -9,6 +9,11 @@
  * stale staging slot that the next load discards.
  */
 import { z } from 'zod';
+import {
+  backupMetadataSchema,
+  migrateLegacyBackupMetadata,
+  type BackupMetadataV1,
+} from '@drey/core/domain/vault/backup-metadata';
 import { MAX_ACCOUNT_INDEX } from '@drey/core/domain/accounts/limits';
 import { migrateVaultRecord } from '@drey/core/domain/vault/migrate';
 import { vaultRecordV1Schema, type VaultRecordV1 } from '@drey/core/domain/vault/record';
@@ -233,16 +238,36 @@ export async function saveVaults(area: StorageArea, map: VaultRecordMap): Promis
  * backupVerified=false, which is the safe direction (the user re-verifies).
  */
 export interface VaultMeta {
+  /** Compatibility projection for the existing usage gate. */
   backupVerified: boolean;
+  metadata: BackupMetadataV1;
 }
 
 export type VaultMetaMap = Record<string, VaultMeta>;
 
-const vaultMetaSchema = z.record(z.object({ backupVerified: z.boolean() }).strict());
+const legacyVaultMetaSchema = z.object({ backupVerified: z.boolean() }).strict();
+const currentVaultMetaSchema = z.object({
+  backupVerified: z.boolean(),
+  metadata: backupMetadataSchema,
+}).strict();
+const vaultMetaSchema = z.record(z.union([legacyVaultMetaSchema, currentVaultMetaSchema]));
 
 export async function loadVaultMeta(area: StorageArea): Promise<VaultMetaMap> {
   const parsed = vaultMetaSchema.safeParse(await getJson<unknown>(area, VAULT_META_KEY));
-  return parsed.success ? parsed.data : {};
+  if (!parsed.success) return {};
+  let migrated = false;
+  const result = Object.fromEntries(Object.entries(parsed.data).map(([vaultId, entry]) => [
+    vaultId,
+    'metadata' in entry ? entry : (() => {
+      migrated = true;
+      return {
+        backupVerified: entry.backupVerified,
+        metadata: migrateLegacyBackupMetadata(entry.backupVerified),
+      };
+    })(),
+  ])) as VaultMetaMap;
+  if (migrated) await setJson(area, VAULT_META_KEY, result);
+  return result;
 }
 
 export async function saveVaultMeta(area: StorageArea, map: VaultMetaMap): Promise<void> {

@@ -80,15 +80,19 @@ export const VAULT_STANDALONE_TOOL_DIGEST_UNPUBLISHED = '00'.repeat(32);
  * published Trading API 1.0.0 contract. v0.7.10 bounds provider `signPsbt`
  * input selections to the worker's existing 200-input ceiling. v0.7.11 and
  * v0.7.12 add the public-repository hygiene files and point clone URLs and
- * contact identity at the public release mirror and the company. Those
- * boundaries are included by the source digest but not
- * the standalone bundle, so only the source digest moves and the program
- * remains byte-identical. Both values below are bound to the exact tag.
+ * contact identity at the public release mirror and the company. v0.7.13 adds
+ * display-only inscription references to the UTXO list response. v0.7.15 adds
+ * atomic multi-inscription planning and final-byte policy checks; v0.7.16
+ * hardens the same batch policy. v0.8.0 adds shared native batching, deliberate
+ * postage management, and recovery metadata. v0.8.1 adds bounded scan history
+ * coverage. v0.8.2 corrects the development lockfile without changing the
+ * recovery program. The source digest still moves because it binds the exact
+ * reviewed core revision. Both values below are bound to the exact tag.
  */
 export const VAULT_STANDALONE_TOOL_RELEASE = Object.freeze({
-  coreTag: 'v0.7.12',
-  sourceDigest: '21fa4ea87e7f9a8d57991b8ce4221ea373272f60eb45bd3e46fa69c014c899b6',
-  artifactDigest: '8014d61936419bee901828b6465c8aab5338466588cc1780e42948c764b1ae2f',
+  coreTag: 'v0.8.2',
+  sourceDigest: 'f5e10ab5d3900fac7b0aaa01e6702adcfd1ee3565b24a0f541401a3296635723',
+  artifactDigest: '9eba8ce9a9b7d662b96e4808d6d49fdaf8957c988c6f81a99602e1dd4cead271',
 });
 
 /**

@@ -197,10 +197,23 @@ test('@visual captures privacy-audited Drey 0.7.0 release surfaces', async ({
   await expect(reviewPage.getByRole('heading', { name: 'Manage coins' })).toBeVisible();
   await expect(reviewPage.getByText('Loading your coins…')).toHaveCount(0, { timeout: 15_000 });
   await expect(reviewPage.getByText('Protected', { exact: true })).toBeVisible();
+  await reviewPage.getByText('Protected', { exact: true }).click();
+  const inscriptionPreview = reviewPage.getByRole('button', { name: /^Enlarge .*inscription/iu }).first();
+  await expect(inscriptionPreview).toBeVisible({ timeout: 15_000 });
   await reviewPage.screenshot({
     path: `${output}/ui-protected-sats-source.png`,
     animations: 'disabled',
     fullPage: true,
+  });
+  await inscriptionPreview.click();
+  const previewDialog = reviewPage.getByRole('dialog', { name: /inscription/iu });
+  await expect(previewDialog).toBeVisible();
+  await expect(previewDialog.locator('iframe')).toBeVisible();
+  await expect(reviewPage.frameLocator('section[role="dialog"] iframe').getByRole('img'))
+    .toBeVisible();
+  await reviewPage.screenshot({
+    path: `${output}/ui-protected-sats-preview-source.png`,
+    animations: 'disabled',
   });
   await reviewPage.close();
 });
@@ -1160,9 +1173,11 @@ test('restores the public fixture, persists privacy, and exercises provider appr
   await dapp.invoke('Permissions');
   await expect(dapp.output()).toHaveText('[]');
 
-  const reconnected = await dapp.invokeWithApproval('Connect');
-  await reconnected.expectMethod('wallet_connect');
-  await reconnected.approve();
+  // The new document starts disconnected, but a valid packaged security list
+  // permits the exact previously approved identity grant to reconnect without
+  // another prompt. The controller unit suite separately proves that broader
+  // requests still require approval.
+  await dapp.invoke('Connect');
   await expect(dapp.output()).toContainText('"walletType": "software"');
 
   await dapp.invoke('Disconnect');
@@ -1666,6 +1681,75 @@ test('pastes a BIP-321 on-chain fallback into Send and reviews request metadata'
   } finally {
     await fullpage.close();
   }
+});
+
+test('@m9x sends one complete three-inscription output as an atomic batch', async ({
+  onboarding, popup,
+}) => {
+  const recipientAddress = 'tb1q053ptqlv0ugz8fcc3njw355rdluk4tqnhf0g0j';
+  await setGatewayScenario({ snapshotScenario: 'mixed' });
+  await onboarding.open();
+  await onboarding.restorePublicFixture({
+    mnemonic: PUBLIC_SIGNET_MNEMONIC,
+    password: TEST_PASSWORD,
+  });
+  await popup.open();
+  await popup.page.getByRole('button', { name: 'Ordinals', exact: true }).click();
+  await openFirstGalleryShelf(popup.page);
+  await popup.page.getByRole('button', { name: 'Select', exact: true }).click();
+
+  await popup.page.getByRole('button', { name: 'Select #1234' }).click();
+  const coLocated = popup.page.getByRole('dialog', {
+    name: 'These inscriptions travel together',
+  });
+  await expect(coLocated).toBeVisible();
+  await expect(coLocated.getByRole('button', { name: 'Cancel' })).toBeFocused();
+  await coLocated.getByRole('button', { name: 'Include all 2' }).click();
+  const selectionFooter = popup.page.locator('[data-gallery-selection-footer]');
+  const bottomNavigation = popup.page.getByRole('navigation', { name: 'Drey' });
+  const [selectionFooterBox, bottomNavigationBox] = await Promise.all([
+    selectionFooter.boundingBox(),
+    bottomNavigation.boundingBox(),
+  ]);
+  expect(selectionFooterBox).not.toBeNull();
+  expect(bottomNavigationBox).not.toBeNull();
+  expect(Math.abs(
+    selectionFooterBox!.y + selectionFooterBox!.height - bottomNavigationBox!.y,
+  )).toBeLessThanOrEqual(1);
+  await expect(popup.page.getByRole('button', { name: 'Continue with 2' })).toBeDisabled();
+  await expect(popup.page.getByText(/1 more inscription\(s\).*must also be selected/u))
+    .toBeVisible();
+  await popup.page.getByRole('button', { name: 'Select all from this output' }).click();
+  await expect(popup.page.getByRole('button', { name: 'Continue with 3' })).toBeEnabled();
+  await popup.page.getByRole('button', { name: 'Continue with 3' }).click();
+
+  await expect(popup.page.getByRole('heading', { name: 'Send 3 inscriptions' })).toBeVisible();
+  await expect(popup.page.getByText('3 inscriptions to one address')).toBeVisible();
+  await popup.page.getByLabel('Recipient address')
+    .fill(recipientAddress);
+  await popup.page.getByRole('button', { name: 'Review transaction' }).click();
+  await expect(popup.page.getByRole('heading', {
+    name: 'Send 3 inscriptions to one address?',
+  })).toBeVisible();
+  await expect(popup.page.getByText('Postage reserved')).toBeVisible();
+  await expect(popup.page.getByText('Bitcoin returned')).toBeVisible();
+  await popup.page.getByText('Atomic inscription groups').click();
+  await expect(popup.page.getByText('2 inscriptions share this sat and travel together.'))
+    .toBeVisible();
+  await expect(popup.page.getByText('Postage output 0')).toBeVisible();
+  await expect(popup.page.getByText('Postage output 1')).toBeVisible();
+  await popup.page.getByLabel(
+    /valid address on the correct network.*not a Taproot address/iu,
+  ).check();
+  await popup.page.getByLabel(/verified the inscription identifier and transaction effects/iu)
+    .check();
+  await popup.page.getByRole('button', { name: 'Send 3 inscriptions' }).click();
+
+  await expectPopupResultFitsViewport(popup.page, '3 Ordinals sent');
+  await expect(popup.page.getByText(recipientAddress, { exact: true })).toHaveCount(1);
+  await expect(popup.page.getByRole('link', {
+    name: /View transaction on mempool\.space/u,
+  })).toBeVisible();
 });
 
 test('@m9x preserves native transfer review across restart and records indeterminate activity', async ({

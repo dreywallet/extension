@@ -102,6 +102,7 @@ import {
   type VaultRevealMnemonicRequest,
   type VaultUnlockRequest,
   type VaultVerifyBackupRequest,
+  type VaultVerifyFullRecoveryRequest,
 } from '@drey/core/messaging/ops';
 import { RpcError, vaultErrorToCode } from './errors';
 import type { WalletService } from './wallet-service';
@@ -296,6 +297,8 @@ async function handle(op: string, payload: unknown, service: WalletService): Pro
       return service.revealMnemonic(payload as VaultRevealMnemonicRequest);
     case 'vault.verifyBackup':
       return service.verifyBackup(payload as VaultVerifyBackupRequest);
+    case 'vault.verifyFullRecovery':
+      return service.verifyFullRecovery(payload as VaultVerifyFullRecoveryRequest);
     case 'backup.status':
       return service.backupStatus(payload as ActiveSessionRequest);
     case 'address.receive':

@@ -173,7 +173,10 @@ describe('WalletService state machine', () => {
     const expectation = { expectedVaultId: vaultId, expectedSessionId: unlocked.sessionId };
 
     h.clock.now += 10 * 60 * 1000;
-    await expect(h.service.backupStatus(expectation)).resolves.toEqual({ backupVerified: false });
+    await expect(h.service.backupStatus(expectation)).resolves.toMatchObject({
+      backupVerified: false,
+      metadata: { origin: 'generated', wordCount: 12, usesPassphrase: false },
+    });
     await expect(h.service.getActiveAccount(expectation)).resolves.toMatchObject({ account: 0 });
     expect((await getSession(h.session))?.deadline).toBe(unlocked.deadline);
 

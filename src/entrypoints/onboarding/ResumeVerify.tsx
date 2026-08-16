@@ -42,6 +42,7 @@ export function ResumeVerify(props: { onDone: () => void; expectation: ActiveSes
     try {
       const result = await rpc('vault.verifyBackup', {
         words: positions.map((index, i) => ({ index, word: typed[i]?.trim() ?? '' })),
+        wordCount: 12,
         ...props.expectation,
       });
       if (!result.ok) {

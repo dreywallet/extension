@@ -132,6 +132,10 @@ export function presentActivity(
         : 'activity.ordinal.received')
       : item.actionKind === 'ordinal_transfer'
         ? t('activity.ordinal.sent')
+        : item.actionKind === 'ordinal_batch_transfer'
+          ? t('activity.ordinal.sentPlural', { count: inscriptionCount })
+        : item.actionKind === 'ordinal_postage_manage'
+          ? t('ordinal.postage.resultTitle')
         : item.actionKind === 'rescue'
           ? t('activity.ordinal.rescued')
           : item.actionKind === 'ordinal_sweep'
@@ -144,7 +148,8 @@ export function presentActivity(
                   ? t('activity.bitcoin.received')
                   : t('activity.bitcoin.sent');
   const inscription = item.inscriptionId != null || item.actionKind === 'ordinal_receive' ||
-    item.actionKind === 'ordinal_transfer' || item.actionKind === 'rescue';
+    item.actionKind === 'ordinal_transfer' || item.actionKind === 'ordinal_batch_transfer' ||
+    item.actionKind === 'ordinal_postage_manage' || item.actionKind === 'rescue';
   const baseOrdinalIdentity = item.inscriptionId == null
     ? null
     : item.inscriptionNumber == null

@@ -307,6 +307,7 @@ async function main(): Promise<void> {
     const words = revealed.mnemonic.split(' ');
     await service.verifyBackup({
       words: [0, 5, 11].map((index) => ({ index, word: words[index]! })),
+      wordCount: 12,
       ...expectation,
     });
   }

@@ -38,11 +38,27 @@ function page(
   items: ActivityListResult['items'],
   nextCursor: ActivityListResult['nextCursor'],
   reset = false,
+  historyComplete = true,
 ): { ok: true; result: ActivityListResult } {
-  return { ok: true, result: { accountId: ACCOUNT_ID, items, nextCursor, reset } };
+  return {
+    ok: true,
+    result: { accountId: ACCOUNT_ID, items, nextCursor, reset, historyComplete },
+  };
 }
 
 describe('useAccountActivity', () => {
+  it('retains the persistent partial-history advisory state', async () => {
+    installFakeChrome({
+      'activity.list': () => page([item('a')], null, false, false),
+    });
+    const { result } = renderHook(
+      () => useAccountActivity(EXPECTATION, ACCOUNT_ID),
+      { wrapper: Providers },
+    );
+    await waitFor(() => expect(result.current.items).toHaveLength(1));
+    expect(result.current.historyComplete).toBe(false);
+  });
+
   it('appends older rows once and preserves them for retry after failure', async () => {
     let calls = 0;
     installFakeChrome({

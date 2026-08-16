@@ -97,6 +97,7 @@ export function ActivitySection(props: {
   loadingOlder: boolean;
   pageError: boolean;
   updated: boolean;
+  historyComplete: boolean;
   onLoadOlder: () => void;
   onRefresh: () => void;
   onAccelerate: (strategy: 'rbf' | 'cpfp', txid: string) => void;
@@ -143,7 +144,7 @@ export function ActivitySection(props: {
     const state = transaction === undefined ? presentation.state : statusText(transaction.status, t);
     const context = exactContext(item, presentation, t);
     const unidentifiedOrdinalsContext = hasUnidentifiedOrdinalsContext(item);
-    const accelerate = transaction?.status === 'accepted' || transaction?.status === 'already_known';
+    const accelerate = transaction?.recommendedAcceleration ?? null;
     const trailStatus = transaction === undefined
       ? item.confirmationState
       : blockTrailStatus(transaction.status) ?? item.confirmationState;
@@ -180,7 +181,13 @@ export function ActivitySection(props: {
               {item.height.toLocaleString(lang)}
             </Detail>
           )}
-          {item.inscriptionId == null ? null : (
+          {(item.inscriptionIds?.length ?? 0) > 1 ? (
+            <Detail label={t('activity.detail.inscriptionIds')} wide>
+              {item.inscriptionIds?.map((inscriptionId) => (
+                <code className={sectionStyles['code']} key={inscriptionId}>{inscriptionId}</code>
+              ))}
+            </Detail>
+          ) : item.inscriptionId == null ? null : (
             <Detail label={t('activity.detail.inscriptionId')} wide>
               <code className={sectionStyles['code']}>{item.inscriptionId}</code>
             </Detail>
@@ -192,17 +199,17 @@ export function ActivitySection(props: {
         {transaction?.recovering ? (
           <p className={sectionStyles['attention']} role="status">{t('activity.recovering')}</p>
         ) : null}
-        {accelerate ? (
+        {accelerate !== null ? (
           <div className={sectionStyles['actions']}>
-            <Button variant="secondary" onClick={() => props.onAccelerate('rbf', item.txid)}>
-              {t('activity.speedUp.rbf')}
-            </Button>
-            <Button variant="secondary" onClick={() => props.onAccelerate('cpfp', item.txid)}>
-              {t('activity.speedUp.cpfp')}
+            <strong>{t('activity.bestNext.title')}</strong>
+            <Button variant="secondary" onClick={() => props.onAccelerate(accelerate, item.txid)}>
+              {t(accelerate === 'rbf' ? 'activity.speedUp.rbf' : 'activity.speedUp.cpfp')}
             </Button>
             <p className={styles['advisory']}>{t('activity.pendingSafety')}</p>
           </div>
-        ) : null}
+        ) : transaction?.accelerationUnavailableReason == null ? null : (
+          <p className={styles['advisory']}>{t('activity.bestNext.unavailable')}</p>
+        )}
         {props.network === null ? null : (
           <a
             className={sectionStyles['explorer']}
@@ -219,7 +226,7 @@ export function ActivitySection(props: {
   };
 
   const fallback = unmatchedRecoveries.map((transaction) => {
-    const accelerate = transaction.status === 'accepted' || transaction.status === 'already_known';
+    const accelerate = transaction.recommendedAcceleration ?? null;
     const trailStatus = blockTrailStatus(transaction.status);
     return (
     <article
@@ -255,17 +262,17 @@ export function ActivitySection(props: {
           <code className={sectionStyles['code']}>{transaction.txid}</code>
         </Detail>
       </dl>
-      {accelerate ? (
+      {accelerate !== null ? (
         <div className={sectionStyles['actions']}>
-          <Button variant="secondary" onClick={() => props.onAccelerate('rbf', transaction.txid)}>
-            {t('activity.speedUp.rbf')}
-          </Button>
-          <Button variant="secondary" onClick={() => props.onAccelerate('cpfp', transaction.txid)}>
-            {t('activity.speedUp.cpfp')}
+          <strong>{t('activity.bestNext.title')}</strong>
+          <Button variant="secondary" onClick={() => props.onAccelerate(accelerate, transaction.txid)}>
+            {t(accelerate === 'rbf' ? 'activity.speedUp.rbf' : 'activity.speedUp.cpfp')}
           </Button>
           <p className={styles['advisory']}>{t('activity.pendingSafety')}</p>
         </div>
-      ) : null}
+      ) : transaction.accelerationUnavailableReason == null ? null : (
+        <p className={styles['advisory']}>{t('activity.bestNext.unavailable')}</p>
+      )}
       {props.network === null ? null : (
         <a
           className={sectionStyles['explorer']}
@@ -295,6 +302,11 @@ export function ActivitySection(props: {
       {props.updated ? (
         <p className={sectionStyles['activityNotice']} role="status">
           {t('activity.pagination.updated')}
+        </p>
+      ) : null}
+      {!props.historyComplete ? (
+        <p className={sectionStyles['activityNotice']} role="status">
+          {t('activity.partialHistory')}
         </p>
       ) : null}
       {props.loadState === 'loading' ? (

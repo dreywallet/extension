@@ -605,10 +605,26 @@ describe('M8 provider co-located ordinal partitioning', () => {
     let activityMetadataRequests = 0;
     let activityPreviewRequests = 0;
     let activityBatchRequests = 0;
+    let feeRate = fees.tiers[0].effectiveSatPerKvB;
     const gateway = {
       endpoint: 'http://fixture-gateway',
       fetchStatus: async () => ({ ok: true as const, status, verifiedAtMs: now }),
-      fetchFees: async () => ({ ok: true as const, value: fees, verifiedAtMs: now }),
+      fetchFees: async () => ({
+        ok: true as const,
+        value: {
+          ...fees,
+          tiers: [
+            {
+              ...fees.tiers[0],
+              rawSatPerKvB: feeRate,
+              effectiveSatPerKvB: feeRate,
+            },
+            fees.tiers[1],
+            fees.tiers[2],
+          ],
+        },
+        verifiedAtMs: now,
+      }),
       classifyOutpoints: async (request: { outpoints: Array<{ txid: string; vout: number }> }) => ({
         ok: true as const,
         value: {
@@ -910,6 +926,144 @@ describe('M8 provider co-located ordinal partitioning', () => {
     expect(activityPreviewRequests).toBe(2);
     expect(activityBatchRequests).toBe(1);
     await harness.service.cancelTransactionPlan({ planId: native.planId, ...expectation });
+    const batch = await harness.service.createTransactionPlan({
+      kind: 'ordinal_batch_transfer',
+      account: 0,
+      recipient: recipient.address,
+      selections: protectedClassification.inscriptions.map((inscription) => ({
+        inscriptionId: inscription.inscriptionId,
+        outpoint: { txid: protectedTxid, vout: 0 },
+        satpoint: inscription.satpoint,
+        classificationRevision: status.activeRevision,
+      })),
+      fee: { type: 'automatic', tier: 'recommended' },
+      ...expectation,
+    });
+    expect(batch.review).toMatchObject({
+      kind: 'ordinal_batch_transfer',
+      rbf: false,
+      ordinalAction: {
+        action: 'batch_transfer',
+        inscriptionCount: 3,
+        inscriptionIds: [firstCoLocatedId, secondCoLocatedId, targetId],
+        destination: { address: recipient.address, ownership: 'external' },
+        requiresNonTaprootAcknowledgement: false,
+      },
+    });
+    if (batch.review.ordinalAction?.action !== 'batch_transfer') {
+      throw new Error('missing batch review');
+    }
+    expect(batch.review.ordinalAction.groups).toHaveLength(2);
+    expect(batch.review.ordinalAction.groups[0]).toMatchObject({
+      inscriptionIds: [firstCoLocatedId, secondCoLocatedId],
+      source: { txid: protectedTxid, vout: 0 },
+      travelsTogether: true,
+    });
+    expect(batch.review.ordinalAction.groups[1]).toMatchObject({
+      inscriptionIds: [targetId],
+      travelsTogether: false,
+    });
+    const batchSession = await getSession(harness.session);
+    if (!batchSession) throw new Error('missing batch plan session');
+    const batchDek = base64ToBytes(batchSession.dekB64);
+    const encryptedBatchPlan = await cache.get({
+      vaultId, network: 'signet', type: 'plans', key: batch.planId,
+    });
+    if (!encryptedBatchPlan) throw new Error('missing encrypted ordinal batch plan');
+    const batchPlan = openRecord(batchDek, encryptedBatchPlan, storedPlanSchema);
+    batchDek.fill(0);
+    if (batchPlan.version !== 4) throw new Error('batch plan version changed');
+    expect(batchPlan.inputs[0]).toMatchObject({ txid: protectedTxid, sequence: 0xffffffff });
+    expect(batchPlan.inputs.slice(1)).toEqual([
+      expect.objectContaining({ txid: paymentTxid, sequence: 0xffffffff }),
+    ]);
+    const batchSigningSeed = mnemonicToSeed(MNEMONIC);
+    const signedBatch = signAndValidatePlan(
+      batchPlan,
+      batchSigningSeed,
+      (length) => new Uint8Array(length),
+    );
+    batchSigningSeed.fill(0);
+    expect(() => validateSignedTransactionHex(batchPlan, signedBatch.transactionHex)).not.toThrow();
+    feeRate += 1_000;
+    const refreshedBatch = await harness.service.approveTransaction({
+      planId: batch.planId,
+      planHash: batch.planHash,
+      ...expectation,
+    });
+    expect(refreshedBatch.status).toBe('review_required');
+    if (refreshedBatch.status !== 'review_required') {
+      throw new Error('expected batch replacement review');
+    }
+    expect(refreshedBatch.replacement.planId).not.toBe(batch.planId);
+    expect(refreshedBatch.replacement.planHash).not.toBe(batch.planHash);
+    expect(refreshedBatch.replacement.review.ordinalAction).toMatchObject({
+      action: 'batch_transfer',
+      inscriptionCount: 3,
+      inscriptionIds: [firstCoLocatedId, secondCoLocatedId, targetId],
+    });
+    await expect(harness.service.reviewTransactionPlan({
+      planId: batch.planId,
+      ...expectation,
+    })).rejects.toMatchObject({ code: 'ERR_PLAN_EXPIRED' });
+    await expect(harness.service.approveTransaction({
+      planId: refreshedBatch.replacement.planId,
+      planHash: batch.planHash,
+      ...expectation,
+    })).rejects.toMatchObject({ code: 'ERR_PLAN_CHANGED' });
+    feeRate -= 1_000;
+    await harness.service.cancelTransactionPlan({
+      planId: refreshedBatch.replacement.planId,
+      ...expectation,
+    });
+    await expect(harness.service.createTransactionPlan({
+      kind: 'ordinal_batch_transfer',
+      account: 0,
+      recipient: recipient.address,
+      selections: [{
+        inscriptionId: targetId,
+        outpoint: { txid: protectedTxid, vout: 0 },
+        satpoint: `${protectedTxid}:0:20000`,
+        classificationRevision: status.activeRevision,
+      }],
+      fee: { type: 'automatic', tier: 'recommended' },
+      ...expectation,
+    })).rejects.toMatchObject({ code: 'ERR_UNSAFE_TRANSACTION' });
+    const nonTaprootBatch = await harness.service.createTransactionPlan({
+      kind: 'ordinal_batch_transfer',
+      account: 0,
+      recipient: paymentAddress.address,
+      selections: protectedClassification.inscriptions.map((inscription) => ({
+        inscriptionId: inscription.inscriptionId,
+        outpoint: { txid: protectedTxid, vout: 0 },
+        satpoint: inscription.satpoint,
+        classificationRevision: status.activeRevision,
+      })),
+      fee: { type: 'automatic', tier: 'recommended' },
+      ...expectation,
+    });
+    expect(nonTaprootBatch.review.ordinalAction?.action === 'batch_transfer' &&
+      nonTaprootBatch.review.ordinalAction.requiresNonTaprootAcknowledgement).toBe(true);
+    await expect(harness.service.approveTransaction({
+      planId: nonTaprootBatch.planId,
+      planHash: nonTaprootBatch.planHash,
+      previewUnavailableAcknowledged: true,
+      ...expectation,
+    })).rejects.toThrow(/non-Taproot/u);
+    await harness.service.cancelTransactionPlan({ planId: nonTaprootBatch.planId, ...expectation });
+    await expect(harness.service.createTransactionPlan({
+      kind: 'ordinal_batch_transfer',
+      account: 0,
+      recipient: recipient.address,
+      selections: protectedClassification.inscriptions.map((inscription) => ({
+        inscriptionId: inscription.inscriptionId,
+        outpoint: { txid: protectedTxid, vout: 0 },
+        satpoint: inscription.satpoint,
+        classificationRevision: 'stale-revision',
+      })),
+      fee: { type: 'automatic', tier: 'recommended' },
+      ...expectation,
+    })).rejects.toMatchObject({ code: 'ERR_UNSAFE_TRANSACTION' });
     await expect(harness.service.createTransactionPlan({
       kind: 'ordinal_transfer',
       account: 0,
@@ -954,6 +1108,19 @@ describe('M8 provider co-located ordinal partitioning', () => {
       inscriptionId: targetId,
       outpoint: { txid: protectedTxid, vout: 0 },
       recipient: recipient.address,
+      fee: { type: 'automatic', tier: 'recommended' },
+      ...expectation,
+    })).rejects.toMatchObject({ code: 'ERR_CLEAN_FEE_INPUTS_UNAVAILABLE' });
+    await expect(harness.service.createTransactionPlan({
+      kind: 'ordinal_batch_transfer',
+      account: 0,
+      recipient: recipient.address,
+      selections: protectedClassification.inscriptions.map((inscription) => ({
+        inscriptionId: inscription.inscriptionId,
+        outpoint: { txid: protectedTxid, vout: 0 },
+        satpoint: inscription.satpoint,
+        classificationRevision: status.activeRevision,
+      })),
       fee: { type: 'automatic', tier: 'recommended' },
       ...expectation,
     })).rejects.toMatchObject({ code: 'ERR_CLEAN_FEE_INPUTS_UNAVAILABLE' });
@@ -1007,7 +1174,8 @@ describe('M8 provider co-located ordinal partitioning', () => {
       fee: { type: 'automatic', tier: 'recommended' },
       ...expectation,
     });
-    expect(nonTaproot.review.ordinalAction?.requiresNonTaprootAcknowledgement).toBe(true);
+    expect(nonTaproot.review.ordinalAction?.action === 'transfer' &&
+      nonTaproot.review.ordinalAction.requiresNonTaprootAcknowledgement).toBe(true);
     await expect(harness.service.approveTransaction({
       planId: nonTaproot.planId,
       planHash: nonTaproot.planHash,

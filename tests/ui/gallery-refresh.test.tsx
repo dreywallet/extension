@@ -21,6 +21,7 @@ const completedScan = {
   currentUnit: null,
   boundaryUnits: [],
   failureReason: null,
+  historyPartial: false,
 };
 
 const emptyGallery = {

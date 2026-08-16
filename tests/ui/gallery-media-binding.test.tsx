@@ -115,6 +115,7 @@ const completedScan = {
   currentUnit: null,
   boundaryUnits: [],
   failureReason: null,
+  historyPartial: false,
 };
 
 function renderGalleryWithMediaHandlers(handlers: Record<string, (payload: unknown) => unknown>) {
@@ -161,6 +162,69 @@ async function openOnlyGalleryItem(): Promise<void> {
 }
 
 describe('gallery media request identity', () => {
+  it('uses a compact card label and offers postage management from the media viewer', async () => {
+    const onOrdinalAction = vi.fn();
+    const galleryItem = item('a', 1);
+    installFakeChrome({
+      'gallery.cached': () => ({ ok: true, result: { hit: false } }),
+      'gallery.list': () => ({
+        ok: true,
+        result: {
+          accountId: ACCOUNT_ID,
+          items: [galleryItem],
+          attentionItems: [],
+          sweepCandidates: [],
+          previewsUnavailable: false,
+          collectionCatalog: null,
+          recoveredAddressCount: 0,
+          refreshedAt: 1,
+        },
+      }),
+      'gallery.media.open': (payload) => mediaResponse(
+        (payload as { inscriptionId: string }).inscriptionId,
+        'c',
+      ),
+    });
+    render(
+      <Providers>
+        <Gallery
+          expectation={EXPECTATION}
+          account={0}
+          accountId={ACCOUNT_ID}
+          onReceive={() => undefined}
+          onOrdinalAction={onOrdinalAction}
+          continuous={false}
+        />
+      </Providers>,
+    );
+
+    const collection = await waitFor(() => {
+      const node = document.querySelector<HTMLElement>('[data-gallery-collection]');
+      expect(node).not.toBeNull();
+      return node!;
+    });
+    fireEvent.click(collection);
+    const compactAction = await screen.findByRole('button', {
+      name: 'Manage bitcoin kept with this collectible',
+    });
+    expect(compactAction).toHaveTextContent('Manage postage');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Open media' }));
+    const viewer = await screen.findByRole('dialog', { name: 'Sandboxed inscription media' });
+    await userEvent.click(within(viewer).getByRole('button', {
+      name: 'Manage bitcoin kept with this collectible',
+    }));
+
+    expect(onOrdinalAction).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'ordinal_postage_manage',
+      account: 0,
+      selection: expect.objectContaining({ inscriptionId: galleryItem.inscriptionId }),
+    }));
+    await waitFor(() => expect(screen.queryByRole('dialog', {
+      name: 'Sandboxed inscription media',
+    })).not.toBeInTheDocument());
+  });
+
   it('keeps the newest inscription when deferred responses arrive in reverse order', async () => {
     const { first, second, requests } = renderDeferredGallery();
     await waitFor(() => expect(document.querySelector('[data-gallery-collection]')).not.toBeNull());

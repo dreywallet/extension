@@ -8,6 +8,7 @@ import { CountdownMask } from '../../ui/components/CountdownMask';
 import { MnemonicGrid } from '../../ui/components/MnemonicGrid';
 import styles from './fullpage.module.css';
 import type { ActiveSessionExpectation } from '../../ui/hooks/use-session';
+import type { BackupMetadataV1 } from '@drey/core/domain/vault/backup-metadata';
 
 const REVEAL_SECONDS = 60;
 
@@ -26,9 +27,21 @@ export function RevealSeedSettings(props: {
   const [words, setWords] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [metadata, setMetadata] = useState<BackupMetadataV1 | null>(null);
 
   const hide = useCallback(() => setWords(null), []);
-  useEffect(() => () => setWords(null), []);
+  useEffect(() => {
+    let current = true;
+    void rpc('backup.status', props.expectation).then((result) => {
+      if (current && result.ok && result.result.metadata !== undefined) {
+        setMetadata(result.result.metadata);
+      }
+    });
+    return () => {
+      current = false;
+      setWords(null);
+    };
+  }, [props.expectation, rpc]);
 
   async function reveal(): Promise<void> {
     setError(null);
@@ -53,6 +66,9 @@ export function RevealSeedSettings(props: {
         <div className={styles['warning']} role="note">
           {t('reveal.warning')}
         </div>
+        {metadata !== null && metadata.usesPassphrase !== false ? (
+          <p className={styles['advisory']} role="note">{t('recovery.passphrase.warning')}</p>
+        ) : null}
         {words === null ? (
           <form
             className={styles['form']}

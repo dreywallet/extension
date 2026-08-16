@@ -96,13 +96,14 @@ describe('RecoverySettings', () => {
     fillCheck([' legal ', 'wave', ' useful ']);
     fireEvent.click(screen.getByRole('button', { name: 'Check backup' }));
 
-    expect(await screen.findByRole('heading', { name: 'Backup check passed' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Three-word spot check passed' })).toBeInTheDocument();
     expect(calls).toEqual([{
       words: [
         { index: 0, word: 'legal' },
         { index: 4, word: 'wave' },
         { index: 8, word: 'useful' },
       ],
+      wordCount: 12,
       ...EXPECTATION,
     }]);
     expect(screen.queryByRole('textbox')).toBeNull();
@@ -142,7 +143,7 @@ describe('RecoverySettings', () => {
     openCheck();
     fillCheck();
     fireEvent.click(screen.getByRole('button', { name: 'Check backup' }));
-    await screen.findByRole('heading', { name: 'Backup check passed' });
+    await screen.findByRole('heading', { name: 'Three-word spot check passed' });
 
     fireEvent.click(screen.getByRole('button', { name: 'Check another set' }));
     expect(inputLabels()).toEqual([
@@ -156,5 +157,68 @@ describe('RecoverySettings', () => {
     expect(screen.queryByRole('textbox')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     await waitFor(() => expect(onBack).toHaveBeenCalledTimes(1));
+  });
+
+  it('clears the complete phrase after one aggregate recovery response', async () => {
+    const calls: unknown[] = [];
+    installFakeChrome({
+      'backup.status': () => ({
+        ok: true,
+        result: {
+          backupVerified: true,
+          metadata: {
+            version: 1,
+            origin: 'imported',
+            usageGatePassed: true,
+            wordCount: 12,
+            usesPassphrase: true,
+            lastSpotCheckAt: null,
+            lastFullRecoveryCheckAt: null,
+          },
+        },
+      }),
+      'vault.verifyFullRecovery': (payload) => {
+        calls.push(payload);
+        return { ok: true, result: { verified: false } };
+      },
+    });
+    render(
+      <Providers>
+        <RecoverySettings expectation={EXPECTATION} onBack={vi.fn()} onReveal={vi.fn()} />
+      </Providers>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Start full recovery test' }));
+    fireEvent.change(screen.getByLabelText('Complete recovery phrase'), {
+      target: { value: 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about' },
+    });
+    fireEvent.change(screen.getByLabelText('BIP39 passphrase (optional)'), {
+      target: { value: 'secret' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Test recovery' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/do not restore/iu);
+    expect(screen.getByLabelText('Complete recovery phrase')).toHaveValue('');
+    expect(screen.getByLabelText('BIP39 passphrase (optional)')).toHaveValue('');
+    expect(calls).toHaveLength(1);
+  });
+
+  it('treats a malformed complete phrase as a recovery mismatch', async () => {
+    installFakeChrome({
+      'vault.verifyFullRecovery': () => ({ ok: false, code: 'ERR_INVALID_PAYLOAD' }),
+    });
+    render(
+      <Providers>
+        <RecoverySettings expectation={EXPECTATION} onBack={vi.fn()} onReveal={vi.fn()} />
+      </Providers>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Start full recovery test' }));
+    fireEvent.change(screen.getByLabelText('Complete recovery phrase'), {
+      target: { value: 'abandon abandon abandon' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Test recovery' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/do not restore this wallet/iu);
+    expect(screen.queryByText(/something went wrong/iu)).toBeNull();
+    expect(screen.getByLabelText('Complete recovery phrase')).toHaveValue('');
   });
 });

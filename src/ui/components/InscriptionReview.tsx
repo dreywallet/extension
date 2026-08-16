@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, type ReactNode, type SyntheticEvent } from 'react';
+import { useCallback, useMemo, useRef, useState, type ReactNode, type SyntheticEvent } from 'react';
 import styles from './InscriptionReview.module.css';
 import { MediaBadgeTile, TextExcerptTile } from './PreviewTile';
 import { useI18n, type MessageKey } from '../i18n';
@@ -193,6 +193,7 @@ export function InscriptionReview(props: {
   compact?: boolean;
 }): ReactNode {
   const { t } = useI18n();
+  const [showAll, setShowAll] = useState(false);
   const groups = useMemo(() => {
     const grouped = new Map<string, InscriptionReviewItem[]>();
     for (const item of props.items) {
@@ -214,14 +215,23 @@ export function InscriptionReview(props: {
           : b.some((item) => item.inscriptionId === props.primaryInscriptionId) ? 1 : 0);
   }, [props.items, props.primaryInscriptionId]);
   const visibleGroups = useMemo(() => {
-    if (!props.compact || props.primaryInscriptionId === undefined) return groups;
-    return groups
-      .map(([group, items]) => [
-        group,
-        items.filter((item) => item.inscriptionId === props.primaryInscriptionId),
-      ] as const)
-      .filter(([, items]) => items.length > 0);
-  }, [groups, props.compact, props.primaryInscriptionId]);
+    if (!props.compact || showAll) return groups;
+    if (props.primaryInscriptionId !== undefined) {
+      return groups
+        .map(([group, items]) => [
+          group,
+          items.filter((item) => item.inscriptionId === props.primaryInscriptionId),
+        ] as const)
+        .filter(([, items]) => items.length > 0);
+    }
+    let remaining = 4;
+    return groups.flatMap(([group, items]) => {
+      if (remaining === 0) return [];
+      const visible = items.slice(0, remaining);
+      remaining -= visible.length;
+      return [[group, visible] as const];
+    });
+  }, [groups, props.compact, props.primaryInscriptionId, showAll]);
   const needsAcknowledgement = props.items.some((item) => item.preview.kind === 'placeholder');
   if (props.items.length === 0) return null;
 
@@ -305,6 +315,13 @@ export function InscriptionReview(props: {
           ))}
         </section>
       ))}
+      {props.compact && props.items.length > visibleGroups.reduce(
+        (count, [, items]) => count + items.length, 0,
+      ) ? (
+        <button className={styles['viewAll']} onClick={() => setShowAll(true)} type="button">
+          {t('inscription.review.viewAll', { count: props.items.length })}
+        </button>
+      ) : null}
       {needsAcknowledgement ? (
         <label className={styles['acknowledgement']}>
           <input

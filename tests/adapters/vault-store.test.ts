@@ -24,6 +24,7 @@ import {
 import { makeRecord } from '@drey/core/testing/vault-helpers';
 import v0Fixture from '@drey/core/fixtures/vault-record-v0.json';
 import { makeFakeArea } from './fake-area';
+import { migrateLegacyBackupMetadata } from '@drey/core/domain/vault/backup-metadata';
 
 beforeAll(async () => {
   await installTestCryptoProvider();
@@ -182,8 +183,20 @@ describe('vault meta (§7.1 backup gate)', () => {
   it('defaults to empty and round-trips a saved map', async () => {
     const area = makeFakeArea();
     expect(await loadVaultMeta(area)).toEqual({});
-    await saveVaultMeta(area, { 'vault-1': { backupVerified: true } });
-    expect(await loadVaultMeta(area)).toEqual({ 'vault-1': { backupVerified: true } });
+    const metadata = migrateLegacyBackupMetadata(true);
+    await saveVaultMeta(area, { 'vault-1': { backupVerified: true, metadata } });
+    expect(await loadVaultMeta(area)).toEqual({ 'vault-1': { backupVerified: true, metadata } });
+  });
+
+  it('migrates the legacy usage flag without inventing phrase provenance', async () => {
+    const area = makeFakeArea();
+    area.store.set('squirrel:vaultMeta', { 'vault-1': { backupVerified: true } });
+    expect(await loadVaultMeta(area)).toEqual({
+      'vault-1': {
+        backupVerified: true,
+        metadata: migrateLegacyBackupMetadata(true),
+      },
+    });
   });
 
   it('degrades a malformed map to empty (safe direction: re-verify)', async () => {

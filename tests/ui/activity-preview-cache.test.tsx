@@ -202,6 +202,44 @@ describe('activity thumbnail cache', () => {
     expect(inscriptionPreview).toHaveBeenCalledOnce();
   });
 
+  it('evicts the oldest thumbnail after 64 session entries', async () => {
+    const inscriptionPreview = vi.fn((payload: unknown) => {
+      const request = payload as { items: Array<{ inscriptionId: string }> };
+      return {
+        ok: true as const,
+        result: { items: request.items.map(({ inscriptionId }) => ({
+          inscriptionId,
+          preview: {
+            kind: 'text' as const,
+            textMime: 'text/plain' as const,
+            excerpt: 'signed',
+            truncated: false,
+          },
+        })) },
+      };
+    });
+    installFakeChrome({ 'activity.inscriptionPreviewBatch': inscriptionPreview });
+    const rows = Array.from({ length: 65 }, (_, index) => {
+      const hex = index.toString(16).padStart(64, '0');
+      return {
+        ...ordinalRow(hex),
+        inscriptionId: `${hex}i0`,
+        inscriptionNumber: index,
+      };
+    });
+    const first = renderList(rows);
+    await waitFor(() => expect(inscriptionPreview.mock.calls.flatMap((call) =>
+      (call[0] as { items: unknown[] }).items)).toHaveLength(65));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    first.unmount();
+
+    renderList([rows[0]!]);
+    await waitFor(() => expect(inscriptionPreview.mock.calls.flatMap((call) =>
+      (call[0] as { items: unknown[] }).items)).toHaveLength(66));
+    expect(inscriptionPreview.mock.calls.every((call) =>
+      (call[0] as { items: unknown[] }).items.length <= 8)).toBe(true);
+  });
+
   it('does not reuse preview bytes across different transaction bindings', async () => {
     const inscriptionPreview = vi.fn(preview);
     installFakeChrome({ 'activity.inscriptionPreviewBatch': inscriptionPreview });
@@ -214,6 +252,38 @@ describe('activity thumbnail cache', () => {
     // exact worker authorization even when the inscription identity matches.
     renderList([ordinalRow('f'.repeat(64))]);
     await waitFor(() => expect(inscriptionPreview).toHaveBeenCalledTimes(2));
+  });
+
+  it('suppresses a preview that completes after the session changes', async () => {
+    let settle!: (value: ReturnType<typeof preview>) => void;
+    let calls = 0;
+    const inscriptionPreview = vi.fn(() => {
+      calls += 1;
+      if (calls === 1) {
+        return new Promise<ReturnType<typeof preview>>((resolve) => { settle = resolve; });
+      }
+      return {
+        ok: true as const,
+        result: { items: [{
+          inscriptionId: INSCRIPTION_ID,
+          preview: { kind: 'placeholder' as const, reason: 'decode_failed' },
+        }] },
+      };
+    });
+    installFakeChrome({ 'activity.inscriptionPreviewBatch': inscriptionPreview });
+    const rendered = renderList([ordinalRow('a'.repeat(64))]);
+    await waitFor(() => expect(inscriptionPreview).toHaveBeenCalledOnce());
+    const nextExpectation = { ...EXPECTATION, expectedSessionId: '00000000-0000-4000-8000-000000000002' };
+    rendered.rerender(
+      <Providers>
+        <ActivityList accountId={ACCOUNT_ID} activity={[ordinalRow('a'.repeat(64))]}
+          expectation={nextExpectation} network="signet" />
+      </Providers>,
+    );
+    settle(preview());
+
+    await waitFor(() => expect(inscriptionPreview).toHaveBeenCalledTimes(2));
+    expect(screen.queryByTitle(PREVIEW_TITLE)).not.toBeInTheDocument();
   });
 
   it('invalidates the shared store on lock', async () => {

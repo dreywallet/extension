@@ -44,11 +44,16 @@ export function installFakeChrome(handlers: Record<string, Handler>): Map<string
           const homeHandler = handlers['wallet.home'];
           if (!homeHandler) {
             const accountId = (envelope.payload as { accountId: string }).accountId;
-            return { ok: true, result: { accountId, items: [], nextCursor: null, reset: false } };
+            return {
+              ok: true,
+              result: {
+                accountId, items: [], nextCursor: null, reset: false, historyComplete: true,
+              },
+            };
           }
           const homeResponse = await homeHandler(envelope.payload) as {
             ok: boolean;
-            result?: { accountId: string; activity: unknown[] };
+            result?: { accountId: string; activity: unknown[]; historyComplete?: boolean };
             code?: string;
           };
           if (!homeResponse.ok || !homeResponse.result) return homeResponse;
@@ -59,6 +64,7 @@ export function installFakeChrome(handlers: Record<string, Handler>): Map<string
               items: homeResponse.result.activity,
               nextCursor: null,
               reset: false,
+              historyComplete: homeResponse.result.historyComplete ?? true,
             },
           };
         }

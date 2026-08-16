@@ -228,9 +228,14 @@ describe('local UTXO labels (§14.4)', () => {
   it('labels a protected UTXO that could never be user-frozen', async () => {
     const { harness, expectation, write } = await labelHarness();
     const base = utxo('a'.repeat(64), 10_000n, 0);
+    const inscription = {
+      inscriptionId: `${'b'.repeat(64)}i0`,
+      number: 42,
+      satpoint: `${base.outpoint.txid}:0:0`,
+    };
     const inscribed: WalletUtxo = {
       ...base,
-      facts: { ...base.facts!, primaryClass: 'inscribed' },
+      facts: { ...base.facts!, primaryClass: 'inscribed', inscriptions: [inscription] },
     };
     await write([inscribed], 1);
 
@@ -245,6 +250,8 @@ describe('local UTXO labels (§14.4)', () => {
 
     const listed = await harness.service.listUtxos({ feeRateSatPerKvB: 1000, ...expectation });
     expect(listed.utxos[0]?.label).toEqual({ preset: null, text: 'gift from a friend' });
+    expect(listed.utxos[0]?.inscriptions).toEqual([inscription]);
+    expect(listed.utxos[0]?.eligible).toBe(false);
   });
 
   // Labels are pure annotation: they grant no §11.2 relief and only tie-break

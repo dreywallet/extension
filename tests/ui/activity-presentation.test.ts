@@ -58,6 +58,34 @@ describe('shared activity presentation', () => {
     expect(presentation.amount).toBeNull();
   });
 
+  it('presents one atomic batch as one transaction with its exact item count', () => {
+    const inscriptionId = `${'c'.repeat(64)}i0`;
+    const presentation = presentActivity(item({
+      actionKind: 'ordinal_batch_transfer',
+      inscriptionId,
+      inscriptionIds: [inscriptionId, `${'d'.repeat(64)}i0`, `${'e'.repeat(64)}i0`],
+      inscriptionCount: 3,
+    }), t, 'en', sats);
+    expect(presentation.description).toBe('3 Ordinals sent');
+    expect(presentation.inscription).toBe(true);
+    expect(presentation.amount).toBeNull();
+  });
+
+  it('presents postage management as a collectible action instead of a bitcoin send', () => {
+    const inscriptionId = `${'f'.repeat(64)}i0`;
+    const presentation = presentActivity(item({
+      actionKind: 'ordinal_postage_manage',
+      inscriptionId,
+      returnedBtcSats: '20000',
+      deltaSats: '-500',
+      feeSats: '500',
+    }), t, 'en', sats);
+    expect(presentation.description).toBe('Postage updated');
+    expect(presentation.inscription).toBe(true);
+    expect(presentation.identityTitle).toBe(inscriptionId);
+    expect(presentation.amount).toBeNull();
+  });
+
   it('groups newest-first rows by local date and keeps pending separate', () => {
     const groups = groupActivity([
       item({ txid: '1'.repeat(64) }),

@@ -29,6 +29,7 @@ export function ScanProgress(props: {
   const rpc = useRpc();
   const gateway = useGatewayStatus();
   const [status, setStatus] = useState<ScanStatus | null>(null);
+  const [startError, setStartError] = useState(false);
   const [extendSkipped, setExtendSkipped] = useState(false);
   const started = useRef(false);
   const settled = useRef(false);
@@ -39,6 +40,18 @@ export function ScanProgress(props: {
       if (res.ok) setStatus(res.result);
     });
   }, [expectation, rpc]);
+
+  const start = useCallback((mode: 'initial' | 'rescan' | 'resume') => {
+    setStartError(false);
+    settled.current = false;
+    void rpc('scan.start', { mode, ...expectation }).then((response) => {
+      if (!response.ok) {
+        setStartError(true);
+        return;
+      }
+      refresh();
+    });
+  }, [expectation, refresh, rpc]);
 
   useEffect(() => {
     refresh();
@@ -64,14 +77,14 @@ export function ScanProgress(props: {
     // settled status must also not fire onSettled for the scan we're replacing.
     if ((status.kind === 'idle' || isSettled) && autoStart !== undefined && !started.current) {
       started.current = true;
-      void rpc('scan.start', { mode: autoStart, ...expectation }).then(refresh);
+      start(autoStart);
       return;
     }
     if (isSettled && !settled.current) {
       settled.current = true;
       onSettled?.(status.kind);
     }
-  }, [status, extendSkipped, autoStart, expectation, onSettled, refresh, rpc]);
+  }, [status, extendSkipped, autoStart, onSettled, start]);
 
   if (status === null) return <p>{t('common.loading')}</p>;
 
@@ -160,7 +173,7 @@ export function ScanProgress(props: {
           <Button
             onClick={() => {
               settled.current = false;
-              void rpc('scan.start', { mode: 'resume', ...expectation }).then(refresh);
+              start('resume');
             }}
           >
             {t('scan.resume')}
@@ -170,7 +183,7 @@ export function ScanProgress(props: {
 
       {status.kind === 'completed' ? (
         <p className={styles['line']} role="status">
-          {t('scan.completed')}
+          {status.historyPartial ? t('scan.completedPartial') : t('scan.completed')}
         </p>
       ) : null}
       {status.kind === 'cancelled' ? (
@@ -179,9 +192,34 @@ export function ScanProgress(props: {
         </p>
       ) : null}
       {status.kind === 'failed' ? (
-        <p role="alert" className={styles['error']}>
-          {t('scan.failed')}
-        </p>
+        <>
+          <p role="alert" className={styles['error']}>
+            {status.failureReason === 'data_limit' ? t('scan.dataLimit') : t('scan.failed')}
+          </p>
+          <Button
+            onClick={() => {
+              started.current = true;
+              start('resume');
+            }}
+          >
+            {t('scan.retry')}
+          </Button>
+        </>
+      ) : null}
+      {startError && status.kind !== 'failed' ? (
+        <>
+          <p role="alert" className={styles['error']}>
+            {t('scan.startFailed')}
+          </p>
+          <Button
+            onClick={() => {
+              started.current = true;
+              start(autoStart ?? 'rescan');
+            }}
+          >
+            {t('scan.retry')}
+          </Button>
+        </>
       ) : null}
     </div>
   );

@@ -51,6 +51,7 @@ const home: WalletHomeResult = {
     timestamp: '2026-07-19T12:00:00.000Z',
     height: 249900,
   }],
+  historyComplete: true,
   wrongLane: [],
   lastSyncedAt: 1_752_969_600_000,
   scan: {
@@ -61,6 +62,7 @@ const home: WalletHomeResult = {
     currentUnit: null,
     boundaryUnits: [],
     failureReason: null,
+    historyPartial: false,
   },
 };
 

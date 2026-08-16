@@ -3,6 +3,86 @@
 Notable user-facing changes to Drey are recorded here. For earlier releases,
 see the production release tags in the repository.
 
+## 0.10.8
+
+### Changed
+
+- Consume `@drey/core` v0.8.2, which corrects the public development lockfile
+  without changing wallet behavior.
+- Allow an inspectable build from the standalone public source mirror while
+  keeping Store packaging bound to the reviewed private release workspace.
+
+## 0.10.7
+
+### Fixed
+
+- Complete account discovery when an address has more activity than the
+  history service can return in one bounded response.
+- Keep a working Retry action after a scan fails to start, and distinguish a
+  data-limit failure from a connection failure.
+
+### Changed
+
+- Keep balances and collectibles complete and independently verified while
+  clearly marking older Activity as incomplete when history is bounded.
+- Preserve partial-history status through restart and scan resume without
+  weakening spending or collectible-classification checks.
+- Consume `@drey/core` v0.8.1.
+
+## 0.10.6
+
+### Fixed
+
+- Show a clear recovery mismatch when a complete phrase is malformed instead
+  of reporting an internal error.
+- Explain when recovering bitcoin from a collectible would cost at least as
+  much as it returns.
+- Label collectible postage changes correctly in Activity instead of showing
+  them as ordinary bitcoin sends.
+- Describe coin consolidation in terms of the selected economy fee without
+  implying that Drey measured a separate network-fee condition.
+
+## 0.10.5
+
+### Added
+
+- Send bitcoin to 2–20 recipients in one atomic transaction, with a separate
+  address-book picker for each recipient, exact per-recipient review, and a
+  clear privacy notice before batching payments.
+- Manage the bitcoin kept with an eligible collectible. The screen shows the
+  current amount, offers 330-sat, 546-sat, 10,000-sat, and custom targets, and
+  reviews the amount recovered or added separately from the network fee.
+- Test a complete recovery phrase locally from the Recovery center, including
+  the BIP39 passphrase when one is used. The result reveals only whether the
+  wallet matches and clears every entered secret after the attempt.
+- Explain locally how a generated recovery phrase received its randomness,
+  while distinguishing generated, imported, and older wallets whose origin is
+  unknown.
+
+### Changed
+
+- Show one best available fee-bump action for a pending transaction instead of
+  presenting RBF and CPFP as equivalent choices.
+- Offer a dismissible review for combining clean coins, with the network cost
+  and privacy linkage disclosed before review.
+- Make collectible-postage management available from both compact protected-coin
+  details and the full media viewer.
+- Rename the three-word backup result to **Three-word spot check passed** and
+  make clear that it is not a complete recovery test.
+- Consume `@drey/core` v0.8.0.
+
+## 0.10.4
+
+### Added
+
+- Send up to 16 eligible inscriptions atomically to one recipient, keeping
+  inscriptions that share an output or sat together.
+- Show verified inscription previews beside protected coins in Manage coins.
+
+### Changed
+
+- Consume `@drey/core` v0.7.16.
+
 ## 0.10.3
 
 ### Changed
@@ -10,6 +90,24 @@ see the production release tags in the repository.
 - Housekeeping for the public source release: contribution and security
   policies, public repository metadata, and documentation cleanup. No
   functional changes.
+
+## 0.10.2
+
+### Added
+
+- Page through older account activity without replacing the most recent
+  history already on screen.
+
+### Fixed
+
+- Return to the last active wallet after unlocking.
+- Keep cached collectibles visible while fresh gallery data loads, and discard
+  stale media responses after the selected wallet or collectible changes.
+- Enforce provider PSBT input bounds before analysis and signing.
+
+### Changed
+
+- Consume `@drey/core` v0.7.12.
 
 ## 0.10.1
 

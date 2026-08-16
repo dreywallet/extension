@@ -289,6 +289,23 @@ target rejection, non-Taproot acknowledgement, immutable-plan restart/refetch,
 preview and fee replacement boundaries, accepted and indeterminate broadcast,
 and action-specific activity without adding gateway control routes.
 
+Native multi-inscription transfer builds on that boundary without widening the
+provider dapp. The popup gallery has a temporary selection mode, requires all
+inscriptions from every selected output, confirms co-located IDs as one atomic
+group, and caps a request at 16 inscription IDs. Focused worker tests prove the
+ordered protected inputs and postage outputs, clean fee-only funding, compact
+review model, immutable v4 plan, final-byte validation, and fail-closed
+incomplete selection. Focused UI tests cover the same-sat prompt, explicit
+`Select all from this output` repair, 16-ID cap, and session clearing.
+
+The current loopback snapshot fixture exposes one three-inscription protected
+output, so browser acceptance can exercise the gallery entry and one-source
+atomic transaction only. A truthful 16-item multi-source signet E2E requires a
+new signed gateway snapshot/classification fixture plus sixteen allowlisted inert
+previews. Until that fixture lands, maximum-batch, changed-source replacement,
+multiple-top-up rejection, and insufficient-clean-fee coverage remain shared
+core/worker tests rather than being mislabeled as browser E2E evidence.
+
 Run the focused launch-UX gate with:
 
 ```bash

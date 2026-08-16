@@ -12,6 +12,8 @@ import { vaultEn, type VaultMessageKey } from './vault-en';
 import { vaultEs } from './vault-es';
 import { watchAccountEn, type WatchAccountMessageKey } from './watch-account-en';
 import { watchAccountEs } from './watch-account-es';
+import { recoveryEn, type RecoveryMessageKey } from './recovery-en';
+import { recoveryEs } from './recovery-es';
 
 export type Language = 'en' | 'es';
 /**
@@ -19,11 +21,11 @@ export type Language = 'en' | 'es';
  * extension-only catalogs: passkey unlock, the browser-first public-account
  * transfer ceremony, and the signet Vault coordinator.
  */
-export type MessageKey = PortableMessageKey | PasskeyMessageKey | VaultMessageKey | WatchAccountMessageKey;
+export type MessageKey = PortableMessageKey | PasskeyMessageKey | VaultMessageKey | WatchAccountMessageKey | RecoveryMessageKey;
 
 export const CATALOGS: Record<Language, Record<MessageKey, string>> = {
-  en: { ...en, ...passkeyEn, ...vaultEn, ...watchAccountEn },
-  es: { ...es, ...passkeyEs, ...vaultEs, ...watchAccountEs },
+  en: { ...en, ...passkeyEn, ...vaultEn, ...watchAccountEn, ...recoveryEn },
+  es: { ...es, ...passkeyEs, ...vaultEs, ...watchAccountEs, ...recoveryEs },
 };
 
 export function format(template: string, params?: Record<string, string | number>): string {

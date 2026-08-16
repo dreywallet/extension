@@ -148,6 +148,7 @@ export function CreateFlow(props: {
     try {
       const result = await rpc('vault.verifyBackup', {
         words: positions.map((index, i) => ({ index, word: typed[i]?.trim() ?? '' })),
+        wordCount: 12,
         ...sessionExpectation,
       });
       if (!result.ok) {
@@ -270,6 +271,14 @@ export function CreateFlow(props: {
           {t(wordsHidden ? 'onboarding.reveal.show' : 'onboarding.reveal.hide')}
         </Button>
         <p className={styles['hint']}>{t('onboarding.reveal.noScreenshot')}</p>
+        <details>
+          <summary>{t('recovery.generation.title')}</summary>
+          <p className={styles['hint']}>
+            {t('recovery.generation.generated', { wordCount: 12, entropyBits: 128 })}
+          </p>
+          <p className={styles['hint']}>{t('recovery.platform.randomSource')}</p>
+          <p className={styles['hint']}>{t('recovery.generation.check')}</p>
+        </details>
         <div className={styles['actions']}>
           <span />
           <Button onClick={advanceToVerify} disabled={!wordsReady}>

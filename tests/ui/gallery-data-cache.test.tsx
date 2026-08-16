@@ -39,6 +39,7 @@ const completedScan = {
   currentUnit: null,
   boundaryUnits: [],
   failureReason: null,
+  historyPartial: false,
 };
 
 const INSCRIPTION_ID = `${'a'.repeat(64)}i0`;

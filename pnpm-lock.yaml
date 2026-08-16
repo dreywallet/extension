@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@drey/core':
-        specifier: git+https://github.com/dreywallet/core.git#v0.7.12
-        version: git+https://github.com/dreywallet/core.git#949adb74754312870865a315db5f287afdb1c28e
+        specifier: git+https://github.com/dreywallet/core.git#v0.8.2
+        version: git+https://github.com/dreywallet/core.git#51e9356d97496844d445d9ce5a83ea1190593569
       '@ngraveio/bc-ur':
         specifier: 1.1.13
         version: 1.1.13
@@ -223,9 +223,9 @@ packages:
     engines: {node: '>= 0.10.4'}
     hasBin: true
 
-  '@drey/core@git+https://github.com/dreywallet/core.git#949adb74754312870865a315db5f287afdb1c28e':
-    resolution: {commit: 949adb74754312870865a315db5f287afdb1c28e, repo: https://github.com/dreywallet/core.git, type: git}
-    version: 0.7.12
+  '@drey/core@git+https://github.com/dreywallet/core.git#51e9356d97496844d445d9ce5a83ea1190593569':
+    resolution: {commit: 51e9356d97496844d445d9ce5a83ea1190593569, repo: https://github.com/dreywallet/core.git, type: git}
+    version: 0.8.2
 
   '@emnapi/core@1.11.1':
     resolution: {integrity: sha512-RSvbQmHzdKzNsLYa/wHrbc3KN4sYLKAdPZxqiM2HATqv/SBk2/ENSHpvXGaLOMcsAyz0poEGqkmmKYG3OWiJEQ==}
@@ -3418,7 +3418,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@drey/core@git+https://github.com/dreywallet/core.git#949adb74754312870865a315db5f287afdb1c28e':
+  '@drey/core@git+https://github.com/dreywallet/core.git#51e9356d97496844d445d9ce5a83ea1190593569':
     dependencies:
       '@noble/curves': 1.9.7
       '@scure/base': 1.2.6

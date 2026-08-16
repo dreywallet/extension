@@ -39,6 +39,10 @@ import type { AddressBookV1 } from '@drey/core/domain/address-book';
 import { resolvePayableAddress } from '@drey/core/domain/transactions/native-send';
 import { useAccountActivity } from '../../ui/hooks/use-account-activity';
 import styles from './fullpage.module.css';
+import {
+  alignInscriptionThumbnailScope,
+  retryFailedInscriptionThumbnails,
+} from '../../ui/hooks/use-inscription-thumbnail';
 
 type Section = 'send' | 'utxos' | 'activity';
 type PlanResult = OpResult<'transaction.plan'>;
@@ -47,13 +51,20 @@ type BroadcastResult = Exclude<ApproveResult, { status: 'review_required' }>;
 type SubmittedResult = BroadcastResult & {
   network: 'mainnet' | 'signet';
   kind: PlanResult['review']['kind'];
+  inscriptionCount: number | null;
   receipt: Pick<PlanResult['review'], 'amountSats' | 'feeSats' | 'recipients'>;
 };
 type Utxo = OpResult<'utxo.list'>['utxos'][number];
 type Transaction = OpResult<'transaction.status'>['transactions'][number];
 type SendUnit = 'btc' | 'sats';
+type PostageTarget = 'common_546' | 'compatible_10000' | 'minimum_standard' | 'custom';
 type ImportedPaymentSuggestions = {
   amountSats?: string;
+};
+type AdditionalRecipient = {
+  id: number;
+  address: string;
+  amount: string;
 };
 
 function withoutImportedSuggestion(
@@ -69,6 +80,7 @@ const QUOTE_REFRESH_SKEW_MS = 5_000;
 const QUOTE_RETRY_MS = 15_000;
 const LIVE_SCAN_FALLBACK_MS = 60_000;
 const SEND_UNITS = ['btc', 'sats'] as const;
+const MAX_NATIVE_BATCH_RECIPIENTS = 20;
 
 function resultTitle(
   result: SubmittedResult,
@@ -76,10 +88,16 @@ function resultTitle(
 ): string {
   if (result.status === 'accepted') {
     if (result.kind === 'ordinal_transfer') return t('ordinal.result.transfer.title');
+    if (result.kind === 'ordinal_batch_transfer') {
+      return t('ordinal.result.batch.title', { count: result.inscriptionCount ?? 0 });
+    }
+    if (result.kind === 'ordinal_postage_manage') return t('ordinal.postage.resultTitle');
     if (result.kind === 'rescue') return t('ordinal.result.rescue.title');
     if (result.kind === 'ordinal_sweep') return t('ordinal.result.sweep.title');
   }
-  const ordinal = result.kind === 'ordinal_transfer' || result.kind === 'rescue' ||
+  const ordinal = result.kind === 'ordinal_transfer' || result.kind === 'ordinal_batch_transfer' ||
+    result.kind === 'ordinal_postage_manage' ||
+    result.kind === 'rescue' ||
     result.kind === 'ordinal_sweep';
   return t(`${ordinal ? 'ordinal' : 'send'}.result.title.${result.status}`);
 }
@@ -188,6 +206,7 @@ export function Transactions(props: {
   const [addressBook, setAddressBook] = useState<AddressBookV1 | null>(null);
   const [addressBookLoaded, setAddressBookLoaded] = useState(false);
   const [recipientPickerOpen, setRecipientPickerOpen] = useState(false);
+  const [recipientPickerTarget, setRecipientPickerTarget] = useState(0);
   const recipientPickerTrigger = useRef<HTMLButtonElement>(null);
   const recipientDialog = useRef<HTMLElement>(null);
   const recipientRequestGeneration = useRef(0);
@@ -196,8 +215,15 @@ export function Transactions(props: {
   const [myRecipientsLoading, setMyRecipientsLoading] = useState(false);
   const [selfTransfer, setSelfTransfer] = useState(false);
   const [amount, setAmount] = useState('');
+  const [additionalRecipients, setAdditionalRecipients] = useState<AdditionalRecipient[]>([]);
+  const nextRecipientId = useRef(1);
+  const batchAddressInputs = useRef(new Map<number, HTMLInputElement>());
+  const addRecipientButton = useRef<HTMLButtonElement>(null);
+  const pendingBatchFocus = useRef<number | 'add' | null>(null);
   const [sendUnit, setSendUnit] = useState<SendUnit>('btc');
   const [sendMax, setSendMax] = useState(false);
+  const [postageTarget, setPostageTarget] = useState<PostageTarget>('common_546');
+  const [customPostageSats, setCustomPostageSats] = useState('');
   const [paymentRequestLabel, setPaymentRequestLabel] = useState('');
   const [paymentRequestMessage, setPaymentRequestMessage] = useState('');
   const [importedSuggestions, setImportedSuggestions] =
@@ -237,7 +263,16 @@ export function Transactions(props: {
   feeState.current = { feeTier, customFee, quote };
   navigate.current = props.onNavigate;
 
+  const postageDraftOutpoint = ordinalDraft?.kind === 'ordinal_postage_manage'
+    ? `${ordinalDraft.selection.outpoint.txid}:${ordinalDraft.selection.outpoint.vout}`
+    : null;
+  const currentPostageSats = postageDraftOutpoint === null || utxos === null
+    ? null
+    : utxos.find((utxo) => `${utxo.txid}:${utxo.vout}` === postageDraftOutpoint)?.valueSats ?? null;
+
   const { expectedVaultId, expectedSessionId } = props;
+  const inscriptionPreviewScope = `${expectedVaultId}:${expectedSessionId}:${props.accountId}`;
+  alignInscriptionThumbnailScope(inscriptionPreviewScope);
   const accountActivity = useAccountActivity(
     { expectedVaultId, expectedSessionId },
     props.accountId,
@@ -356,10 +391,13 @@ export function Transactions(props: {
   }, [expectedSessionId, expectedVaultId]);
 
   useEffect(() => {
-    if (props.initialSection === 'send') void loadQuote();
+    if (props.initialSection === 'send') {
+      void loadQuote();
+      if (postageDraftOutpoint !== null) void loadUtxos();
+    }
     if (props.initialSection === 'utxos') void loadQuote().then(loadUtxos);
     if (props.initialSection === 'activity') void loadTransactions();
-  }, [loadQuote, loadTransactions, loadUtxos, props.initialSection]);
+  }, [loadQuote, loadTransactions, loadUtxos, postageDraftOutpoint, props.initialSection]);
   useEffect(() => {
     if (props.initialSection !== 'send') return undefined;
     let active = true;
@@ -485,7 +523,10 @@ export function Transactions(props: {
     if (generation !== commandGeneration.current) return;
     setBusy(false);
     if (!response.ok) {
-      setError(t(errorMessageKey(response.code)));
+      setError(t(intent['kind'] === 'ordinal_postage_manage' &&
+        response.code === 'ERR_NO_SWEEPABLE_EXCESS'
+        ? 'ordinal.postage.error.uneconomic'
+        : errorMessageKey(response.code)));
       return;
     }
     setPlan(response.result);
@@ -503,6 +544,38 @@ export function Transactions(props: {
     setPaymentRequestMessage('');
     setRecipient(next.trim());
   }, []);
+
+  const changeAdditionalRecipient = useCallback((
+    id: number,
+    field: 'address' | 'amount',
+    value: string,
+  ): void => {
+    setAdditionalRecipients((current) => current.map((entry) =>
+      entry.id === id ? { ...entry, [field]: value } : entry));
+  }, []);
+
+  useEffect(() => {
+    const target = pendingBatchFocus.current;
+    if (target === null) return;
+    pendingBatchFocus.current = null;
+    if (target === 'add') addRecipientButton.current?.focus();
+    else batchAddressInputs.current.get(target)?.focus();
+  }, [additionalRecipients]);
+
+  const addRecipient = useCallback((): void => {
+    if (additionalRecipients.length + 1 >= MAX_NATIVE_BATCH_RECIPIENTS) return;
+    const id = nextRecipientId.current++;
+    setSendMax(false);
+    pendingBatchFocus.current = id;
+    setAdditionalRecipients((current) => [...current, { id, address: '', amount: '' }]);
+  }, [additionalRecipients.length]);
+
+  const removeRecipient = useCallback((id: number): void => {
+    const index = additionalRecipients.findIndex((entry) => entry.id === id);
+    const remaining = additionalRecipients.filter((entry) => entry.id !== id);
+    pendingBatchFocus.current = remaining[index]?.id ?? remaining[index - 1]?.id ?? 'add';
+    setAdditionalRecipients(remaining);
+  }, [additionalRecipients]);
 
   const pastePaymentInstruction = useCallback(async (
     event: ClipboardEvent<HTMLInputElement>,
@@ -551,6 +624,23 @@ export function Transactions(props: {
       const [txid, vout] = key.split(':');
       return { txid: txid ?? '', vout: Number(vout) };
     });
+    if (additionalRecipients.length > 0) {
+      const recipients = [
+        { address: recipient, amountSats: amountSats ?? '' },
+        ...additionalRecipients.map((entry) => ({
+          address: entry.address,
+          amountSats: amountAsSats(entry.amount, sendUnit) ?? '',
+        })),
+      ];
+      if (recipients.some((entry) => entry.address === '' || entry.amountSats === '')) return;
+      void planIntent({
+        kind: 'native_batch_send',
+        account: Number(account),
+        recipients,
+        ...(selectedOutpoints.length > 0 ? { selectedOutpoints } : {}),
+      });
+      return;
+    }
     void planIntent({
       kind: 'native_send',
       account: Number(account),
@@ -559,7 +649,7 @@ export function Transactions(props: {
       sendMax,
       ...(selectedOutpoints.length > 0 ? { selectedOutpoints } : {}),
     });
-  }, [account, amount, planIntent, recipient, selected, sendMax, sendUnit]);
+  }, [account, additionalRecipients, amount, planIntent, recipient, selected, sendMax, sendUnit]);
 
   const submitOrdinal = useCallback((event: FormEvent): void => {
     event.preventDefault();
@@ -575,11 +665,43 @@ export function Transactions(props: {
       });
       return;
     }
+    if (ordinalDraft.kind === 'ordinal_batch_transfer') {
+      if (recipient === '') return;
+      void planIntent({
+        kind: ordinalDraft.kind,
+        account: ordinalDraft.account,
+        recipient,
+        selections: ordinalDraft.selections.map((selection) => ({
+          inscriptionId: selection.inscriptionId,
+          outpoint: { ...selection.outpoint },
+          satpoint: selection.satpoint,
+          classificationRevision: selection.classificationRevision,
+        })),
+      });
+      return;
+    }
+    if (ordinalDraft.kind === 'ordinal_postage_manage') {
+      if (postageTarget === 'custom' && customPostageSats === '') return;
+      void planIntent({
+        kind: ordinalDraft.kind,
+        account: ordinalDraft.account,
+        selections: [{
+          inscriptionId: ordinalDraft.selection.inscriptionId,
+          outpoint: { ...ordinalDraft.selection.outpoint },
+          satpoint: ordinalDraft.selection.satpoint,
+          classificationRevision: ordinalDraft.selection.classificationRevision,
+        }],
+        target: postageTarget === 'custom'
+          ? { type: postageTarget, customSats: customPostageSats }
+          : { type: postageTarget },
+      });
+      return;
+    }
     void planIntent({
       kind: ordinalDraft.kind,
       outpoint: { ...ordinalDraft.outpoint },
     });
-  }, [ordinalDraft, planIntent, recipient]);
+  }, [customPostageSats, ordinalDraft, planIntent, postageTarget, recipient]);
 
   const changeSendUnit = useCallback((nextUnit: SendUnit): void => {
     if (nextUnit === sendUnit) return;
@@ -591,6 +713,17 @@ export function Transactions(props: {
           ? satsToBtcDecimal(BigInt(sats))
           : sats,
     );
+    setAdditionalRecipients((current) => current.map((entry) => {
+      const entrySats = amountAsSats(entry.amount, sendUnit);
+      return {
+        ...entry,
+        amount: entrySats === null
+          ? ''
+          : nextUnit === 'btc'
+            ? satsToBtcDecimal(BigInt(entrySats))
+            : entrySats,
+      };
+    }));
     setSendUnit(nextUnit);
   }, [amount, sendUnit]);
 
@@ -641,10 +774,21 @@ export function Transactions(props: {
       ...response.result,
       network: plan.review.network,
       kind: plan.review.kind,
+      inscriptionCount: plan.review.ordinalAction?.action === 'batch_transfer'
+        ? plan.review.ordinalAction.inscriptionCount
+        : plan.review.ordinalAction?.action === 'manage_postage'
+          ? plan.review.ordinalAction.items.length
+          : plan.review.ordinalAction?.inscriptionId === null ? null : 1,
       receipt: {
         amountSats: plan.review.amountSats,
         feeSats: plan.review.feeSats,
-        recipients: plan.review.recipients.map((recipient) => ({ ...recipient })),
+        recipients: plan.review.ordinalAction?.action === 'batch_transfer'
+          ? [{
+              address: plan.review.ordinalAction.destination.address,
+              valueSats: plan.review.ordinalAction.aggregatePostageSats,
+              role: 'postage',
+            }]
+          : plan.review.recipients.map((recipient) => ({ ...recipient })),
       },
     });
     setPlan(null);
@@ -687,10 +831,12 @@ export function Transactions(props: {
     void planIntent({ kind: 'consolidation', account: Number(account), selectedOutpoints });
   }, [account, planIntent, selected]);
 
-  const sendKind = ordinalDraft?.kind === 'ordinal_transfer' ? 'ordinal' : 'bitcoin';
-  const openRecipientPicker = useCallback(async (): Promise<void> => {
+  const sendKind = ordinalDraft?.kind === 'ordinal_transfer' ||
+    ordinalDraft?.kind === 'ordinal_batch_transfer' ? 'ordinal' : 'bitcoin';
+  const openRecipientPicker = useCallback(async (target = 0): Promise<void> => {
     const generation = ++recipientRequestGeneration.current;
     setRecipientPickerOpen(true);
+    setRecipientPickerTarget(target);
     setRecipientSearch('');
     setMyRecipientsLoading(true);
     const kind = sendKind === 'ordinal' ? 'ordinals' as const : 'payment' as const;
@@ -711,8 +857,12 @@ export function Transactions(props: {
     }
   }, [expectedSessionId, expectedVaultId, props.accountSummaries, rpc, sendKind]);
   const chooseRecipient = (address: string, owned = false): void => {
-    changeRecipientManually(address);
-    setSelfTransfer(owned);
+    if (recipientPickerTarget === 0) {
+      changeRecipientManually(address);
+      setSelfTransfer(owned);
+    } else {
+      changeAdditionalRecipient(recipientPickerTarget, 'address', address);
+    }
     closeRecipientPicker(true);
   };
   const normalizedRecipientSearch = recipientSearch.trim().toLowerCase();
@@ -753,13 +903,21 @@ export function Transactions(props: {
     })) },
   ];
 
-  const recipientPicker = (
+  const recipientPicker = (target = 0) => (
     <>
-      <Button ref={recipientPickerTrigger} variant="secondary" onClick={() => void openRecipientPicker()}>
+      <Button
+        ref={target === 0 ? recipientPickerTrigger : undefined}
+        type="button"
+        variant="secondary"
+        onClick={(event) => {
+          recipientPickerTrigger.current = event.currentTarget;
+          void openRecipientPicker(target);
+        }}
+      >
         {t('contacts.addressBook')}
       </Button>
-      {selfTransfer ? <p className={styles['advisory']} role="note">{t('contacts.selfTransfer')}</p> : null}
-      {recipientPickerOpen ? (
+      {target === 0 && selfTransfer ? <p className={styles['advisory']} role="note">{t('contacts.selfTransfer')}</p> : null}
+      {recipientPickerOpen && recipientPickerTarget === target ? (
         <div className={`${styles['dialogBackdrop']} ${props.compact ? styles['dialogBackdropCompact'] : ''}`} role="presentation">
           <section ref={recipientDialog}
             className={`${styles['dialog']} ${props.compact ? styles['dialogCompact'] : ''}`}
@@ -896,6 +1054,9 @@ export function Transactions(props: {
   const requiresPreviewAcknowledgement = reviewRecord?.['requiresPreviewAcknowledgement'] === true ||
     inscriptionReview.items.some((item) => item.preview.kind === 'placeholder');
   const validAmountSats = amountAsSats(amount, sendUnit);
+  const batchRecipientsReady = additionalRecipients.length === 0 || additionalRecipients.every(
+    (entry) => entry.address !== '' && amountAsSats(entry.amount, sendUnit) !== null,
+  );
   return (
     <div className={props.compact ? styles['compactTransactions'] : undefined}>
       {!props.compact ? (
@@ -925,7 +1086,9 @@ export function Transactions(props: {
               <div>
                 <h1 className={styles['title']}>{resultTitle(result, t)}</h1>
                 <p className={styles['resultMessage']}>
-                  {result.kind === 'ordinal_transfer' || result.kind === 'rescue' ||
+                  {result.kind === 'ordinal_transfer' || result.kind === 'ordinal_batch_transfer' ||
+                    result.kind === 'ordinal_postage_manage' ||
+                    result.kind === 'rescue' ||
                     result.kind === 'ordinal_sweep'
                     ? t(`ordinal.result.${result.status}`)
                     : t(`send.result.${result.status}`)}
@@ -987,7 +1150,9 @@ export function Transactions(props: {
                 setOrdinalDraft(null);
               }}
             >
-              {result.kind === 'ordinal_transfer' || result.kind === 'rescue' ||
+              {result.kind === 'ordinal_transfer' || result.kind === 'ordinal_batch_transfer' ||
+                result.kind === 'ordinal_postage_manage' ||
+                result.kind === 'rescue' ||
                 result.kind === 'ordinal_sweep' ? t('ordinal.done') : t('send.new')}
             </Button>
           </section>
@@ -995,6 +1160,14 @@ export function Transactions(props: {
           <section className={styles['section']}>
             <h1 className={styles['title']}>{review.kind === 'ordinal_transfer'
               ? t('ordinal.review.transfer.title')
+              : review.kind === 'ordinal_batch_transfer'
+                ? t('ordinal.review.batch.title', {
+                    count: review.ordinalAction?.action === 'batch_transfer'
+                      ? review.ordinalAction.inscriptionCount
+                      : 0,
+                  })
+              : review.kind === 'ordinal_postage_manage'
+                ? t('ordinal.postage.reviewTitle')
               : review.kind === 'rescue'
                 ? t('ordinal.review.rescue.title')
                 : review.kind === 'ordinal_sweep'
@@ -1010,13 +1183,126 @@ export function Transactions(props: {
             ) : (
               <InscriptionReview
                 items={inscriptionReview.items}
-                primaryInscriptionId={review.ordinalAction?.inscriptionId ?? undefined}
+                primaryInscriptionId={review.ordinalAction !== null &&
+                  'inscriptionId' in review.ordinalAction
+                  ? review.ordinalAction.inscriptionId ?? undefined
+                  : undefined}
                 acknowledgementChecked={previewUnavailableAcknowledged}
                 onAcknowledgementChange={setPreviewUnavailableAcknowledged}
                 compact={review.ordinalAction !== null}
               />
             )}
-            {review.ordinalAction ? (
+            {review.ordinalAction?.action === 'manage_postage' ? (
+              <>
+                <dl className={`${styles['details']} ${styles['ordinalReviewSummary']}`}>
+                  <div>
+                    <dt>{t('ordinal.postage.recovered')}</dt>
+                    <dd>{BigInt(review.ordinalAction.returnedBtcSats).toLocaleString(lang)} sats</dd>
+                  </div>
+                  <div>
+                    <dt>{t('send.review.fee')}</dt>
+                    <dd>{BigInt(review.ordinalAction.feeSats).toLocaleString(lang)} sats</dd>
+                  </div>
+                  <div>
+                    <dt>{t('ordinal.postage.netReturned')}</dt>
+                    <dd>{BigInt(review.ordinalAction.netReturnedBtcSats).toLocaleString(lang)} sats</dd>
+                  </div>
+                </dl>
+                {review.ordinalAction.items.map((item) => (
+                  <section className={styles['ordinalBatchGroup']} key={item.inscriptionId}>
+                    <code className={styles['code']}>{item.inscriptionId}</code>
+                    <dl className={styles['details']}>
+                      <div>
+                        <dt>{t('ordinal.postage.current')}</dt>
+                        <dd>{BigInt(item.currentPostageSats).toLocaleString(lang)} sats</dd>
+                      </div>
+                      <div>
+                        <dt>{t('ordinal.postage.remaining')}</dt>
+                        <dd>{BigInt(item.retainedPostageSats).toLocaleString(lang)} sats</dd>
+                      </div>
+                      {BigInt(item.addedSats) > 0n ? (
+                        <div>
+                          <dt>{t('ordinal.postage.added')}</dt>
+                          <dd>{BigInt(item.addedSats).toLocaleString(lang)} sats</dd>
+                        </div>
+                      ) : null}
+                    </dl>
+                  </section>
+                ))}
+                <details className={styles['ordinalTechnicalDetails']}>
+                  <summary>{t('send.review.details')}</summary>
+                  <p>{t('send.review.psbt')}</p>
+                  <code className={styles['code']}>{review.psbtHash}</code>
+                </details>
+              </>
+            ) : review.ordinalAction?.action === 'batch_transfer' ? (
+              <>
+                <dl className={`${styles['details']} ${styles['ordinalReviewSummary']}`}>
+                  <div className={styles['ordinalDestination']}>
+                    <dt>{t('ordinal.review.destination')}</dt>
+                    <dd>{review.ordinalAction.destination.address}</dd>
+                    <span className={styles['ordinalOwnership']}>
+                      {review.ordinalAction.destination.ownership === 'wallet'
+                        ? t('ordinal.review.owned')
+                        : t('ordinal.review.external')}
+                    </span>
+                  </div>
+                  <div>
+                    <dt>{t('ordinal.review.postage')}</dt>
+                    <dd>{BigInt(review.ordinalAction.aggregatePostageSats).toLocaleString(lang)} sats</dd>
+                  </div>
+                  <div>
+                    <dt>{t('send.review.fee')}</dt>
+                    <dd>{BigInt(review.ordinalAction.feeSats).toLocaleString(lang)} sats</dd>
+                  </div>
+                  <div>
+                    <dt>{t('send.review.rate')}</dt>
+                    <dd>{displaySatPerVb(review.feeRateSatPerKvB)} sat/vB</dd>
+                  </div>
+                  <div>
+                    <dt>{t('ordinal.review.returned')}</dt>
+                    <dd>{BigInt(review.ordinalAction.returnedBtcSats).toLocaleString(lang)} sats</dd>
+                  </div>
+                </dl>
+                <details className={styles['ordinalTechnicalDetails']}>
+                  <summary>{t('ordinal.review.batch.groups')}</summary>
+                  {review.ordinalAction.groups.map((group) => (
+                    <section className={styles['ordinalBatchGroup']} key={`${group.satpoint}:${group.destinationOutputIndex}`}>
+                      <strong>{t('ordinal.review.batch.group', {
+                        output: group.destinationOutputIndex,
+                      })}</strong>
+                      <code className={styles['code']}>{group.satpoint}</code>
+                      <code className={styles['code']}>{group.source.txid}:{group.source.vout}</code>
+                      <span>{BigInt(group.postageSats).toLocaleString(lang)} sats</span>
+                      {group.travelsTogether ? (
+                        <span>{t('ordinal.review.batch.travelsTogether', {
+                          count: group.inscriptionIds.length,
+                        })}</span>
+                      ) : null}
+                      <details>
+                        <summary>{t('ordinal.review.batch.identifiers')}</summary>
+                        {group.inscriptionIds.map((inscriptionId) => (
+                          <code className={styles['code']} key={inscriptionId}>{inscriptionId}</code>
+                        ))}
+                      </details>
+                    </section>
+                  ))}
+                  <dl className={styles['details']}>
+                    <div>
+                      <dt>{t('ordinal.review.funding')}</dt>
+                      <dd>{review.ordinalAction.fundingInputs.length === 0
+                        ? t('ordinal.review.none')
+                        : review.ordinalAction.fundingInputs.map((input) =>
+                            `${input.txid}:${input.vout} (${BigInt(input.valueSats).toLocaleString(lang)} sats)`,
+                          ).join(', ')}</dd>
+                    </div>
+                    <div><dt>{t('send.review.inputs')}</dt><dd>{review.inputs.length}</dd></div>
+                  </dl>
+                  <p>{t('send.review.psbt')}</p>
+                  <code className={styles['code']}>{review.psbtHash}</code>
+                </details>
+              </>
+            ) : review.ordinalAction ? (
               <>
                 <dl className={`${styles['details']} ${styles['ordinalReviewSummary']}`}>
                   <div className={styles['ordinalDestination']}>
@@ -1157,7 +1443,9 @@ export function Transactions(props: {
                 <Field label={t('send.password')} type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} />
               </div>
             ) : null}
-            {review.ordinalAction?.requiresNonTaprootAcknowledgement ? (
+            {review.ordinalAction !== null &&
+            review.ordinalAction.action !== 'manage_postage' &&
+            review.ordinalAction.requiresNonTaprootAcknowledgement ? (
               <label className={styles['warning']}>
                 <input
                   type="checkbox"
@@ -1176,10 +1464,20 @@ export function Transactions(props: {
               {props.capabilities.canSignTransactions ? (
               <Button onClick={() => void approve()} disabled={!props.capabilities.canSignPsbt || busy ||
                 !inscriptionReviewValid || (requiresPreviewAcknowledgement && !previewUnavailableAcknowledged) ||
-                (review.ordinalAction?.requiresNonTaprootAcknowledgement &&
+                (review.ordinalAction !== null &&
+                  review.ordinalAction.action !== 'manage_postage' &&
+                  review.ordinalAction.requiresNonTaprootAcknowledgement &&
                   !nonTaprootDestinationAcknowledged) ||
                 (review.requiresReauth && password === '')}>{review.kind === 'ordinal_transfer'
                   ? t('ordinal.approve.transfer')
+                  : review.kind === 'ordinal_batch_transfer'
+                    ? t('ordinal.approve.batch', {
+                        count: review.ordinalAction?.action === 'batch_transfer'
+                          ? review.ordinalAction.inscriptionCount
+                          : 0,
+                      })
+                  : review.kind === 'ordinal_postage_manage'
+                    ? t('ordinal.postage.approve')
                   : review.kind === 'rescue'
                     ? t('ordinal.approve.rescue')
                     : review.kind === 'ordinal_sweep'
@@ -1192,10 +1490,16 @@ export function Transactions(props: {
           <form className={styles['section']} onSubmit={submitOrdinal}>
             <h1 className={styles['title']}>{ordinalDraft.kind === 'ordinal_transfer'
               ? t('ordinal.composer.transfer.title')
+              : ordinalDraft.kind === 'ordinal_batch_transfer'
+                ? t('ordinal.composer.batch.title', { count: ordinalDraft.selections.length })
+              : ordinalDraft.kind === 'ordinal_postage_manage'
+                ? t('ordinal.postage.title')
               : ordinalDraft.kind === 'rescue'
                 ? t('ordinal.composer.rescue.title')
                 : t('ordinal.composer.sweep.title')}</h1>
-            {ordinalDraft.kind === 'ordinal_transfer' ? null : (
+            {ordinalDraft.kind === 'ordinal_transfer' ||
+            ordinalDraft.kind === 'ordinal_batch_transfer' ||
+            ordinalDraft.kind === 'ordinal_postage_manage' ? null : (
               <p>{ordinalDraft.kind === 'rescue'
                 ? t('ordinal.composer.rescue.body')
                 : t('ordinal.composer.sweep.body')}</p>
@@ -1214,25 +1518,69 @@ export function Transactions(props: {
                     : `#${ordinalDraft.presentation.number}`}</strong>
                 </div>
               </div>
+            ) : ordinalDraft.kind === 'ordinal_batch_transfer' ? (
+              <div className={styles['ordinalBatchDraftSummary']}>
+                <div className={styles['ordinalBatchDraftPreviews']}>
+                  {ordinalDraft.selections.slice(0, 4).map((selection) => (
+                    <OrdinalDraftPreview
+                      inscriptionId={selection.inscriptionId}
+                      key={selection.inscriptionId}
+                      presentation={selection.presentation}
+                    />
+                  ))}
+                </div>
+                <strong>{t('ordinal.composer.batch.sending', {
+                  count: ordinalDraft.selections.length,
+                })}</strong>
+              </div>
+            ) : ordinalDraft.kind === 'ordinal_postage_manage' ? (
+              <div className={`${styles['advisory']} ${styles['postageAdvisory']}`} role="note">
+                <p>{t('ordinal.postage.body')}</p>
+                <strong>{utxos === null
+                  ? t('ordinal.postage.currentLoading')
+                  : currentPostageSats === null
+                    ? t('ordinal.postage.currentUnavailable')
+                    : t('ordinal.postage.currentValue', {
+                        amount: BigInt(currentPostageSats).toLocaleString(lang),
+                      })}</strong>
+              </div>
             ) : null}
             <details className={styles['ordinalTechnicalDetails']}>
               <summary>{t('ordinal.composer.technical')}</summary>
-              {'inscriptionId' in ordinalDraft ? (
+              {ordinalDraft.kind === 'ordinal_batch_transfer' ? ordinalDraft.selections.map(
+                (selection) => (
+                  <div className={styles['ordinalBatchDraftItem']} key={selection.inscriptionId}>
+                    <code className={styles['code']}>{selection.inscriptionId}</code>
+                    <code className={styles['code']}>{selection.satpoint}</code>
+                    <code className={styles['code']}>
+                      {selection.outpoint.txid}:{selection.outpoint.vout}
+                    </code>
+                  </div>
+                ),
+              ) : ordinalDraft.kind === 'ordinal_postage_manage' ? (
+                <div>
+                  <strong>{t('ordinal.composer.inscriptionId')}</strong>
+                  <code className={styles['code']}>{ordinalDraft.selection.inscriptionId}</code>
+                </div>
+              ) : 'inscriptionId' in ordinalDraft ? (
                 <div>
                   <strong>{t('ordinal.composer.inscriptionId')}</strong>
                   <p>{t('ordinal.composer.inscriptionId.help')}</p>
                   <code className={styles['code']}>{ordinalDraft.inscriptionId}</code>
                 </div>
               ) : null}
-              <div>
+              {ordinalDraft.kind === 'ordinal_batch_transfer' ? null : <div>
                 <strong>{t('ordinal.composer.currentOutput')}</strong>
                 <p>{t('ordinal.composer.currentOutput.help')}</p>
                 <code className={styles['code']}>
-                  {ordinalDraft.outpoint.txid}:{ordinalDraft.outpoint.vout}
+                  {ordinalDraft.kind === 'ordinal_postage_manage'
+                    ? `${ordinalDraft.selection.outpoint.txid}:${ordinalDraft.selection.outpoint.vout}`
+                    : `${ordinalDraft.outpoint.txid}:${ordinalDraft.outpoint.vout}`}
                 </code>
-              </div>
+              </div>}
             </details>
-            {ordinalDraft.kind === 'ordinal_transfer' ? (
+            {ordinalDraft.kind === 'ordinal_transfer' ||
+            ordinalDraft.kind === 'ordinal_batch_transfer' ? (
               <>
                 <Field
                   label={t('send.recipient')}
@@ -1240,14 +1588,48 @@ export function Transactions(props: {
                   onChange={(event) => setRecipient(event.target.value.trim())}
                   autoComplete="off"
                 />
-                {recipientPicker}
+                {recipientPicker()}
               </>
+            ) : null}
+            {ordinalDraft.kind === 'ordinal_postage_manage' ? (
+              <fieldset className={styles['fieldset']}>
+                <legend>{t('ordinal.postage.amount')}</legend>
+                {([
+                  ['common_546', 'ordinal.postage.common546'],
+                  ['compatible_10000', 'ordinal.postage.compatible10000'],
+                  ['minimum_standard', 'ordinal.postage.minimum'],
+                  ['custom', 'ordinal.postage.custom'],
+                ] as const).map(([value, key]) => (
+                  <label className={styles['feeOption']} key={value}>
+                    <input
+                      type="radio"
+                      checked={postageTarget === value}
+                      onChange={() => setPostageTarget(value)}
+                    />
+                    <span className={styles['feeOptionCopy']}><strong>{t(key)}</strong></span>
+                  </label>
+                ))}
+                {postageTarget === 'custom' ? (
+                  <Field
+                    label={t('ordinal.postage.customAmount')}
+                    inputMode="numeric"
+                    value={customPostageSats}
+                    onChange={(event) => {
+                      const next = event.target.value.trim();
+                      if (/^\d*$/u.test(next)) setCustomPostageSats(next);
+                    }}
+                  />
+                ) : null}
+              </fieldset>
             ) : null}
             {feeChooser}
             <Button
               type="submit"
               disabled={!props.capabilities.canBuildUnsignedPsbt || busy || !feeSelectionReady ||
-                (ordinalDraft.kind === 'ordinal_transfer' && recipient === '') ||
+                ((ordinalDraft.kind === 'ordinal_transfer' ||
+                  ordinalDraft.kind === 'ordinal_batch_transfer') && recipient === '') ||
+                (ordinalDraft.kind === 'ordinal_postage_manage' &&
+                  postageTarget === 'custom' && customPostageSats === '') ||
                 (feeTier === 'custom' && !customFeeValid)}
             >{t('send.review')}</Button>
           </form>
@@ -1271,7 +1653,7 @@ export function Transactions(props: {
                 {t('send.paymentInstruction.resolving')}
               </p>
             ) : null}
-            {recipientPicker}
+            {recipientPicker()}
             {paymentRequestLabel !== '' || paymentRequestMessage !== '' ? (
               <div className={styles['advisory']} role="note">
                 <strong>{t('send.paymentInstruction.reviewMetadata')}</strong>
@@ -1357,10 +1739,71 @@ export function Transactions(props: {
                 </Button>
               </div>
             ) : null}
-            <label><input type="checkbox" checked={sendMax} onChange={(event) => setSendMax(event.target.checked)} /> {t('send.max')}</label>
+            {additionalRecipients.length > 0 ? (
+              <div className={styles['batchRecipients']}>
+                <p className={styles['advisory']} role="note">
+                  {t('send.batch.privacy')}
+                </p>
+                {additionalRecipients.map((entry, index) => (
+                  <fieldset className={styles['batchRecipient']} key={entry.id}>
+                    <legend>{t('send.batch.recipient', { number: index + 2 })}</legend>
+                    <Field
+                      ref={(element) => {
+                        if (element === null) batchAddressInputs.current.delete(entry.id);
+                        else batchAddressInputs.current.set(entry.id, element);
+                      }}
+                      label={t('send.recipient')}
+                      value={entry.address}
+                      onChange={(event) => changeAdditionalRecipient(
+                        entry.id, 'address', event.target.value.trim(),
+                      )}
+                      autoComplete="off"
+                    />
+                    {recipientPicker(entry.id)}
+                    <Field
+                      label={t('send.amount', { unit: sendUnit === 'btc' ? 'BTC' : 'sats' })}
+                      inputMode="decimal"
+                      value={entry.amount}
+                      onChange={(event) => {
+                        const next = event.target.value.trim();
+                        if (sendUnit === 'sats'
+                          ? /^\d*$/u.test(next)
+                          : /^\d*(?:\.\d{0,8})?$/u.test(next)) {
+                          changeAdditionalRecipient(entry.id, 'amount', next);
+                        }
+                      }}
+                    />
+                    <Button type="button" variant="ghost" onClick={() => removeRecipient(entry.id)}>
+                      {t('send.batch.remove')}
+                    </Button>
+                  </fieldset>
+                ))}
+              </div>
+            ) : null}
+            <div className={styles['row']}>
+              <Button
+                ref={addRecipientButton}
+                type="button"
+                variant="secondary"
+                disabled={additionalRecipients.length + 1 >= MAX_NATIVE_BATCH_RECIPIENTS}
+                onClick={addRecipient}
+              >
+                {t('send.batch.add')}
+              </Button>
+              {additionalRecipients.length === 0 ? (
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={sendMax}
+                    onChange={(event) => setSendMax(event.target.checked)}
+                  />{' '}
+                  {t('send.max')}
+                </label>
+              ) : null}
+            </div>
             {selected.size > 0 ? <p className={styles['success']}>{t('send.manualInputs', { count: selected.size })}</p> : null}
             {feeChooser}
-            <Button type="submit" disabled={!props.capabilities.canBuildUnsignedPsbt || busy || !feeSelectionReady || recipient === '' || (!sendMax && validAmountSats === null) || (feeTier === 'custom' && !customFeeValid)}>{t('send.review')}</Button>
+            <Button type="submit" disabled={!props.capabilities.canBuildUnsignedPsbt || busy || !feeSelectionReady || recipient === '' || (!sendMax && validAmountSats === null) || !batchRecipientsReady || (feeTier === 'custom' && !customFeeValid)}>{t('send.review')}</Button>
           </form>
         )
       ) : null}
@@ -1374,9 +1817,24 @@ export function Transactions(props: {
           onSelectedChange={setSelected}
           lang={lang}
           busy={busy}
+          expectation={{ expectedVaultId, expectedSessionId }}
+          accountId={props.accountId}
           feeChooser={feeChooser}
-          onRefresh={() => void loadUtxos()}
+          consolidationSuggestionEnabled={feeTier === 'economy' && quote !== null}
+          onRefresh={() => {
+            retryFailedInscriptionThumbnails(inscriptionPreviewScope);
+            void loadUtxos();
+          }}
           onConsolidate={consolidate}
+          onConsolidateSuggested={(coins) => {
+            const next = new Set(coins.map((coin) => `${coin.txid}:${coin.vout}`));
+            setSelected(next);
+            void planIntent({
+              kind: 'consolidation',
+              account: Number(account),
+              selectedOutpoints: coins.map((coin) => ({ txid: coin.txid, vout: coin.vout })),
+            });
+          }}
           onFreeze={(utxo) => void freeze(utxo)}
           onSetLabel={setLabel}
           onRescue={(utxo) => void planIntent({
@@ -1400,6 +1858,7 @@ export function Transactions(props: {
           loadingOlder={accountActivity.loadingOlder}
           pageError={accountActivity.pageError}
           updated={accountActivity.updated}
+          historyComplete={accountActivity.historyComplete}
           onLoadOlder={accountActivity.loadOlder}
           onRefresh={() => {
             accountActivity.refresh();

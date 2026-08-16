@@ -19,6 +19,14 @@
  *   the commit revalidates the exact authority snapshot before writing.
  */
 import { entropyToMnemonic, restoreMnemonic, generateMnemonic, mnemonicToSeed } from '@drey/core/domain/keys/mnemonic';
+import {
+  createBackupMetadata,
+  recordBackupSpotCheck,
+  recordFullRecoveryCheck,
+  verifyFullRecoveryRehearsal,
+  type BackupMetadataV1,
+  type RecoveryWordCount,
+} from '@drey/core/domain/vault/backup-metadata';
 import { z } from 'zod';
 import { deriveAccountNode, deriveAddress, type Network } from '@drey/core/domain/keys/derivation';
 import {
@@ -268,7 +276,7 @@ import {
   UTXO_LABEL_MAX_ENTRIES,
   type LabelsRecord,
   scanCheckpointSchema,
-  storedHistorySchema,
+  storedHistoryReadSchema,
   storedUtxosSchema,
   type AccountsMeta,
   type RegisteredPublicAccount,
@@ -277,6 +285,7 @@ import {
   type ActivityEvidenceRecord,
   type GalleryRecord,
   type ScanCheckpoint,
+  type StoredHistoryRecord,
 } from '@drey/core/scan/cache-schemas';
 import {
   buildRefreshUnits,
@@ -419,8 +428,10 @@ import {
 } from '@drey/core/domain/transactions/fees';
 import { selectCoins } from '@drey/core/domain/transactions/selection';
 import {
+  buildNativeBatchSendCandidate,
   buildNativeSendCandidate,
   resolvePayableAddress,
+  type NativeBatchSendCandidateFailure,
   type NativeSendCandidateFailure,
   type ResolvedPayableAddress,
 } from '@drey/core/domain/transactions/native-send';
@@ -475,9 +486,16 @@ import {
 } from '@drey/core/domain/transactions/provider-psbt';
 import {
   automaticOrdinalPostage,
+  canonicalOrdinalBatchSelections,
   groupOrdinalInscriptions,
+  planOrdinalBatchSatFlow,
+  OrdinalBatchPlanError,
   OrdinalInscriptionGroupError,
 } from '@drey/core/domain/transactions/ordinal-transfer';
+import {
+  OrdinalPostagePlanError,
+  planOrdinalPostageManage,
+} from '@drey/core/domain/transactions/postage-manage';
 import {
   appendPermissionEvent,
   createPermissionOpaqueId,
@@ -888,7 +906,9 @@ function resolvePaymentInstructionInput(
   };
 }
 
-function mapNativeSendFailure(reason: NativeSendCandidateFailure): never {
+function mapNativeSendFailure(
+  reason: NativeSendCandidateFailure | NativeBatchSendCandidateFailure,
+): never {
   switch (reason) {
     case 'dust':
       throw new RpcError('ERR_OUTPUT_DUST', 'recipient output is dust');
@@ -896,6 +916,10 @@ function mapNativeSendFailure(reason: NativeSendCandidateFailure): never {
       throw new RpcError('ERR_INSUFFICIENT_FUNDS', 'manual selection contains an ineligible input');
     case 'insufficient_eligible_funds':
       throw new RpcError('ERR_INSUFFICIENT_FUNDS', 'insufficient funds');
+    case 'duplicate_recipient':
+      throw new RpcError('ERR_INVALID_PAYLOAD', 'combine duplicate recipient amounts');
+    case 'invalid_recipient_count':
+      throw new RpcError('ERR_INVALID_PAYLOAD', 'batch send requires 2 to 20 recipients');
   }
 }
 
@@ -971,6 +995,7 @@ export class WalletService {
   private scanPhase: ScanPhase = { kind: 'idle' };
   private scanUnitsTotal = 0;
   private scanCancel = false;
+  private scanHistoryPartial = false;
   private scanRun: Promise<void> | null = null;
   private currentScanId: string | null = null;
   /**
@@ -1038,6 +1063,7 @@ export class WalletService {
     this.currentScanId = null;
     this.scanPhase = { kind: 'idle' };
     this.scanUnitsTotal = 0;
+    this.scanHistoryPartial = false;
   }
 
   /** Every path that ends the current session must also drop its scan state. */
@@ -1102,7 +1128,14 @@ export class WalletService {
           entropyHex: bytesToHex(entropy),
           seedHex: bytesToHex(seed),
         };
-        return await this.persistNewVault(input.name, input.password, payload, input.operationId, 'create');
+        const result = await this.persistNewVault(input.name, input.password, payload, input.operationId, 'create');
+        const meta = await loadVaultMeta(this.deps.local);
+        const metadata = createBackupMetadata({
+          origin: 'generated', wordCount: 12, usesPassphrase: false,
+        });
+        meta[result.vaultId] = { backupVerified: false, metadata };
+        await saveVaultMeta(this.deps.local, meta);
+        return result;
       } finally {
         zeroize(entropy);
         zeroize(seed);
@@ -1124,7 +1157,14 @@ export class WalletService {
         // A restored user necessarily holds the seed already — the §7.1
         // forced-verification gate applies only to newly generated vaults.
         const meta = await loadVaultMeta(this.deps.local);
-        meta[result.vaultId] = { backupVerified: true };
+        const wordCount = input.mnemonic.trim().split(/\s+/u).length as RecoveryWordCount;
+        const metadata = createBackupMetadata({
+          origin: 'imported',
+          usageGatePassed: true,
+          wordCount,
+          usesPassphrase: Boolean(input.passphrase),
+        });
+        meta[result.vaultId] = { backupVerified: true, metadata };
         await saveVaultMeta(this.deps.local, meta);
         return result;
       } finally {
@@ -1514,7 +1554,18 @@ export class WalletService {
       });
       if (verified) {
         const meta = await loadVaultMeta(this.deps.local);
-        meta[vaultId] = { backupVerified: true };
+        const existing = meta[vaultId];
+        const observed = existing?.metadata.wordCount === null
+          ? {
+              ...existing.metadata,
+              wordCount: words.length as RecoveryWordCount,
+              usesPassphrase: payload.passphrase !== undefined,
+            } as BackupMetadataV1
+          : existing?.metadata ?? createBackupMetadata({
+              origin: 'generated', wordCount: words.length as RecoveryWordCount, usesPassphrase: false,
+            });
+        const metadata = recordBackupSpotCheck(observed, this.deps.vaultDeps.now());
+        meta[vaultId] = { backupVerified: true, metadata };
         await saveVaultMeta(this.deps.local, meta);
       }
       await this.touchSessionLocked(session);
@@ -1522,13 +1573,91 @@ export class WalletService {
     }));
   }
 
-  async backupStatus(input: ActiveSessionRequest): Promise<{ backupVerified: boolean }> {
-    return this.runExclusive(async () => {
-      const session = await this.requireSession(input);
+  async verifyFullRecovery(input: {
+    mnemonic: string;
+    passphrase?: string | undefined;
+    expectedVaultId: string;
+    expectedSessionId: string;
+  }): Promise<{ verified: boolean }> {
+    return this.runExclusive(() => this.withSessionDek(input, async (dek, session) => {
+      const { capabilities } = await this.activePublicAccountContextLocked(
+        dek, session.vaultId,
+      );
+      if (!capabilities.canRevealSeed) {
+        throw new RpcError('ERR_UNSAFE_TRANSACTION', 'active account cannot verify a seed backup');
+      }
+      const vaults = await loadVaults(this.deps.local);
+      const record = vaults[session.vaultId];
+      if (!record) throw new RpcError('ERR_VAULT_NOT_FOUND', 'active vault record missing');
+      const payload = openVaultPayload(record, dek);
+      const verified = verifyFullRecoveryRehearsal({
+        mnemonic: input.mnemonic,
+        ...(input.passphrase !== undefined && input.passphrase !== ''
+          ? { passphrase: input.passphrase }
+          : {}),
+        expectedSeedHex: payload.seedHex,
+      });
+      if (verified) {
+        const meta = await loadVaultMeta(this.deps.local);
+        const existing = meta[session.vaultId];
+        const wordCount = input.mnemonic.trim().split(/\s+/u).length as RecoveryWordCount;
+        const observed = existing?.metadata.wordCount === null
+          ? {
+              ...existing.metadata,
+              wordCount,
+              usesPassphrase: payload.passphrase !== undefined,
+            } as BackupMetadataV1
+          : existing?.metadata ?? createBackupMetadata({
+              origin: 'imported', usageGatePassed: true, wordCount,
+              usesPassphrase: payload.passphrase !== undefined,
+            });
+        const metadata = recordFullRecoveryCheck(observed, this.deps.vaultDeps.now());
+        meta[session.vaultId] = {
+          backupVerified: metadata.usageGatePassed,
+          metadata,
+        };
+        await saveVaultMeta(this.deps.local, meta);
+      }
+      await this.touchSessionLocked(session);
+      return { verified };
+    }));
+  }
+
+  async backupStatus(input: ActiveSessionRequest): Promise<{
+    backupVerified: boolean;
+    metadata?: BackupMetadataV1;
+  }> {
+    return this.runExclusive(() => this.withSessionDek(input, async (dek, session) => {
       const meta = await loadVaultMeta(this.deps.local);
-      const result = { backupVerified: meta[session.vaultId]?.backupVerified === true };
+      let entry = meta[session.vaultId];
+      if (entry?.metadata.origin === 'legacy_unknown' &&
+          (entry.metadata.wordCount === null || entry.metadata.usesPassphrase === null)) {
+        const vaults = await loadVaults(this.deps.local);
+        const record = vaults[session.vaultId];
+        if (!record) throw new RpcError('ERR_VAULT_NOT_FOUND', 'active vault record missing');
+        const payload = openVaultPayload(record, dek);
+        const entropy = hexToBytes(payload.entropyHex);
+        let observedWordCount: RecoveryWordCount;
+        try {
+          observedWordCount = entropyToMnemonic(entropy).split(' ').length as RecoveryWordCount;
+        } finally {
+          zeroize(entropy);
+        }
+        const metadata: BackupMetadataV1 = {
+          ...entry.metadata,
+          wordCount: observedWordCount,
+          usesPassphrase: payload.passphrase !== undefined,
+        };
+        entry = { ...entry, metadata };
+        meta[session.vaultId] = entry;
+        await saveVaultMeta(this.deps.local, meta);
+      }
+      const result = {
+        backupVerified: entry?.backupVerified === true,
+        ...(entry !== undefined ? { metadata: entry.metadata } : {}),
+      };
       return result;
-    });
+    }));
   }
 
   /**
@@ -2178,7 +2307,9 @@ export class WalletService {
         }
         let history: SnapshotHistoryEntry[];
         try {
-          history = openRecord(dek, record, storedHistorySchema) as SnapshotHistoryEntry[];
+          history = (openRecord(
+            dek, record, storedHistoryReadSchema,
+          ) as StoredHistoryRecord).entries;
         } catch {
           throw new RpcError('ERR_PLAN_CHANGED', 'wallet history attribution is unavailable');
         }
@@ -2354,7 +2485,12 @@ export class WalletService {
       await cache.delete(this.cacheKey(
         session.vaultId, 'accountSigningBinding', input.accountId,
       ));
-      await this.saveAccountsMetaLocked(dek, session.vaultId, lifecycle.meta);
+      await this.saveAccountsMetaLocked(dek, session.vaultId, {
+        ...lifecycle.meta,
+        partialHistoryUnits: lifecycle.meta.partialHistoryUnits.filter(
+          (unit) => unit.accountId !== input.accountId,
+        ),
+      });
       if (lifecycle.checkpoint) {
         await this.saveCheckpointLocked(dek, session.vaultId, lifecycle.checkpoint);
       }
@@ -3891,6 +4027,7 @@ export class WalletService {
           : [];
         const revision = activeCheckpoint?.revision ?? null;
         const hadConflict = activeCheckpoint?.hadConflict ?? false;
+        const historyPartial = activeCheckpoint?.historyPartial ?? false;
         const maxIndexPerChain = activeCheckpoint?.maxIndexPerChain ?? INITIAL_MAX_INDEX;
         const startedAt = activeCheckpoint?.startedAt ?? this.deps.vaultDeps.now();
 
@@ -3955,6 +4092,7 @@ export class WalletService {
           maxIndexPerChain,
           boundaryUnits: [...boundaryUnits],
           hadConflict,
+          historyPartial,
         });
         if (input.mode === 'rescan') await this.touchSessionLocked(session);
         return {
@@ -3967,6 +4105,7 @@ export class WalletService {
           boundaryUnits,
           revision,
           hadConflict,
+          historyPartial,
           maxIndexPerChain,
           startedAt,
           ring,
@@ -3976,6 +4115,7 @@ export class WalletService {
     );
 
     this.scanCancel = false;
+    this.scanHistoryPartial = prep.historyPartial;
     this.currentScanId = prep.scanId;
     this.scanUnitsTotal = prep.queue.length + prep.done.length;
     // Report 'running' synchronously: a status poll right after startScan must
@@ -4005,8 +4145,10 @@ export class WalletService {
         this.withSessionDek(input, (dek, session) => this.loadCheckpointLocked(dek, session.vaultId)),
       );
       if (checkpoint !== null && checkpoint.queue.length > 0) {
+        this.scanHistoryPartial = checkpoint.historyPartial;
         this.scanPhase = { kind: 'interrupted', checkpoint };
       } else if (checkpoint !== null && checkpoint.boundaryUnits.length > 0) {
+        this.scanHistoryPartial = checkpoint.historyPartial;
         this.scanPhase = {
           kind: 'awaiting_extend',
           scanId: checkpoint.scanId,
@@ -4018,7 +4160,8 @@ export class WalletService {
         await this.requireSession(input);
       });
     }
-    return scanStatusView(this.scanPhase, this.scanUnitsTotal);
+    const view = scanStatusView(this.scanPhase, this.scanUnitsTotal);
+    return { ...view, historyPartial: view.historyPartial || this.scanHistoryPartial };
   }
 
   /**
@@ -4243,6 +4386,10 @@ export class WalletService {
           (account) => account.accountId === input.accountId,
         );
         if (!registered) throw new RpcError('ERR_INVALID_PAYLOAD', 'account is not registered');
+        const historyComplete = !meta.partialHistoryUnits.some((unit) =>
+          unit.accountId === input.accountId ||
+          (unit.accountId === undefined && registered.source === 'standard' &&
+            unit.account === registered.account));
         const utxos = (await this.loadAllUtxosLocked(dek, session.vaultId)).filter(
           (utxo) => utxo.accountId === input.accountId,
         );
@@ -4338,9 +4485,13 @@ export class WalletService {
           wrongLaneCount: balances.wrongLaneCount,
           dataGating: { state: gating.state, blockedActions: [...gating.blockedActions] },
           activity,
+          historyComplete,
           wrongLane,
           lastSyncedAt: meta.lastSyncedAt,
-          scan: scanStatusView(this.scanPhase, this.scanUnitsTotal),
+          scan: {
+            ...scanStatusView(this.scanPhase, this.scanUnitsTotal),
+            historyPartial: meta.partialHistoryUnits.length > 0 || this.scanHistoryPartial,
+          },
         };
         try {
           await saveHomeSnapshot(this.deps.session, {
@@ -4368,6 +4519,10 @@ export class WalletService {
           (account) => account.accountId === input.accountId,
         );
         if (!registered) throw new RpcError('ERR_INVALID_PAYLOAD', 'account is not registered');
+        const historyComplete = !meta.partialHistoryUnits.some((unit) =>
+          unit.accountId === input.accountId ||
+          (unit.accountId === undefined && registered.source === 'standard' &&
+            unit.account === registered.account));
         const utxos = (await this.loadAllUtxosLocked(dek, session.vaultId)).filter(
           (utxo) => utxo.accountId === input.accountId,
         );
@@ -4394,6 +4549,7 @@ export class WalletService {
         return {
           accountId: input.accountId,
           ...paginateActivity(activity, input.cursor),
+          historyComplete,
         };
       }),
     );
@@ -5736,6 +5892,7 @@ export class WalletService {
           frozen: utxo.flags.userFrozen,
           dustQuarantined: utxo.flags.dustQuarantined,
           wrongLane: laneState(utxo),
+          inscriptions: utxo.facts?.inscriptions ?? [],
           label: labelByOutpoint.get(outpointKey(utxo.outpoint)) ?? null,
         };
       });
@@ -5910,7 +6067,9 @@ export class WalletService {
       const config = await loadConfig(this.deps.local);
       const review = reviewFromPlan(current, view.missingProtections, config.highSecurityMode);
       if (
-        review.ordinalAction?.requiresNonTaprootAcknowledgement &&
+        review.ordinalAction !== null &&
+        review.ordinalAction.action !== 'manage_postage' &&
+        review.ordinalAction.requiresNonTaprootAcknowledgement &&
         input.nonTaprootDestinationAcknowledged !== true
       ) {
         throw new RpcError(
@@ -6007,12 +6166,27 @@ export class WalletService {
       const recoveries = await this.loadRecoveriesLocked(dek, session.vaultId);
       const history = await this.loadHistoryLocked(dek, session.vaultId, input.accountId);
       const historyByTxid = new Map(history.map((entry) => [entry.txid, entry]));
-      const results = transactions.map((tx) => ({
-        planId: tx.planId, kind: tx.kind, txid: tx.txid, createdAt: tx.createdAt,
-        amountSats: tx.amountSats.toString(), feeSats: tx.feeSats.toString(),
-        status: reconcileTransactionStatus(tx.status, historyByTxid.get(tx.txid)?.confirmationState),
-        detail: tx.detail, parentTxid: tx.parentTxid, replacesTxid: tx.replacesTxid, recovering: false,
-      }));
+      const results = transactions.map((tx) => {
+        const observed = historyByTxid.get(tx.txid);
+        const status = reconcileTransactionStatus(tx.status, observed?.confirmationState);
+        const pending = status === 'accepted' || status === 'already_known' || status === 'pending';
+        const recommendedAcceleration = !pending
+          ? null
+          : tx.plan.rbf && tx.plan.outputs.some((output) => output.role === 'payment_change')
+            ? 'rbf' as const
+            : observed?.cpfpEligible
+              ? 'cpfp' as const
+              : null;
+        return {
+          planId: tx.planId, kind: tx.kind, txid: tx.txid, createdAt: tx.createdAt,
+          amountSats: tx.amountSats.toString(), feeSats: tx.feeSats.toString(), status,
+          detail: tx.detail, parentTxid: tx.parentTxid, replacesTxid: tx.replacesTxid,
+          recovering: false, recommendedAcceleration,
+          accelerationUnavailableReason: pending && recommendedAcceleration === null
+            ? 'No safe fee-bump path is available for this transaction.'
+            : null,
+        };
+      });
       for (const recovery of recoveries) {
         const plan = await this.loadPlanLocked(dek, session.vaultId, recovery.planId);
         if (!plan || plan.accountId !== input.accountId) continue;
@@ -6023,6 +6197,8 @@ export class WalletService {
           feeSats: plan.feeSats.toString(), status: reconcileTransactionStatus('pending', scannedState),
           detail: recovery.lastFailure, parentTxid: plan.parentTxid, replacesTxid: plan.replacesTxid,
           recovering: scannedState === undefined,
+          recommendedAcceleration: null,
+          accelerationUnavailableReason: 'Resolve the pending broadcast before changing its fee.',
         });
       }
       return {
@@ -6189,7 +6365,9 @@ export class WalletService {
     if (kind === 'rbf') return 'rbf';
     if (kind === 'cpfp') return 'cpfp';
     if (kind === 'consolidation') return 'consolidation';
-    if (kind === 'ordinal_transfer' || kind === 'rescue' || kind === 'ordinal_sweep') return 'rescue_sweep';
+    if (kind === 'ordinal_transfer' || kind === 'ordinal_batch_transfer' ||
+        kind === 'ordinal_postage_manage' ||
+        kind === 'rescue' || kind === 'ordinal_sweep') return 'rescue_sweep';
     return 'native_send';
   }
 
@@ -6232,8 +6410,20 @@ export class WalletService {
         built = await this.buildNativeLocked(
           dek, session.vaultId, definition, input, utxos, eligibility, fee.rate,
         );
+      } else if (input.kind === 'native_batch_send') {
+        built = await this.buildNativeBatchLocked(
+          dek, session.vaultId, definition, input, utxos, eligibility, fee.rate,
+        );
       } else if (input.kind === 'ordinal_transfer') {
         built = await this.buildOrdinalTransferLocked(
+          session.vaultId, definition, input, utxos, eligibility, fee.rate,
+        );
+      } else if (input.kind === 'ordinal_batch_transfer') {
+        built = await this.buildOrdinalBatchTransferLocked(
+          session.vaultId, definition, input, utxos, eligibility, fee.rate,
+        );
+      } else if (input.kind === 'ordinal_postage_manage') {
+        built = await this.buildOrdinalPostageManageLocked(
           session.vaultId, definition, input, utxos, eligibility, fee.rate,
         );
       } else if (input.kind === 'consolidation') {
@@ -6363,6 +6553,15 @@ export class WalletService {
         recipient: canonicalRecipient ?? input.recipient,
         amountSats: input.amountSats, sendMax: input.sendMax,
         ...(input.selectedOutpoints ? { selectedOutpoints: input.selectedOutpoints.map((item) => ({ ...item })) } : {}) };
+    } else if (input.kind === 'native_batch_send') {
+      intent = {
+        kind: input.kind,
+        account: input.account,
+        recipients: input.recipients.map((recipient) => ({ ...recipient })),
+        ...(input.selectedOutpoints
+          ? { selectedOutpoints: input.selectedOutpoints.map((item) => ({ ...item })) }
+          : {}),
+      };
     } else if (input.kind === 'ordinal_transfer') {
       intent = {
         kind: input.kind,
@@ -6370,6 +6569,20 @@ export class WalletService {
         inscriptionId: input.inscriptionId,
         outpoint: { ...input.outpoint },
         recipient: input.recipient,
+      };
+    } else if (input.kind === 'ordinal_batch_transfer') {
+      intent = {
+        kind: input.kind,
+        account: input.account,
+        recipient: canonicalRecipient ?? input.recipient,
+        selections: canonicalOrdinalBatchSelections(input.selections),
+      };
+    } else if (input.kind === 'ordinal_postage_manage') {
+      intent = {
+        kind: input.kind,
+        account: input.account,
+        selections: canonicalOrdinalBatchSelections(input.selections),
+        target: { ...input.target },
       };
     } else if (input.kind === 'consolidation') {
       intent = { kind: input.kind, account: input.account,
@@ -6433,10 +6646,20 @@ export class WalletService {
       }
       await cache.delete(this.cacheKey(session.vaultId, 'plans', oldPlan.planId));
       this.nativeInscriptionPreviews.delete(oldPlan.planId);
+      const replacementRequest = this.requestFromPlan(oldPlan, input);
+      if (replacementRequest.kind === 'ordinal_batch_transfer' ||
+          replacementRequest.kind === 'ordinal_postage_manage') {
+        replacementRequest.selections = replacementRequest.selections.map((selection) => {
+          const fresh = freshByOutpoint.get(outpointKey(selection.outpoint));
+          return fresh === undefined
+            ? selection
+            : { ...selection, classificationRevision: fresh.classificationRevision };
+        });
+      }
       const replacement = await this.buildTransactionPlanLocked(
         dek,
         session,
-        this.requestFromPlan(oldPlan, input),
+        replacementRequest,
         view,
         fee,
       );
@@ -6495,6 +6718,44 @@ export class WalletService {
     });
     if (!outcome.ok) return mapNativeSendFailure(outcome.reason);
     return { ...outcome.candidate, canonicalRecipient: recipient.address };
+  }
+
+  private async buildNativeBatchLocked(
+    dek: Uint8Array,
+    vaultId: string,
+    definition: PublicAccountDefinitionV1,
+    input: Extract<TransactionPlanRequest, { kind: 'native_batch_send' }>,
+    utxos: WalletUtxo[],
+    eligibility: EligibilityContext,
+    feeRate: bigint,
+  ) {
+    const recipients = input.recipients.map((item) => ({
+      recipient: payableRecipient(item.address, this.deps.network),
+      amountSats: parseSats(item.amountSats),
+    }));
+    const change = await this.reserveOutputLocked(
+      vaultId, definition, 'payment', input.account, 'payment_change',
+    );
+    const selected = input.selectedOutpoints
+      ? new Set(input.selectedOutpoints.map((entry) => `${entry.txid}:${entry.vout}`))
+      : undefined;
+    const labelGroups = selected
+      ? undefined
+      : await this.labelGroupsLocked(dek, vaultId, input.accountId);
+    const outcome = buildNativeBatchSendCandidate({
+      recipients,
+      accountId: input.accountId,
+      account: input.account,
+      utxos,
+      eligibility,
+      feeRate,
+      changeOutput: change,
+      deriveInput: (utxo) => this.deriveForUtxo(definition, utxo),
+      ...(selected ? { selectedOutpoints: selected } : {}),
+      ...(labelGroups ? { labelGroupByOutpoint: labelGroups } : {}),
+    });
+    if (!outcome.ok) return mapNativeSendFailure(outcome.reason);
+    return outcome.candidate;
   }
 
   private async buildOrdinalTransferLocked(
@@ -6708,6 +6969,348 @@ export class WalletService {
           inscriptionId: item.inscriptionId,
         }));
       }),
+      rbf: false,
+      parentTxid: null,
+      replacesTxid: null,
+    };
+  }
+
+  private async buildOrdinalBatchTransferLocked(
+    vaultId: string,
+    definition: PublicAccountDefinitionV1,
+    input: Extract<TransactionPlanRequest, { kind: 'ordinal_batch_transfer' }>,
+    utxos: WalletUtxo[],
+    eligibility: EligibilityContext,
+    feeRate: bigint,
+  ) {
+    const recipient = payableRecipient(input.recipient, this.deps.network);
+    const canonicalSelections = canonicalOrdinalBatchSelections(input.selections);
+    const recipientDust = scriptDustSats(recipient.scriptPubKey);
+    const selectionBySource = new Map<string, typeof input.selections>();
+    for (const selection of canonicalSelections) {
+      const key = outpointKey(selection.outpoint);
+      const existing = selectionBySource.get(key) ?? [];
+      existing.push(selection);
+      selectionBySource.set(key, existing);
+    }
+    const sources = [...selectionBySource.entries()].map(([key, selections]) => {
+      const source = utxos.find((utxo) =>
+        utxo.account === input.account && outpointKey(utxo.outpoint) === key);
+      if (
+        !source || source.accountId !== input.accountId || source.lane !== 'ordinals' ||
+        source.height === null || source.flags.userFrozen || source.flags.dustQuarantined ||
+        source.facts?.confidence !== 'authoritative' ||
+        source.facts.classificationRevision !== eligibility.activeRevision ||
+        selections.some((selection) =>
+          selection.classificationRevision !== source.facts!.classificationRevision) ||
+        !eligibility.freshness.spendEligible ||
+        (source.facts.primaryClass !== 'inscribed' && source.facts.primaryClass !== 'mixed') ||
+        source.facts.inscriptions.length === 0 || source.facts.unsupportedAssetDetected ||
+        source.facts.satRanges?.some((range) =>
+          range.rarity !== undefined && range.rarity !== 'common') ||
+        eligibility.lockedOutpoints.has(key)
+      ) {
+        throw new RpcError('ERR_UNSAFE_TRANSACTION', `inscription source ${key} cannot be transferred safely`);
+      }
+      return { source, selections };
+    });
+
+    // One real P2WPKH change reservation per source supplies the exact economic
+    // threshold. Additional source-local change outputs receive fresh indexes
+    // below; no protected output ever reuses the final fee-change address.
+    const sourceChangeTemplates = new Map<string, PlanOutput>();
+    for (const { source } of sources) {
+      sourceChangeTemplates.set(outpointKey(source.outpoint), await this.reserveOutputLocked(
+        vaultId, definition, 'payment', source.account, 'payment_change',
+      ));
+    }
+    let routing;
+    try {
+      routing = planOrdinalBatchSatFlow(sources.map(({ source, selections }) => {
+        const template = sourceChangeTemplates.get(outpointKey(source.outpoint))!;
+        return {
+          txid: source.outpoint.txid,
+          vout: source.outpoint.vout,
+          valueSats: source.valueSats,
+          classificationRevision: source.facts!.classificationRevision,
+          inscriptions: source.facts!.inscriptions,
+          selections,
+          recipientMinimumOutputSats: recipientDust,
+          preferredPostageSats: DEFAULT_POSTAGE_SATS > recipientDust
+            ? DEFAULT_POSTAGE_SATS : recipientDust,
+          sourceChangeMinimumSats: economicChangeThreshold(template.scriptPubKey, feeRate),
+        };
+      }));
+    } catch (error) {
+      if (error instanceof OrdinalBatchPlanError) {
+        const source = error.outpoint ? ` ${outpointKey(error.outpoint)}` : '';
+        if (error.reason === 'incomplete_source') {
+          throw new RpcError('ERR_UNSAFE_TRANSACTION', `select every inscription from output${source}`);
+        }
+        if (error.reason === 'multiple_top_ups') {
+          throw new RpcError('ERR_CLEAN_FEE_INPUTS_UNAVAILABLE', 'multiple inscription sources require postage top-up');
+        }
+        throw new RpcError('ERR_UNSAFE_TRANSACTION', error.message);
+      }
+      throw error;
+    }
+
+    const sourceByKey = new Map(sources.map((entry) => [outpointKey(entry.source.outpoint), entry.source]));
+    const protectedInputs = routing.sources.map((sourcePlan) => {
+      const source = sourceByKey.get(`${sourcePlan.txid}:${sourcePlan.vout}`);
+      if (!source) throw new RpcError('ERR_UNSAFE_TRANSACTION', 'batch source order changed');
+      return inputFromUtxo(
+        source,
+        this.deriveForUtxo(definition, source),
+        sequenceForInput('ordinal_batch_transfer'),
+      );
+    });
+    const outputs: PlanOutput[] = [];
+    const protectedSatFlow: TransactionPlan['protectedSatFlow'] = [];
+    for (let inputIndex = 0; inputIndex < routing.sources.length; inputIndex += 1) {
+      const sourcePlan = routing.sources[inputIndex]!;
+      let templateAvailable = true;
+      const sourceOutputBase = outputs.length;
+      for (const output of sourcePlan.outputs) {
+        if (output.role === 'postage') {
+          outputs.push({
+            address: recipient.address,
+            scriptPubKey: recipient.scriptPubKey,
+            valueSats: output.valueSats,
+            role: 'postage',
+          });
+          continue;
+        }
+        let change = sourceChangeTemplates.get(`${sourcePlan.txid}:${sourcePlan.vout}`)!;
+        if (!templateAvailable) {
+          change = await this.reserveOutputLocked(
+            vaultId, definition, 'payment', input.account, 'payment_change',
+          );
+        }
+        templateAvailable = false;
+        outputs.push({ ...change, valueSats: output.valueSats });
+      }
+      for (const group of sourcePlan.groups) {
+        for (const inscriptionId of group.inscriptionIds) {
+          protectedSatFlow.push({
+            inputIndex,
+            inputOffset: group.inputOffset,
+            outputIndex: sourceOutputBase + group.sourceOutputIndex,
+            outputOffset: group.outputOffset,
+            inscriptionId,
+          });
+        }
+      }
+    }
+
+    const finalPaymentChange = await this.reserveOutputLocked(
+      vaultId, definition, 'payment', input.account, 'payment_change',
+    );
+    const topUpSats = routing.sources.reduce(
+      (sum, source) => sum + source.requiredTopUpSats, 0n,
+    );
+    const protectedInputFee = feeForVsize(protectedInputs.reduce(
+      (sum, entry) => sum + inputVbytes(entry.scriptPubKey), 0n,
+    ), feeRate);
+    let selection;
+    try {
+      selection = selectCoins({
+        utxos,
+        eligibility,
+        accountId: input.accountId,
+        account: input.account,
+        feeRate,
+        targetSats: topUpSats + protectedInputFee,
+        recipientScripts: outputs.map((output) => output.scriptPubKey),
+        changeScript: finalPaymentChange.scriptPubKey,
+        sendMax: false,
+      });
+    } catch {
+      throw new RpcError(
+        'ERR_CLEAN_FEE_INPUTS_UNAVAILABLE',
+        'cardinal-clean payment inputs cannot cover batch postage and miner fee',
+      );
+    }
+    if (selection.inputs.some((utxo) =>
+      utxo.lane !== 'payment' || utxo.facts?.primaryClass !== 'cardinal_clean')) {
+      throw new RpcError('ERR_UNSAFE_TRANSACTION', 'protected input selected for batch funding');
+    }
+    const feeInputs = selection.inputs.map((utxo) => inputFromUtxo(
+      utxo,
+      this.deriveForUtxo(definition, utxo),
+      sequenceForInput('ordinal_batch_transfer'),
+    ));
+    const inputs = [...protectedInputs, ...feeInputs];
+    if (selection.changeSats > 0n) {
+      outputs.push({ ...finalPaymentChange, valueSats: selection.changeSats });
+    }
+    const vsize = estimateVsize(
+      inputs.map((entry) => entry.scriptPubKey),
+      outputs.map((output) => output.scriptPubKey),
+    );
+    const totalInputSats = inputs.reduce((sum, entry) => sum + entry.valueSats, 0n);
+    const totalOutputSats = outputs.reduce((sum, output) => sum + output.valueSats, 0n);
+    const feeSats = totalInputSats - totalOutputSats;
+    if (feeSats < feeForVsize(vsize, feeRate)) {
+      throw new RpcError('ERR_UNSAFE_TRANSACTION', 'batch fee is below the approved rate');
+    }
+    return {
+      account: input.account,
+      inputs,
+      outputs,
+      feeSats,
+      vsize,
+      protectedSatFlow,
+      rbf: false,
+      parentTxid: null,
+      replacesTxid: null,
+      canonicalRecipient: recipient.address,
+    };
+  }
+
+  private async buildOrdinalPostageManageLocked(
+    vaultId: string,
+    definition: PublicAccountDefinitionV1,
+    input: Extract<TransactionPlanRequest, { kind: 'ordinal_postage_manage' }>,
+    utxos: WalletUtxo[],
+    eligibility: EligibilityContext,
+    feeRate: bigint,
+  ) {
+    const selections = canonicalOrdinalBatchSelections(input.selections);
+    const ordinalTemplate = this.stableOutput(
+      definition, 'ordinals', input.account, 'postage',
+    );
+    const paymentTemplates: PlanOutput[] = [];
+    const sources = selections.map((selection) => {
+      const key = outpointKey(selection.outpoint);
+      const source = utxos.find((utxo) =>
+        utxo.account === input.account && outpointKey(utxo.outpoint) === key);
+      if (!source || source.accountId !== input.accountId || source.lane !== 'ordinals' ||
+          source.height === null || source.flags.userFrozen || source.flags.dustQuarantined ||
+          source.facts?.confidence !== 'authoritative' ||
+          source.facts.classificationRevision !== eligibility.activeRevision ||
+          selection.classificationRevision !== source.facts.classificationRevision ||
+          !eligibility.freshness.spendEligible || source.facts.primaryClass !== 'inscribed' ||
+          source.facts.unsupportedAssetDetected || source.facts.inscriptions.length !== 1 ||
+          source.facts.inscriptions[0]?.inscriptionId !== selection.inscriptionId ||
+          source.facts.inscriptions[0]?.satpoint !== selection.satpoint ||
+          source.facts.satRanges === null ||
+          source.facts.satRanges.some((range) =>
+            range.rarity !== undefined && range.rarity !== 'common') ||
+          eligibility.lockedOutpoints.has(key)) {
+        throw new RpcError('ERR_UNSAFE_TRANSACTION', `postage source ${key} is not eligible`);
+      }
+      return source;
+    });
+    for (let index = 0; index < sources.length; index += 1) {
+      paymentTemplates.push(await this.reserveOutputLocked(
+        vaultId, definition, 'payment', input.account, 'payment_change',
+      ));
+    }
+    let routing;
+    try {
+      routing = planOrdinalPostageManage(sources.map((source, index) => ({
+        selection: selections[index]!,
+        valueSats: source.valueSats,
+        classificationRevision: source.facts!.classificationRevision,
+        inscriptionIds: source.facts!.inscriptions.map((item) => item.inscriptionId),
+        ordinalOutputDustSats: scriptDustSats(ordinalTemplate.scriptPubKey),
+        paymentChangeDustSats: scriptDustSats(paymentTemplates[index]!.scriptPubKey),
+      })), input.target);
+    } catch (error) {
+      if (error instanceof OrdinalPostagePlanError) {
+        throw new RpcError(
+          error.reason === 'multiple_top_ups'
+            ? 'ERR_CLEAN_FEE_INPUTS_UNAVAILABLE'
+            : 'ERR_UNSAFE_TRANSACTION',
+          error.message,
+        );
+      }
+      throw error;
+    }
+    const sourceByKey = new Map(sources.map((source) => [outpointKey(source.outpoint), source]));
+    const protectedInputs = routing.sources.map((planned) => {
+      const source = sourceByKey.get(outpointKey(planned.selection.outpoint));
+      if (!source) throw new RpcError('ERR_UNSAFE_TRANSACTION', 'postage source order changed');
+      return inputFromUtxo(
+        source, this.deriveForUtxo(definition, source), sequenceForInput('ordinal_postage_manage'),
+      );
+    });
+    const outputs: PlanOutput[] = [];
+    const protectedSatFlow: TransactionPlan['protectedSatFlow'] = [];
+    for (let index = 0; index < routing.sources.length; index += 1) {
+      const planned = routing.sources[index]!;
+      outputs.push({ ...ordinalTemplate, valueSats: planned.retainedPostageSats });
+      protectedSatFlow.push({
+        inputIndex: index,
+        inputOffset: 0n,
+        outputIndex: outputs.length - 1,
+        outputOffset: 0n,
+        inscriptionId: planned.selection.inscriptionId,
+      });
+      if (planned.returnedBtcSats > 0n) {
+        const template = paymentTemplates[index]!;
+        outputs.push({ ...template, valueSats: planned.returnedBtcSats });
+      }
+    }
+    const finalPaymentChange = await this.reserveOutputLocked(
+      vaultId, definition, 'payment', input.account, 'payment_change',
+    );
+    const protectedInputFee = feeForVsize(protectedInputs.reduce(
+      (sum, entry) => sum + inputVbytes(entry.scriptPubKey), 0n,
+    ), feeRate);
+    let selection;
+    try {
+      selection = selectCoins({
+        utxos,
+        eligibility,
+        accountId: input.accountId,
+        account: input.account,
+        feeRate,
+        targetSats: routing.requiredTopUpSats + protectedInputFee,
+        recipientScripts: outputs.map((output) => output.scriptPubKey),
+        changeScript: finalPaymentChange.scriptPubKey,
+        sendMax: false,
+      });
+    } catch {
+      throw new RpcError(
+        'ERR_CLEAN_FEE_INPUTS_UNAVAILABLE',
+        'clean bitcoin cannot cover postage and the network fee',
+      );
+    }
+    if (selection.inputs.some((utxo) =>
+      utxo.lane !== 'payment' || utxo.facts?.primaryClass !== 'cardinal_clean')) {
+      throw new RpcError('ERR_UNSAFE_TRANSACTION', 'protected input selected for postage funding');
+    }
+    const feeInputs = selection.inputs.map((utxo) => inputFromUtxo(
+      utxo,
+      this.deriveForUtxo(definition, utxo),
+      sequenceForInput('ordinal_postage_manage'),
+    ));
+    const inputs = [...protectedInputs, ...feeInputs];
+    if (selection.changeSats > 0n) {
+      outputs.push({ ...finalPaymentChange, valueSats: selection.changeSats });
+    }
+    const vsize = estimateVsize(
+      inputs.map((entry) => entry.scriptPubKey),
+      outputs.map((output) => output.scriptPubKey),
+    );
+    const totalInputSats = inputs.reduce((sum, entry) => sum + entry.valueSats, 0n);
+    const totalOutputSats = outputs.reduce((sum, output) => sum + output.valueSats, 0n);
+    const feeSats = totalInputSats - totalOutputSats;
+    if (feeSats < feeForVsize(vsize, feeRate)) {
+      throw new RpcError('ERR_UNSAFE_TRANSACTION', 'postage transaction fee is below the approved rate');
+    }
+    if (routing.returnedBtcSats > 0n && routing.returnedBtcSats <= feeSats) {
+      throw new RpcError('ERR_NO_SWEEPABLE_EXCESS', 'recovering this bitcoin would cost at least as much as it returns');
+    }
+    return {
+      account: input.account,
+      inputs,
+      outputs,
+      feeSats,
+      vsize,
+      protectedSatFlow,
       rbf: false,
       parentTxid: null,
       replacesTxid: null,
@@ -7232,17 +7835,32 @@ export class WalletService {
     const inscriptions = approvalInscriptionItems(analysis, previews);
     const review = reviewFromPlan(plan, missingProtections, config.highSecurityMode);
     if (review.ordinalAction) {
-      const target = review.ordinalAction.inscriptionId === null
-        ? null
-        : inscriptions.find((item) => item.inscriptionId === review.ordinalAction!.inscriptionId);
-      if (
-        (review.ordinalAction.action === 'transfer' && target?.movement !== 'sent') ||
-        (review.ordinalAction.action === 'rescue' && target?.movement !== 'retained') ||
-        review.ordinalAction.retainedInscriptionIds.some((id) =>
-          inscriptions.find((item) => item.inscriptionId === id)?.movement !== 'retained') ||
-        (review.ordinalAction.action === 'sweep' && inscriptions.length !== 0)
-      ) {
-        throw new RpcError('ERR_UNSAFE_TRANSACTION', 'ordinal review differs from transaction analysis');
+      if (review.ordinalAction.action === 'batch_transfer') {
+        const reviewed = new Set(review.ordinalAction.inscriptionIds);
+        if (reviewed.size !== inscriptions.length || inscriptions.some((item) =>
+          item.movement !== 'sent' || !reviewed.has(item.inscriptionId))) {
+          throw new RpcError('ERR_UNSAFE_TRANSACTION', 'batch review differs from transaction analysis');
+        }
+      } else if (review.ordinalAction.action === 'transfer' ||
+          review.ordinalAction.action === 'rescue' ||
+          review.ordinalAction.action === 'sweep') {
+        const ordinalAction = review.ordinalAction;
+        const target = ordinalAction.inscriptionId === null
+          ? null
+          : inscriptions.find((item) =>
+              item.inscriptionId === ordinalAction.inscriptionId);
+        if (
+          (ordinalAction.action === 'transfer' && target?.movement !== 'sent') ||
+          (ordinalAction.action === 'rescue' && target?.movement !== 'retained') ||
+          ordinalAction.retainedInscriptionIds.some((id) =>
+            inscriptions.find((item) => item.inscriptionId === id)?.movement !== 'retained') ||
+          (ordinalAction.action === 'sweep' && inscriptions.length !== 0)
+        ) {
+          throw new RpcError(
+            'ERR_UNSAFE_TRANSACTION',
+            'ordinal review differs from transaction analysis',
+          );
+        }
       }
     }
     return { planId: plan.planId, planHash: plan.planHash, expiresAt: plan.expiresAt,
@@ -7317,7 +7935,9 @@ export class WalletService {
       await this.requireCache().delete(this.cacheKey(session.vaultId, 'plans', plan.planId));
       if (status === 'accepted' || status === 'already_known' || status === 'confirmed') {
         let addressBook = await this.loadAddressBookLocked(dek, session.vaultId);
-        const kind = plan.kind === 'ordinal_transfer' ? 'ordinal' as const : 'bitcoin' as const;
+        const kind = plan.kind === 'ordinal_transfer' || plan.kind === 'ordinal_batch_transfer' ||
+          plan.kind === 'ordinal_postage_manage'
+          ? 'ordinal' as const : 'bitcoin' as const;
         for (const address of new Set(plan.outputs
           .filter((output) => output.role === 'recipient' || output.role === 'postage')
           .map((output) => output.address))) {
@@ -7347,6 +7967,7 @@ export class WalletService {
       boundaryUnits: ScanUnit[];
       revision: string | null;
       hadConflict: boolean;
+      historyPartial: boolean;
       maxIndexPerChain: number;
       startedAt: number;
       ring: AccountKeyRing;
@@ -7372,6 +7993,7 @@ export class WalletService {
     const boundaryUnits = [...prep.boundaryUnits];
     let revision: string | null = prep.revision;
     let hadConflict = prep.hadConflict;
+    let historyPartial = prep.historyPartial;
 
     const checkpoint = (): ScanCheckpoint => ({
       scanId: prep.scanId,
@@ -7385,6 +8007,7 @@ export class WalletService {
       maxIndexPerChain: prep.maxIndexPerChain,
       boundaryUnits: [...boundaryUnits],
       hadConflict,
+      historyPartial,
     });
 
     try {
@@ -7437,7 +8060,11 @@ export class WalletService {
             }
             continue;
           }
-          this.setScanPhase(prep.scanId, { kind: 'failed', scanId: prep.scanId, reason: 'gateway' });
+          this.setScanPhase(prep.scanId, {
+            kind: 'failed',
+            scanId: prep.scanId,
+            reason: result.failure === 'data_limit' ? 'data_limit' : 'gateway',
+          });
           await this.persistCheckpointSafe(expectation, checkpoint());
           return;
         }
@@ -7461,8 +8088,12 @@ export class WalletService {
           continue;
         }
         if (revision === null) revision = result.revision;
-        if (result.utxos.length > 0 || result.history.length > 0) {
+        if (result.active) {
           activeUnits.set(unitKey(unit), unit);
+        }
+        if (result.historyCoverage.status === 'partial') {
+          historyPartial = true;
+          this.scanHistoryPartial = true;
         }
         if (result.boundaryPrompt) boundaryUnits.push(unit);
         queue.shift();
@@ -7496,6 +8127,25 @@ export class WalletService {
             const mergedActiveUnits = new Map(
               [...prior.activeUnits, ...activeUnits.values()].map((unit) => [unitKey(unit), unit]),
             );
+            const partialHistoryUnits: ScanUnit[] = [];
+            for (const candidate of mergedActiveUnits.values()) {
+              const historyRecord = await this.requireCache().get(
+                this.cacheKey(session.vaultId, 'history', unitKey(candidate)),
+              );
+              if (!historyRecord) {
+                partialHistoryUnits.push(candidate);
+                continue;
+              }
+              try {
+                const stored = openRecord(
+                  dek, historyRecord, storedHistoryReadSchema,
+                ) as StoredHistoryRecord;
+                if (stored.coverage.status === 'partial') partialHistoryUnits.push(candidate);
+              } catch {
+                // Unreadable history remains display-incomplete until a rescan rewrites it.
+                partialHistoryUnits.push(candidate);
+              }
+            }
             const standardAccounts = normalizeAccountIndexes([
               ...prior.standardAccounts,
               ...prep.standardAccounts,
@@ -7577,6 +8227,7 @@ export class WalletService {
                     revision,
                     hasConflictingSources: false,
                     activeUnits: [...mergedActiveUnits.values()],
+                    partialHistoryUnits,
                     standardAccounts,
                     registeredPublicAccounts,
                     hiddenPublicAccountIds,
@@ -7584,6 +8235,8 @@ export class WalletService {
                     recoveredAddressCounts,
                   },
             );
+            historyPartial = partialHistoryUnits.length > 0;
+            this.scanHistoryPartial = historyPartial;
             await this.saveCheckpointLocked(dek, session.vaultId, checkpoint());
             return JSON.stringify({
               recoveredAddressCounts: prior.recoveredAddressCounts,
@@ -7606,7 +8259,12 @@ export class WalletService {
         prep.scanId,
         boundaryUnits.length > 0
           ? { kind: 'awaiting_extend', scanId: prep.scanId, boundaryUnits }
-          : { kind: 'completed', scanId: prep.scanId, finishedAt: this.deps.vaultDeps.now() },
+          : {
+              kind: 'completed',
+              scanId: prep.scanId,
+              finishedAt: this.deps.vaultDeps.now(),
+              historyPartial,
+            },
       );
       if (recoveredCountsChanged) this.notifyWalletDataChanged('account');
     } finally {
@@ -7957,7 +8615,11 @@ export class WalletService {
     await cache.put(
       sealRecord(
         dek,
-        result.history,
+        {
+          version: 2,
+          entries: result.history,
+          coverage: result.historyCoverage,
+        },
         historyKey,
         this.deps.vaultDeps.random(24),
         this.deps.vaultDeps.now(),
@@ -8043,6 +8705,7 @@ export class WalletService {
       revision: null,
       hasConflictingSources: false,
       activeUnits: [],
+      partialHistoryUnits: [],
       standardAccounts: [0],
       registeredPublicAccounts: [],
       activePublicAccountId: null,
@@ -8321,7 +8984,7 @@ export class WalletService {
           const historyRecord = await cache.get(this.cacheKey(vaultId, 'history', unitKey));
           if (!utxoRecord || !historyRecord) throw new Error('missing account record');
           openRecord(dek, utxoRecord, storedUtxosSchema);
-          openRecord(dek, historyRecord, storedHistorySchema);
+          openRecord(dek, historyRecord, storedHistoryReadSchema);
         }
         covered.add(registered.accountId);
       } catch {
@@ -8354,7 +9017,9 @@ export class WalletService {
       const record = await cache.get(this.cacheKey(vaultId, 'history', key));
       if (!record) continue;
       try {
-        const entries = openRecord(dek, record, storedHistorySchema) as SnapshotHistoryEntry[];
+        const entries = (openRecord(
+          dek, record, storedHistoryReadSchema,
+        ) as StoredHistoryRecord).entries;
         if (entries.some((entry) => entry.confirmationState === 'mempool')) pending.add(account);
       } catch {
         pending.add(-1);
@@ -8510,7 +9175,9 @@ export class WalletService {
       if (!record) continue;
       let entries: SnapshotHistoryEntry[];
       try {
-        entries = openRecord(dek, record, storedHistorySchema) as SnapshotHistoryEntry[];
+        entries = (openRecord(
+          dek, record, storedHistoryReadSchema,
+        ) as StoredHistoryRecord).entries;
       } catch {
         continue; // Skip unreadable records; a rescan rewrites them.
       }

@@ -368,7 +368,7 @@ describe('ProviderController authority, disclosure and approvals', () => {
     expect(page.messages).toEqual([expect.objectContaining({
       ok: true,
       result: expect.objectContaining({
-        version: '0.10.3',
+        version: '0.10.8',
         platform: 'web',
         supports: ['WBIP001', 'WBIP004'],
         methods: expect.arrayContaining(['getInfo', 'wallet_connect', 'signPsbt']),

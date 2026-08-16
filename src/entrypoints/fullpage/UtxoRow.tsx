@@ -27,6 +27,8 @@ import {
 } from '../../ui/utxo-presentation';
 import type { UtxoLabel, UtxoLabelPreset } from '@drey/core/domain/classification/labels';
 import styles from './fullpage.module.css';
+import type { ActiveSessionExpectation } from '../../ui/hooks/use-session';
+import { UtxoInscriptionThumbnail } from './UtxoInscriptionThumbnail';
 
 type Utxo = OpResult<'utxo.list'>['utxos'][number];
 
@@ -59,6 +61,10 @@ export interface UtxoRowProps {
    * account, so a coin from another account can never be part of this one.
    */
   selectable: boolean;
+  previewEnabled: boolean;
+  previewScope: string;
+  expectation: ActiveSessionExpectation;
+  accountId: string;
   lang: string;
   onToggleSelect: (checked: boolean) => void;
   onFreeze: () => void;
@@ -84,6 +90,7 @@ export function UtxoRow(props: UtxoRowProps): React.ReactElement {
   // the differentiator is which kind of asset it is; in `unavailable` the
   // reasons genuinely vary from row to row.
   const showClass = group === 'protected';
+  const showInscriptionPreview = group === 'protected' && utxo.inscriptions.length > 0;
   const classHelp = classHelpKey(utxo.classification);
   const showReason = group === 'unavailable' && reason !== null;
   // Whatever the collapsed row has not already said. `primaryReason` picks the
@@ -135,8 +142,19 @@ export function UtxoRow(props: UtxoRowProps): React.ReactElement {
             ? null
             : <span className={styles['labelChip']}>{describeLabel(utxo.label)}</span>}
           {showClass
+            && (utxo.classification !== 'inscribed' || !showInscriptionPreview)
             ? <span className={styles['utxoClass']}>{t(classificationKey(utxo.classification))}</span>
             : null}
+          {showInscriptionPreview ? (
+            <UtxoInscriptionThumbnail
+              accountId={props.accountId}
+              enabled={props.previewEnabled}
+              expectation={props.expectation}
+              inscriptions={utxo.inscriptions}
+              scope={props.previewScope}
+              txid={utxo.txid}
+            />
+          ) : null}
         </span>
       </div>
 

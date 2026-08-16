@@ -49,6 +49,7 @@ function homeResult(availableSats: string): WalletHomeResult {
     wrongLaneCount: 0,
     dataGating: { state: 'fresh', blockedActions: [] },
     activity: [],
+    historyComplete: true,
     wrongLane: [],
     lastSyncedAt: null,
     scan: {
@@ -59,6 +60,7 @@ function homeResult(availableSats: string): WalletHomeResult {
       currentUnit: null,
       boundaryUnits: [],
       failureReason: null,
+      historyPartial: false,
     },
   };
 }

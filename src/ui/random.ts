@@ -1,10 +1,13 @@
-/** Three distinct random positions in [0, 12), ascending (§7.1 verification). */
-export function pickPositions(): [number, number, number] {
-  const pool = Array.from({ length: 12 }, (_, i) => i);
+/** Three distinct random positions in [0, wordCount), ascending (§7.1 verification). */
+export function pickPositions(wordCount = 12): [number, number, number] {
+  if (!Number.isInteger(wordCount) || wordCount < 3) {
+    throw new RangeError('wordCount must be an integer of at least 3');
+  }
+  const pool = Array.from({ length: wordCount }, (_, i) => i);
   const rand = new Uint32Array(3);
   crypto.getRandomValues(rand);
   for (let i = 0; i < 3; i += 1) {
-    const j = i + ((rand[i] ?? 0) % (12 - i));
+    const j = i + ((rand[i] ?? 0) % (wordCount - i));
     const a = pool[i] as number;
     pool[i] = pool[j] as number;
     pool[j] = a;

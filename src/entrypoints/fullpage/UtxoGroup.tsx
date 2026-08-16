@@ -7,7 +7,7 @@
  * `available` opens by default; a holder with nine inscriptions sees three
  * summary lines instead of nine explanations.
  */
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Button } from '../../ui/components/Button';
 import { useI18n } from '../../ui/i18n';
 import {
@@ -25,11 +25,12 @@ export interface UtxoGroupProps {
   /** Select-all is offered only where selection is possible. */
   onToggleAll?: (() => void) | undefined;
   allSelected?: boolean | undefined;
-  children: ReactNode;
+  children: (open: boolean) => ReactNode;
 }
 
 export function UtxoGroup(props: UtxoGroupProps): React.ReactElement {
   const { t } = useI18n();
+  const [open, setOpen] = useState(props.group === 'available');
   const countLine = props.count === 1
     ? t('utxos.group.countOne', { total: props.total.toLocaleString(props.lang) })
     : t('utxos.group.count', {
@@ -38,7 +39,8 @@ export function UtxoGroup(props: UtxoGroupProps): React.ReactElement {
       });
 
   return (
-    <details className={styles['utxoGroup']} open={props.group === 'available'}>
+    <details className={styles['utxoGroup']} open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary className={styles['utxoGroupSummary']}>
         <span className={styles['utxoGroupTitle']}>{t(GROUP_TITLE_KEYS[props.group])}</span>
         <span className={styles['utxoGroupCount']}>{countLine}</span>
@@ -54,7 +56,7 @@ export function UtxoGroup(props: UtxoGroupProps): React.ReactElement {
             </Button>
           )}
         </div>
-        {props.children}
+        {props.children(open)}
       </div>
     </details>
   );

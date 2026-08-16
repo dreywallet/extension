@@ -74,6 +74,7 @@ function homeResult(overrides: Partial<WalletHomeResult> = {}): WalletHomeResult
         height: null,
       },
     ],
+    historyComplete: true,
     wrongLane: [],
     lastSyncedAt: 1_752_969_600_000,
     scan: {
@@ -84,6 +85,7 @@ function homeResult(overrides: Partial<WalletHomeResult> = {}): WalletHomeResult
       currentUnit: null,
       boundaryUnits: [],
       failureReason: null,
+      historyPartial: false,
     },
     ...overrides,
     accountId: overrides.accountId ?? ACCOUNT_ID,
@@ -561,6 +563,7 @@ describe('Home with live balances (§10.2)', () => {
         currentUnit: { source: 'standard', accountId: ACCOUNT_ID, account: 0, lane: 'payment' },
         boundaryUnits: [],
         failureReason: null,
+        historyPartial: false,
       },
     }));
     expect(await screen.findByRole('status')).toHaveTextContent('Retrying automatically');

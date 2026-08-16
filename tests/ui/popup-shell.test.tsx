@@ -47,6 +47,7 @@ const home: WalletHomeResult = {
   wrongLaneCount: 0,
   dataGating: { state: 'fresh', blockedActions: [] },
   activity: [],
+  historyComplete: true,
   wrongLane: [],
   lastSyncedAt: 1_752_969_600_000,
   scan: {
@@ -57,6 +58,7 @@ const home: WalletHomeResult = {
     currentUnit: null,
     boundaryUnits: [],
     failureReason: null,
+    historyPartial: false,
   },
 };
 

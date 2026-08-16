@@ -205,6 +205,7 @@ describe('RPC dispatch', () => {
         items: [],
         nextCursor: null,
         reset: false,
+        historyComplete: true,
       } });
     await expect(dispatch(env('fullpage', 'activity.list', payload), service))
       .resolves.toMatchObject({ ok: true, result: { accountId } });

@@ -61,6 +61,7 @@ function homeWithActivity(activity: WalletHomeResult['activity']): WalletHomeRes
     wrongLaneCount: 0,
     dataGating: { state: 'fresh', blockedActions: [] },
     activity,
+    historyComplete: true,
     wrongLane: [],
     lastSyncedAt: 1_752_969_600_000,
     scan: {
@@ -71,6 +72,7 @@ function homeWithActivity(activity: WalletHomeResult['activity']): WalletHomeRes
       currentUnit: null,
       boundaryUnits: [],
       failureReason: null,
+      historyPartial: false,
     },
   };
 }
@@ -96,6 +98,7 @@ function utxoRow(overrides: Record<string, unknown> = {}) {
     frozen: false,
     dustQuarantined: false,
     wrongLane: 'normal',
+    inscriptions: [],
     label: null,
     ...overrides,
   };
@@ -484,6 +487,62 @@ describe('transaction screen orchestration', () => {
     expect(plans[0]).not.toHaveProperty('presentation');
   });
 
+  it('composes one bound batch request without sending preview bytes to the worker', async () => {
+    const plans: unknown[] = [];
+    const firstTxid = 'c'.repeat(64);
+    const secondTxid = 'd'.repeat(64);
+    const selections = [
+      { inscriptionId: `${firstTxid}i0`, outpoint: { txid: firstTxid, vout: 0 },
+        satpoint: `${firstTxid}:0:3`, classificationRevision: 'rev-batch' },
+      { inscriptionId: `${secondTxid}i0`, outpoint: { txid: secondTxid, vout: 1 },
+        satpoint: `${secondTxid}:1:9`, classificationRevision: 'rev-batch' },
+    ];
+    installFakeChrome({
+      'fees.quote': () => ({ ok: true, result: QUOTE }),
+      'transaction.plan': (payload) => {
+        plans.push(payload);
+        return { ok: false, code: 'ERR_INTERNAL' };
+      },
+    });
+    render(
+      <Providers>
+        <Transactions
+          accountId={ACCOUNT_ID}
+          expectedVaultId="vault-1"
+          expectedSessionId={SESSION_1}
+          capabilities={CAPABILITIES}
+          initialSection="send"
+          initialAccount={0}
+          initialOrdinalAction={{
+            kind: 'ordinal_batch_transfer',
+            account: 0,
+            selections: selections.map((selection, index) => ({
+              ...selection,
+              presentation: { number: index + 1, preview: { kind: 'placeholder' } },
+            })),
+          }}
+          onNavigate={() => undefined}
+        />
+      </Providers>,
+    );
+    expect(await screen.findByRole('heading', { name: 'Send 2 inscriptions' }))
+      .toBeInTheDocument();
+    expect(screen.getByText('2 inscriptions to one address')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Recipient address'), {
+      target: { value: 'tb1pbatchdestination' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Review transaction' }));
+    await waitFor(() => expect(plans).toHaveLength(1));
+    expect(plans[0]).toMatchObject({
+      kind: 'ordinal_batch_transfer',
+      account: 0,
+      recipient: 'tb1pbatchdestination',
+      selections,
+    });
+    expect(JSON.stringify(plans[0])).not.toContain('presentation');
+    expect(JSON.stringify(plans[0])).not.toContain('rasterBase64');
+  });
+
   it('binds rescue and sweep plans to both stable and derivation account identity', async () => {
     const plans: unknown[] = [];
     installFakeChrome({
@@ -602,6 +661,7 @@ describe('transaction screen orchestration', () => {
             frozen: false,
             dustQuarantined: true,
             wrongLane: 'normal',
+            inscriptions: [],
             label: null,
           }],
           privacyNotes: [],
@@ -689,6 +749,7 @@ describe('transaction screen orchestration', () => {
     await screen.findByText('Protected');
     expect(screen.getByText(/place in Bitcoin history/iu)).toBeInTheDocument();
     expect(screen.getByText(/Frozen by you/iu)).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: /Inscription preview/iu })).not.toBeInTheDocument();
   });
 
   it('keeps protected coins collapsed and never prints a raw classification token', async () => {
@@ -716,6 +777,239 @@ describe('transaction screen orchestration', () => {
     expect(screen.queryByText(/runic_or_unsupported/u)).not.toBeInTheDocument();
     expect(screen.queryByText(/cardinal_clean/u)).not.toBeInTheDocument();
     expect(screen.getByText('Protected asset')).toBeInTheDocument();
+  });
+
+  it('loads a wrong-lane inscription thumbnail only after Protected opens', async () => {
+    const highId = `${'f'.repeat(64)}i0`;
+    const lowId = `${'b'.repeat(64)}i0`;
+    const previews = vi.fn((payload: unknown) => {
+      const request = payload as { items: Array<{ inscriptionId: string }> };
+      return { ok: true as const, result: { items: request.items.map(({ inscriptionId }) => ({
+        inscriptionId,
+        preview: {
+          kind: 'raster' as const,
+          rasterBase64: 'AA==',
+          pngSha256: 'e'.repeat(64),
+          pngWidth: 1,
+          pngHeight: 1,
+        },
+      })) } };
+    });
+    installFakeChrome({
+      'fees.quote': () => ({ ok: true, result: QUOTE }),
+      'utxo.list': () => ({
+        ok: true,
+        result: {
+          utxos: [utxoRow({
+            classification: 'mixed',
+            wrongLane: 'protected_wrong_address',
+            inscriptions: [
+              { inscriptionId: highId, satpoint: `${'a'.repeat(64)}:0:9` },
+              { inscriptionId: lowId, satpoint: `${'a'.repeat(64)}:0:2` },
+            ],
+          })],
+          privacyNotes: [],
+        },
+      }),
+      'activity.inscriptionPreviewBatch': previews,
+    });
+
+    render(view('utxos'));
+    const protectedSummary = await screen.findByText('Protected');
+    expect(previews).not.toHaveBeenCalled();
+    fireEvent.click(protectedSummary);
+
+    await waitFor(() => expect(previews).toHaveBeenCalledOnce());
+    expect(previews.mock.calls[0]?.[0]).toMatchObject({
+      items: [{ txid: 'a'.repeat(64), inscriptionId: lowId }],
+    });
+    const tileFrame = await screen.findByTitle('2 inscriptions on this coin') as HTMLIFrameElement;
+    fireEvent(window, new MessageEvent('message', { source: tileFrame.contentWindow, data: {
+      type: 'drey:inert-inscription-preview-ready', protocolVersion: 1, inscriptionId: lowId,
+    } }));
+    const preview = await screen.findByRole('button', {
+      name: 'Enlarge 2 inscriptions on this coin',
+    });
+    expect(preview)
+      .toHaveTextContent('+1');
+    fireEvent.click(preview);
+    const dialog = screen.getByRole('dialog', { name: '2 inscriptions on this coin' });
+    expect(dialog).toBeInTheDocument();
+    fireEvent.keyDown(dialog, { key: 'Tab' });
+    expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: '2 inscriptions on this coin' }))
+      .not.toBeInTheDocument();
+    expect(screen.getByText('Mixed contents')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Rescue inscription' })).toBeInTheDocument();
+    fireEvent.click(protectedSummary);
+    fireEvent.click(protectedSummary);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(previews).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a 31-coin Protected section idle and batches only its visible window', async () => {
+    const callbacks: IntersectionObserverCallback[] = [];
+    const observed: Element[] = [];
+    class FakeIntersectionObserver {
+      readonly root = null;
+      readonly rootMargin = '160px 0px';
+      readonly thresholds = [0];
+      constructor(callback: IntersectionObserverCallback) { callbacks.push(callback); }
+      observe(element: Element): void { observed.push(element); }
+      unobserve(): void {}
+      disconnect(): void {}
+      takeRecords(): IntersectionObserverEntry[] { return []; }
+    }
+    const original = globalThis.IntersectionObserver;
+    globalThis.IntersectionObserver =
+      FakeIntersectionObserver as unknown as typeof IntersectionObserver;
+    const batches: Array<Array<{ txid: string; inscriptionId: string }>> = [];
+    installFakeChrome({
+      'fees.quote': () => ({ ok: true, result: QUOTE }),
+      'utxo.list': () => ({
+        ok: true,
+        result: {
+          utxos: Array.from({ length: 31 }, (_, index) => {
+            const hex = index.toString(16).padStart(64, '0');
+            return utxoRow({
+              txid: hex,
+              vout: index,
+              reasons: ['not_cardinal_clean'],
+              inscriptions: [{ inscriptionId: `${hex}i0`, satpoint: `${hex}:${index}:0` }],
+            });
+          }),
+          privacyNotes: [],
+        },
+      }),
+      'activity.inscriptionPreviewBatch': (payload) => {
+        const items = (payload as { items: Array<{ txid: string; inscriptionId: string }> }).items;
+        batches.push(items);
+        return {
+          ok: true as const,
+          result: { items: items.map(({ inscriptionId }) => ({
+            inscriptionId,
+            preview: {
+              kind: 'text' as const,
+              textMime: 'text/plain' as const,
+              excerpt: 'signed text',
+              truncated: false,
+            },
+          })) },
+        };
+      },
+    });
+
+    try {
+      render(view('utxos'));
+      fireEvent.click(await screen.findByText('Protected'));
+      await waitFor(() => expect(observed).toHaveLength(31));
+      expect(batches).toHaveLength(0);
+
+      for (let index = 0; index < 10; index += 1) {
+        callbacks[index]?.([{
+          isIntersecting: true,
+          target: observed[index]!,
+        } as IntersectionObserverEntry], {} as IntersectionObserver);
+      }
+      await waitFor(() => expect(batches.flat()).toHaveLength(10));
+      expect(batches.map((batch) => batch.length)).toEqual([8, 2]);
+      expect(batches.flat().map(({ inscriptionId }) => inscriptionId))
+        .toEqual(Array.from({ length: 10 }, (_, index) =>
+          `${index.toString(16).padStart(64, '0')}i0`));
+      expect(await screen.findAllByText('Aa')).toHaveLength(10);
+      expect(screen.queryByText('signed text')).not.toBeInTheDocument();
+    } finally {
+      globalThis.IntersectionObserver = original;
+    }
+  });
+
+  it('keeps an unavailable inscription as a stable accessible fallback', async () => {
+    const inscriptionId = `${'d'.repeat(64)}i0`;
+    let attempts = 0;
+    installFakeChrome({
+      'fees.quote': () => ({ ok: true, result: QUOTE }),
+      'utxo.list': () => ({
+        ok: true,
+        result: {
+          utxos: [utxoRow({
+            wrongLane: 'protected_wrong_address',
+            inscriptions: [{
+              inscriptionId,
+              satpoint: `${'a'.repeat(64)}:0:0`,
+            }],
+          })],
+          privacyNotes: [],
+        },
+      }),
+      'activity.inscriptionPreviewBatch': () => {
+        attempts += 1;
+        return {
+          ok: true as const,
+          result: { items: [{
+            inscriptionId,
+            preview: attempts === 1
+              ? { kind: 'placeholder' as const, reason: 'decode_failed' as const }
+              : {
+                  kind: 'raster' as const,
+                  rasterBase64: 'AA==',
+                  pngSha256: 'e'.repeat(64),
+                  pngWidth: 1,
+                  pngHeight: 1,
+                },
+          }] },
+        };
+      },
+    });
+
+    render(view('utxos'));
+    fireEvent.click(await screen.findByText('Protected'));
+    expect(await screen.findByRole('button', { name: 'Inscription preview unavailable' }))
+      .toBeDisabled();
+    expect(screen.queryByText(/^Inscription$/u)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    const frame = await screen.findByTitle('Inscription preview') as HTMLIFrameElement;
+    fireEvent(window, new MessageEvent('message', { source: frame.contentWindow, data: {
+      type: 'drey:inert-inscription-preview-ready', protocolVersion: 1, inscriptionId,
+    } }));
+    expect(await screen.findByRole('button', { name: 'Enlarge Inscription preview' })).toBeEnabled();
+    expect(attempts).toBe(2);
+  });
+
+  it('reserves a calm loading tile until the signed preview settles', async () => {
+    const inscriptionId = `${'c'.repeat(64)}i0`;
+    let settle: ((value: unknown) => void) | undefined;
+    installFakeChrome({
+      'fees.quote': () => ({ ok: true, result: QUOTE }),
+      'utxo.list': () => ({
+        ok: true,
+        result: {
+          utxos: [utxoRow({
+            inscriptions: [{ inscriptionId, satpoint: `${'a'.repeat(64)}:0:0` }],
+          })],
+          privacyNotes: [],
+        },
+      }),
+      'activity.inscriptionPreviewBatch': () => new Promise((resolve) => { settle = resolve; }),
+    });
+
+    render(view('utxos'));
+    fireEvent.click(await screen.findByText('Protected'));
+    const loading = await screen.findByRole('button', { name: 'Loading inscription preview' });
+    expect(loading).toBeDisabled();
+    expect(loading).not.toHaveTextContent('INS');
+
+    settle?.({
+      ok: true,
+      result: { items: [{
+        inscriptionId,
+        preview: {
+          kind: 'text', textMime: 'text/plain', excerpt: 'signed text', truncated: false,
+        },
+      }] },
+    });
+    expect(await screen.findByRole('button', { name: 'Enlarge Inscription preview' }))
+      .toHaveTextContent('Aa');
   });
 
   it('distinguishes coins that share an amount and a derivation path', async () => {
@@ -976,6 +1270,7 @@ describe('transaction screen orchestration', () => {
         result: {
           kind: 'running', scanId: 'scan-1', unitsDone: 1, unitsTotal: 2,
           currentUnit: null, boundaryUnits: [], failureReason: null,
+          historyPartial: false,
         },
       }),
     });
@@ -1032,6 +1327,7 @@ describe('transaction screen orchestration', () => {
           result: {
             kind: 'completed', scanId: 'scan-1', unitsDone: 2, unitsTotal: 2,
             currentUnit: null, boundaryUnits: [], failureReason: null,
+            historyPartial: false,
           },
         };
       },
@@ -1100,6 +1396,8 @@ describe('transaction screen orchestration', () => {
             parentTxid: null,
             replacesTxid: null,
             recovering: false,
+            recommendedAcceleration: 'rbf',
+            accelerationUnavailableReason: null,
           }],
         },
       }),
@@ -1113,6 +1411,7 @@ describe('transaction screen orchestration', () => {
           currentUnit: null,
           boundaryUnits: [],
           failureReason: null,
+          historyPartial: false,
         },
       }),
     });
@@ -1136,7 +1435,7 @@ describe('transaction screen orchestration', () => {
     expect(sentSummary).toHaveTextContent('234 sats network fee');
     fireEvent.click(sentSummary!);
     expect(screen.getByRole('button', { name: 'Speed up with RBF' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Speed up with CPFP' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Speed up with CPFP' })).not.toBeInTheDocument();
     expect(screen.queryByText('Your transaction history will appear here.'))
       .not.toBeInTheDocument();
     expect(screen.getAllByRole('link', { name: 'View transaction on mempool.space' }))
@@ -1177,6 +1476,7 @@ describe('transaction screen orchestration', () => {
           currentUnit: null,
           boundaryUnits: [],
           failureReason: null,
+          historyPartial: false,
         },
       }),
     });
@@ -1219,6 +1519,7 @@ describe('transaction screen orchestration', () => {
       result: {
         kind: 'running', scanId: 'scan-1', unitsDone: 1, unitsTotal: 2,
         currentUnit: null, boundaryUnits: [], failureReason: null,
+        historyPartial: false,
       },
     });
     await act(async () => Promise.resolve());
@@ -1292,6 +1593,7 @@ describe('transaction screen orchestration', () => {
         result: {
           kind: 'completed', scanId: 'scan-1', unitsDone: 2, unitsTotal: 2,
           currentUnit: null, boundaryUnits: [], failureReason: null,
+          historyPartial: false,
         },
       }),
       'scan.start': () => {
@@ -1325,6 +1627,7 @@ describe('transaction screen orchestration', () => {
           }],
           nextCursor: null,
           reset: false,
+          historyComplete: true,
         },
       }),
     });
@@ -1550,6 +1853,128 @@ describe('transaction screen orchestration', () => {
     expect(screen.getByText('1,000 sats')).toBeInTheDocument();
     expect(screen.getByText('tb1qdestination')).toHaveAttribute('title', 'tb1qdestination');
     expect(screen.getByRole('button', { name: 'Done' })).toBeInTheDocument();
+  });
+
+  it('shows current collectible bitcoin and removes the fee-only keep-current choice', async () => {
+    const plans: unknown[] = [];
+    const sourceTxid = '8'.repeat(64);
+    const inscriptionId = `${'9'.repeat(64)}i0`;
+    installFakeChrome({
+      'fees.quote': () => ({ ok: true, result: QUOTE }),
+      'utxo.list': () => ({
+        ok: true,
+        result: {
+          utxos: [utxoRow({
+            txid: sourceTxid,
+            vout: 2,
+            valueSats: '81252',
+            effectiveValueSats: '81186',
+            lane: 'ordinals',
+            path: "m/86'/0'/0'/0/2",
+            reasons: ['reserved_ordinals_lane'],
+            inscriptions: [{ inscriptionId, satpoint: `${sourceTxid}:2:0` }],
+          })],
+          privacyNotes: [],
+        },
+      }),
+      'transaction.plan': (payload) => {
+        plans.push(payload);
+        return { ok: false, code: 'ERR_INTERNAL' };
+      },
+    });
+
+    render(
+      <Providers>
+        <Transactions
+          accountId={ACCOUNT_ID}
+          expectedVaultId="vault-1"
+          expectedSessionId={SESSION_1}
+          capabilities={CAPABILITIES}
+          initialSection="send"
+          initialOrdinalAction={{
+            kind: 'ordinal_postage_manage',
+            account: 0,
+            selection: {
+              inscriptionId,
+              outpoint: { txid: sourceTxid, vout: 2 },
+              satpoint: `${sourceTxid}:2:0`,
+              classificationRevision: 'rev-postage',
+            },
+          }}
+          onNavigate={() => undefined}
+        />
+      </Providers>,
+    );
+
+    expect(await screen.findByText(
+      'Currently with this collectible: 81,252 sats',
+    )).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Minimum — 330 sats' })).toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'Keep current amount' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Minimum — 330 sats' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review transaction' }));
+    await waitFor(() => expect(plans).toHaveLength(1));
+    expect(plans[0]).toMatchObject({
+      kind: 'ordinal_postage_manage',
+      target: { type: 'minimum_standard' },
+    });
+  });
+
+  it('explains when recovering collectible bitcoin would cost at least as much as it returns', async () => {
+    const sourceTxid = '7'.repeat(64);
+    const inscriptionId = `${'6'.repeat(64)}i0`;
+    installFakeChrome({
+      'fees.quote': () => ({ ok: true, result: QUOTE }),
+      'utxo.list': () => ({
+        ok: true,
+        result: {
+          utxos: [utxoRow({
+            txid: sourceTxid,
+            vout: 0,
+            valueSats: '700',
+            effectiveValueSats: '634',
+            lane: 'ordinals',
+            path: "m/86'/0'/0'/0/3",
+            reasons: ['reserved_ordinals_lane'],
+            inscriptions: [{ inscriptionId, satpoint: `${sourceTxid}:0:0` }],
+          })],
+          privacyNotes: [],
+        },
+      }),
+      'transaction.plan': () => ({ ok: false, code: 'ERR_NO_SWEEPABLE_EXCESS' }),
+    });
+
+    render(
+      <Providers>
+        <Transactions
+          accountId={ACCOUNT_ID}
+          expectedVaultId="vault-1"
+          expectedSessionId={SESSION_1}
+          capabilities={CAPABILITIES}
+          initialSection="send"
+          initialOrdinalAction={{
+            kind: 'ordinal_postage_manage',
+            account: 0,
+            selection: {
+              inscriptionId,
+              outpoint: { txid: sourceTxid, vout: 0 },
+              satpoint: `${sourceTxid}:0:0`,
+              classificationRevision: 'rev-postage',
+            },
+          }}
+          onNavigate={() => undefined}
+        />
+      </Providers>,
+    );
+
+    await screen.findByText('Currently with this collectible: 700 sats');
+    fireEvent.click(screen.getByRole('button', { name: 'Review transaction' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /network fee is at least the bitcoin that would be recovered/iu,
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent(/choose a lower amount to keep/iu);
+    expect(screen.queryByText(/something went wrong/iu)).toBeNull();
   });
 
   it('keeps custom fees available when estimates fail and recovers presets with one retry', async () => {

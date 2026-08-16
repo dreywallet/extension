@@ -5,12 +5,16 @@ import {
   type ReactNode,
   type SyntheticEvent,
 } from 'react';
-import type { ActivityInscriptionPreviewResult, WalletHomeResult } from '@drey/core/messaging/ops';
+import type { WalletHomeResult } from '@drey/core/messaging/ops';
 import { mempoolTransactionUrl } from '@drey/core/domain/explorer';
 import { isSessionStateChangedEvent } from '@drey/core/messaging/events';
 import { satsToBtcDecimal } from '@drey/core/domain/sats';
 import type { ActiveSessionExpectation } from '../hooks/use-session';
-import { useRpc } from '../hooks/use-rpc';
+import {
+  alignInscriptionThumbnailScope,
+  clearInscriptionThumbnailStore,
+  useInscriptionThumbnail,
+} from '../hooks/use-inscription-thumbnail';
 import { useI18n } from '../i18n';
 import { useActivityUnit, usePortfolioPrivacy } from '../UiRoot';
 import { ActivityGlyph } from './ActivityGlyph';
@@ -23,7 +27,6 @@ import {
 } from './activity-presentation';
 import styles from './ActivityList.module.css';
 
-type ActivityRpc = ReturnType<typeof useRpc>;
 type ActivityVariant = 'compact' | 'standard' | 'comfortable';
 export type ActivityTone = 'muted' | 'warning' | 'danger';
 
@@ -41,152 +44,9 @@ export type ActivityInteraction =
       renderDetails: (item: ActivityItem, presentation: ActivityPresentation) => ReactNode;
     };
 
-interface PreviewQueueEntry {
-  key: string;
-  scope: string;
-  txid: string;
-  inscriptionId: string;
-  accountId: string;
-  expectation: ActiveSessionExpectation;
-  rpc: ActivityRpc;
-}
-
-const ACTIVITY_PREVIEW_CACHE_MAX = 64;
-const previewStore = new Map<string, ActivityInscriptionPreviewResult>();
-const previewQueue = new Map<string, PreviewQueueEntry>();
-const previewRetryCounts = new Map<string, number>();
-const previewRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const previewInFlightKeys = new Set<string>();
-const previewSubscribers = new Set<() => void>();
-let previewBatchInFlight: Promise<void> | null = null;
-let previewEpoch = 0;
-let previewScope = '';
-
-function previewKey(scope: string, txid: string, inscriptionId: string): string {
-  return `${scope}:${txid}:${inscriptionId}`;
-}
-
-function notifyPreviewSubscribers(): void {
-  for (const subscriber of previewSubscribers) subscriber();
-}
-
-function cacheActivityPreview(
-  entry: PreviewQueueEntry,
-  result: ActivityInscriptionPreviewResult,
-): void {
-  if (result.preview.kind !== 'raster') return;
-  previewStore.delete(entry.key);
-  previewStore.set(entry.key, result);
-  while (previewStore.size > ACTIVITY_PREVIEW_CACHE_MAX) {
-    const oldest = previewStore.keys().next().value as string | undefined;
-    if (oldest === undefined) break;
-    previewStore.delete(oldest);
-  }
-}
-
-function scheduleActivityPreviewRetry(entry: PreviewQueueEntry): void {
-  if (previewStore.has(entry.key) || previewRetryTimers.has(entry.key)) return;
-  const retries = previewRetryCounts.get(entry.key) ?? 0;
-  if (retries >= 2) return;
-  previewRetryCounts.set(entry.key, retries + 1);
-  previewRetryTimers.set(entry.key, setTimeout(() => {
-    previewRetryTimers.delete(entry.key);
-    if (!previewStore.has(entry.key) && !previewInFlightKeys.has(entry.key)) {
-      previewQueue.set(entry.key, entry);
-      drainPreviewQueue();
-    }
-  }, 1_500));
-}
-
-function drainPreviewQueue(): void {
-  if (previewBatchInFlight !== null || previewQueue.size === 0) return;
-  const first = previewQueue.values().next().value as PreviewQueueEntry | undefined;
-  if (first === undefined) return;
-  const entries: PreviewQueueEntry[] = [];
-  const inscriptionIds = new Set<string>();
-  for (const entry of previewQueue.values()) {
-    if (entry.scope !== first.scope || inscriptionIds.has(entry.inscriptionId)) continue;
-    entries.push(entry);
-    inscriptionIds.add(entry.inscriptionId);
-    if (entries.length === 8) break;
-  }
-  for (const entry of entries) {
-    previewQueue.delete(entry.key);
-    previewInFlightKeys.add(entry.key);
-  }
-  const requestEpoch = previewEpoch;
-  previewBatchInFlight = first.rpc('activity.inscriptionPreviewBatch', {
-    items: entries.map(({ txid, inscriptionId }) => ({ txid, inscriptionId })),
-    accountId: first.accountId,
-    ...first.expectation,
-  })
-    .then((response) => {
-      if (requestEpoch !== previewEpoch) return;
-      if (!response.ok) {
-        if (response.code !== 'ERR_UNAUTHORIZED_CONTEXT') {
-          for (const entry of entries) scheduleActivityPreviewRetry(entry);
-        }
-        return;
-      }
-      const resolvedKeys = new Set<string>();
-      for (const result of response.result.items) {
-        const entry = entries.find((candidate) => candidate.inscriptionId === result.inscriptionId);
-        if (entry === undefined) continue;
-        resolvedKeys.add(entry.key);
-        if (result.preview.kind === 'raster') {
-          cacheActivityPreview(entry, result);
-          previewRetryCounts.delete(entry.key);
-          continue;
-        }
-        scheduleActivityPreviewRetry(entry);
-      }
-      for (const entry of entries) {
-        if (!resolvedKeys.has(entry.key)) scheduleActivityPreviewRetry(entry);
-      }
-    })
-    .catch(() => {
-      if (requestEpoch !== previewEpoch) return;
-      for (const entry of entries) scheduleActivityPreviewRetry(entry);
-    })
-    .finally(() => {
-      for (const entry of entries) previewInFlightKeys.delete(entry.key);
-      previewBatchInFlight = null;
-      notifyPreviewSubscribers();
-      drainPreviewQueue();
-    });
-}
-
-function enqueueActivityPreview(entry: PreviewQueueEntry): void {
-  if (previewStore.has(entry.key) || previewQueue.has(entry.key) ||
-      previewInFlightKeys.has(entry.key)) return;
-  previewQueue.set(entry.key, entry);
-  queueMicrotask(drainPreviewQueue);
-}
-
-function resetActivityPreviewStore(notify: boolean): void {
-  previewEpoch += 1;
-  previewStore.clear();
-  previewQueue.clear();
-  previewInFlightKeys.clear();
-  previewRetryCounts.clear();
-  for (const timer of previewRetryTimers.values()) clearTimeout(timer);
-  previewRetryTimers.clear();
-  previewScope = '';
-  if (notify) notifyPreviewSubscribers();
-}
-
 /** Drop every cached thumbnail and queued retry on lock. */
 export function clearActivityPreviewStore(): void {
-  resetActivityPreviewStore(true);
-}
-
-function alignActivityPreviewScope(scope: string): void {
-  if (scope === previewScope) return;
-  // The synchronous reset makes stale paint unreadable in the first render of
-  // a new account. The store is document-local and the new scope is part of
-  // every cache key as a second boundary.
-  resetActivityPreviewStore(false);
-  previewScope = scope;
+  clearInscriptionThumbnailStore();
 }
 
 function sandboxUrl(): string {
@@ -202,43 +62,16 @@ function ActivityInscriptionVisual(props: {
   accountId: string;
   item: ActivityItem;
 }): ReactNode {
-  const rpc = useRpc();
   const { t } = useI18n();
-  const inscriptionId = props.item.inscriptionId;
-  const txid = props.item.txid;
-  const key = inscriptionId == null ? null : previewKey(props.scope, txid, inscriptionId);
-  const [node, setNode] = useState<HTMLElement | null>(null);
-  const [, setGeneration] = useState(0);
-  useEffect(() => {
-    const subscriber = (): void => setGeneration((current) => current + 1);
-    previewSubscribers.add(subscriber);
-    return () => {
-      previewSubscribers.delete(subscriber);
-    };
-  }, []);
-  useEffect(() => {
-    if (node === null || inscriptionId == null || key === null) return;
-    const enqueue = (): void => enqueueActivityPreview({
-      key,
-      scope: props.scope,
-      txid,
-      inscriptionId,
-      accountId: props.accountId,
-      expectation: props.expectation,
-      rpc,
-    });
-    if (typeof IntersectionObserver === 'undefined') {
-      enqueue();
-      return;
-    }
-    const observer = new IntersectionObserver((entries) => {
-      if (entries.some((entry) => entry.isIntersecting)) enqueue();
-    }, { rootMargin: '160px 0px' });
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [inscriptionId, key, node, props.accountId, props.expectation, props.scope, rpc, txid]);
-  const result = key === null ? null : previewStore.get(key) ?? null;
-  const preview = result?.preview;
+  // The parent renders this component only for an inscription presentation.
+  const inscriptionId = props.item.inscriptionId!;
+  const { preview, setNode } = useInscriptionThumbnail({
+    scope: props.scope,
+    expectation: props.expectation,
+    accountId: props.accountId,
+    txid: props.item.txid,
+    inscriptionId,
+  });
   const message = useMemo(() => preview?.kind === 'raster' && inscriptionId != null
     ? {
         type: 'drey:inert-inscription-preview',
@@ -268,7 +101,7 @@ function ActivityInscriptionVisual(props: {
       sandbox="allow-scripts"
       src={sandboxUrl()}
       tabIndex={-1}
-      title={t('inscription.preview.iframe', { inscriptionId: inscriptionId ?? '' })}
+      title={t('inscription.preview.iframe', { inscriptionId })}
     />
   );
 }
@@ -293,7 +126,7 @@ export function ActivityList(props: {
     props.expectation.expectedSessionId,
     props.accountId,
   ].join(':');
-  alignActivityPreviewScope(scope);
+  alignInscriptionThumbnailScope(scope);
   const [generation, setGeneration] = useState(0);
 
   useEffect(() => {

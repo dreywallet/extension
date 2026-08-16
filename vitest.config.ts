@@ -33,6 +33,9 @@ export default defineConfig({
     },
   },
   test: {
+    // Keep CPU-heavy signing cases from starving Vitest's worker-reporting
+    // channel on shared release runners.
+    maxWorkers: 4,
     // @drey/core ships raw TypeScript source; vitest externalizes node_modules
     // by default and Node cannot execute the .ts files, so inline the package.
     server: { deps: { inline: [/@drey\/core/] } },

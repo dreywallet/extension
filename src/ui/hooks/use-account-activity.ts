@@ -16,6 +16,7 @@ type LoadState = 'loading' | 'ready' | 'error';
 interface StoredActivityPage {
   items: ActivityItems;
   nextCursor: ActivityCursor | null;
+  historyComplete: boolean;
 }
 
 const store = new Map<string, StoredActivityPage>();
@@ -36,6 +37,7 @@ export function useAccountActivity(
   refreshing: boolean;
   pageError: boolean;
   updated: boolean;
+  historyComplete: boolean;
   loadOlder: () => void;
   refresh: () => void;
 } {
@@ -53,6 +55,7 @@ export function useAccountActivity(
   const [refreshing, setRefreshing] = useState(false);
   const [pageError, setPageError] = useState(false);
   const [updated, setUpdated] = useState(false);
+  const [historyComplete, setHistoryComplete] = useState(seeded?.historyComplete ?? true);
   const scopeKey = useRef(key);
   const generation = useRef(0);
   const inFlight = useRef(false);
@@ -94,9 +97,14 @@ export function useAccountActivity(
           : [...(current ?? []), ...response.result.items.filter(
               (item) => !(current ?? []).some((existing) => existing.txid === item.txid),
             )];
-        store.set(key, { items: nextItems, nextCursor: response.result.nextCursor });
+        store.set(key, {
+          items: nextItems,
+          nextCursor: response.result.nextCursor,
+          historyComplete: response.result.historyComplete,
+        });
         return nextItems;
       });
+      setHistoryComplete(response.result.historyComplete);
       setNextCursor(response.result.nextCursor);
       setUpdated(response.result.reset);
       setLoadState('ready');
@@ -134,6 +142,7 @@ export function useAccountActivity(
     setRefreshing(false);
     setPageError(false);
     setUpdated(false);
+    setHistoryComplete(current?.historyComplete ?? true);
     if (enabled) requestRef.current('replace', null);
 
     const onMessage = (message: unknown): void => {
@@ -150,6 +159,7 @@ export function useAccountActivity(
           setRefreshing(false);
           setPageError(false);
           setUpdated(false);
+          setHistoryComplete(true);
         }
         return;
       }
@@ -180,6 +190,7 @@ export function useAccountActivity(
     refreshing,
     pageError,
     updated,
+    historyComplete,
     loadOlder,
     refresh,
   };

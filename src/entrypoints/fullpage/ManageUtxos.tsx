@@ -11,7 +11,7 @@
  * feeds rather than above the list, because its only effect on the list is
  * which rows count as uneconomic.
  */
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import type { OpResult } from '../../adapters/rpc-client';
 import { Button } from '../../ui/components/Button';
 import { useI18n } from '../../ui/i18n';
@@ -24,6 +24,7 @@ import type { UtxoLabel } from '@drey/core/domain/classification/labels';
 import { UtxoGroup } from './UtxoGroup';
 import { UtxoRow } from './UtxoRow';
 import styles from './fullpage.module.css';
+import type { ActiveSessionExpectation } from '../../ui/hooks/use-session';
 
 type Utxo = OpResult<'utxo.list'>['utxos'][number];
 
@@ -45,9 +46,13 @@ export interface ManageUtxosProps {
   onSelectedChange: (next: Set<string>) => void;
   lang: string;
   busy: boolean;
+  expectation: ActiveSessionExpectation;
+  accountId: string;
   feeChooser: ReactNode;
+  consolidationSuggestionEnabled: boolean;
   onRefresh: () => void;
   onConsolidate: () => void;
+  onConsolidateSuggested: (utxos: Utxo[]) => void;
   onFreeze: (utxo: Utxo) => void;
   onSetLabel: (utxo: Utxo, label: UtxoLabel | null) => void | Promise<void>;
   onRescue: (utxo: Utxo) => void;
@@ -56,10 +61,12 @@ export interface ManageUtxosProps {
 
 export function ManageUtxos(props: ManageUtxosProps): React.ReactElement {
   const { t } = useI18n();
+  const [consolidationSuggestionDismissed, setConsolidationSuggestionDismissed] = useState(false);
   const { utxos, selected } = props;
   const loading = utxos === null;
   const rows = utxos ?? [];
   const groups = groupUtxos(rows);
+  const previewScope = `${props.expectation.expectedVaultId}:${props.expectation.expectedSessionId}:${props.accountId}`;
 
   // Eligible *and* reachable from the current account. Select All used to take
   // every eligible coin in the wallet, which in a multi-account wallet built a
@@ -73,6 +80,11 @@ export function ManageUtxos(props: ManageUtxosProps): React.ReactElement {
   const selectedUtxos = rows.filter((utxo) => selected.has(outpointKeyOf(utxo)));
   const selectedTotal = totalSats(selectedUtxos);
   const canConsolidate = selected.size >= MIN_CONSOLIDATION_INPUTS && !props.busy;
+  const suggestedCoins = selectable.filter((utxo) =>
+    utxo.classification === 'cardinal_clean' && !utxo.frozen && !utxo.dustQuarantined);
+  const showConsolidationSuggestion = props.consolidationSuggestionEnabled &&
+    !consolidationSuggestionDismissed &&
+    selected.size === 0 && suggestedCoins.length >= MIN_CONSOLIDATION_INPUTS;
 
   // One banner, not one line per row: staleness is a wallet-wide condition that
   // resolves on its own, so repeating it per coin reads as a stuck wallet.
@@ -116,6 +128,24 @@ export function ManageUtxos(props: ManageUtxosProps): React.ReactElement {
         <p className={styles['rowLabel']}>{t('utxos.privacy.note.stableReceiveAddress')}</p>
       ) : null}
 
+      {showConsolidationSuggestion ? (
+        <aside className={styles['advisory']}>
+          <strong>{t('utxos.suggestion.title')}</strong>
+          <p>{t('utxos.suggestion.body', { count: suggestedCoins.length })}</p>
+          <div className={styles['row']}>
+            <Button
+              variant="secondary"
+              onClick={() => props.onConsolidateSuggested(suggestedCoins)}
+            >
+              {t('utxos.suggestion.review')}
+            </Button>
+            <Button variant="ghost" onClick={() => setConsolidationSuggestionDismissed(true)}>
+              {t('common.dismiss')}
+            </Button>
+          </div>
+        </aside>
+      ) : null}
+
       {rows.length === 0
         ? <p className={styles['rowLabel']}>{t('utxos.empty')}</p>
         : null}
@@ -130,7 +160,7 @@ export function ManageUtxos(props: ManageUtxosProps): React.ReactElement {
           allSelected={allSelectableSelected}
           onToggleAll={group.key === 'available' ? toggleAll : undefined}
         >
-          {group.utxos.map((utxo) => {
+          {(open) => group.utxos.map((utxo) => {
             const key = outpointKeyOf(utxo);
             return (
               <UtxoRow
@@ -140,6 +170,10 @@ export function ManageUtxos(props: ManageUtxosProps): React.ReactElement {
                 lang={props.lang}
                 selected={selected.has(key)}
                 selectable={isSelectable(utxo)}
+                previewEnabled={open}
+                previewScope={previewScope}
+                expectation={props.expectation}
+                accountId={props.accountId}
                 onToggleSelect={(checked) => { toggleOne(key, checked); }}
                 onFreeze={() => { props.onFreeze(utxo); }}
                 onRescue={() => { props.onRescue(utxo); }}

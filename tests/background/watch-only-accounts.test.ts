@@ -194,6 +194,7 @@ describe('descriptor-backed watch-only accounts', () => {
       .rejects.toMatchObject({ code: 'ERR_UNSAFE_TRANSACTION' });
     await expect(restarted.verifyBackup({
       words: [{ index: 0, word: 'abandon' }],
+      wordCount: 12,
       ...expectation,
     })).rejects.toMatchObject({ code: 'ERR_UNSAFE_TRANSACTION' });
     await expect(restarted.addAccount(expectation))

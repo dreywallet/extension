@@ -109,7 +109,13 @@
 }
 
 .compactReview .group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   padding: var(--space-2);
+}
+
+.compactReview .groupHeading {
+  grid-column: 1 / -1;
 }
 
 .compactReview .card {
@@ -117,5 +123,13 @@
 }
 
 .compactReview .preview {
-  height: min(10rem, 42vw);
+  aspect-ratio: 1;
+  height: auto;
+}
+
+.viewAll {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  min-height: 2.75rem;
 }

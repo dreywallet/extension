@@ -34,6 +34,15 @@
   min-width: 7rem;
 }
 
+.heading .selectionModeButton {
+  min-width: 4.5rem;
+}
+
+.headingActions {
+  display: flex;
+  gap: var(--space-2);
+}
+
 .filters {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -216,6 +225,87 @@
   flex-direction: column;
   gap: var(--space-2);
   padding: var(--space-3);
+  position: relative;
+}
+
+.card[data-selected='true'] {
+  border-color: var(--color-accent);
+  box-shadow: inset 0 0 0 1px var(--color-accent);
+}
+
+.selectionToggle {
+  align-items: center;
+  align-self: flex-end;
+  background: var(--color-bg);
+  border: 2px solid var(--color-border);
+  border-radius: 50%;
+  color: var(--color-text);
+  display: flex;
+  height: 2rem;
+  justify-content: center;
+  min-height: 2rem;
+  padding: 0;
+  position: absolute;
+  right: var(--space-2);
+  top: var(--space-2);
+  width: 2rem;
+  z-index: 2;
+}
+
+.selectionToggle[aria-pressed='true'] {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-on-accent);
+}
+
+.selectionToggle:focus-visible {
+  outline: 3px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.selectionBlocked {
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+
+.selectionFooter {
+  background: var(--color-bg);
+  border-top: 2px solid var(--color-border);
+  bottom: calc(-1 * var(--space-3));
+  display: grid;
+  gap: var(--space-2);
+  margin: 0 calc(-1 * var(--space-3));
+  padding: var(--space-3);
+  position: sticky;
+  z-index: 3;
+}
+
+.selectionFooter p {
+  font-size: var(--text-xs);
+  margin: 0;
+}
+
+.selectionDialog {
+  background: var(--color-bg);
+  border: 2px solid var(--color-border);
+  box-shadow: 0 .75rem 2rem rgb(0 0 0 / 45%);
+  box-sizing: border-box;
+  display: grid;
+  gap: var(--space-3);
+  margin: auto;
+  max-height: calc(100% - 2 * var(--space-3));
+  max-width: calc(100% - 2 * var(--space-3));
+  padding: var(--space-4);
+  width: 24rem;
+  z-index: 6;
+}
+
+.selectionDialog::backdrop {
+  background: rgb(0 0 0 / 55%);
+}
+
+.selectionDialog p {
+  margin: 0;
 }
 
 .itemTitle {
@@ -448,4 +538,9 @@
   max-height: 45%;
   overflow-y: auto;
   padding-top: var(--space-3);
+}
+
+.viewerPostageAction {
+  margin-bottom: var(--space-3);
+  width: 100%;
 }

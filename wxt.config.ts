@@ -41,6 +41,17 @@ function revision(directory: string): string {
   return execFileSync('git', ['-C', directory, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
 }
 
+function optionalRevision(directory: string): string | null {
+  try {
+    return execFileSync('git', ['-C', directory, 'rev-parse', 'HEAD'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
 export default defineConfig({
   srcDir: 'src',
   // Every packaged channel has a dedicated output root supplied by its package
@@ -119,6 +130,9 @@ export default defineConfig({
   hooks: {
     'build:done': async (wxt) => {
       const channel = resolveBuildChannel(wxt.config.mode);
+      const workspaceRevision = optionalRevision(workspaceRoot);
+      const gatewayRoot = join(workspaceRoot, 'gateway');
+      const gatewayRevision = optionalRevision(gatewayRoot);
       if (channel.channel === 'preview') {
         await cp(
           fileURLToPath(new URL('./src/build/icon-beta', import.meta.url)),
@@ -132,20 +146,26 @@ export default defineConfig({
         schemaVersion: 2,
         ...channel,
         sourceBinding: {
-          workspaceRevision: revision(workspaceRoot),
-          workspaceContentDigest: treeDigest(
-            workspaceRoot,
-            // The sibling repositories bound by their own revision/digest pairs
-            // (extension, gateway) are excluded, as is the mobile repository:
-            // it never contributes to extension artifacts, and its untracked
-            // CocoaPods install contains framework directory symlinks that are
-            // machine-specific and unreadable by the digest walk.
-            new Set([...ignoredDigestNames, 'extension', 'gateway', 'mobile']),
-          ),
+          // Public mirror clones intentionally lack the private coordination
+          // repository and gateway sibling. An inspectable build records that
+          // absence explicitly; production packaging still requires exact,
+          // non-null revisions and content digests from the private workspace.
+          workspaceRevision,
+          workspaceContentDigest: workspaceRevision === null
+            ? null
+            : treeDigest(
+                workspaceRoot,
+                // The sibling repositories bound by their own revision/digest pairs
+                // (extension, gateway) are excluded, as is the mobile repository:
+                // it never contributes to extension artifacts, and its untracked
+                // CocoaPods install contains framework directory symlinks that are
+                // machine-specific and unreadable by the digest walk.
+                new Set([...ignoredDigestNames, 'extension', 'gateway', 'mobile']),
+              ),
           extensionRevision: revision(extensionRoot),
           extensionContentDigest: treeDigest(extensionRoot),
-          gatewayRevision: revision(join(workspaceRoot, 'gateway')),
-          gatewayContentDigest: treeDigest(join(workspaceRoot, 'gateway')),
+          gatewayRevision,
+          gatewayContentDigest: gatewayRevision === null ? null : treeDigest(gatewayRoot),
           lockfileSha256: createHash('sha256')
             .update(readFileSync(join(extensionRoot, 'pnpm-lock.yaml')))
             .digest('hex'),

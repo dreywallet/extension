@@ -33,6 +33,13 @@ import styles from './Gallery.module.css';
 type GalleryItem = GalleryViewResult['items'][number];
 type Filter = 'visible' | 'hidden';
 
+function batchSelectable(item: GalleryItem): boolean {
+  return item.action.kind === 'send' && (
+    item.action.status === 'available' ||
+    (item.action.status === 'blocked' && item.action.reason === 'co_located')
+  );
+}
+
 function sandboxUrl(page: 'inscription-preview.html' | 'inscription-media.html'): string {
   return chrome.runtime.getURL(page);
 }
@@ -97,6 +104,7 @@ function LazyCard(props: {
   inscriptionId: string;
   needsRaster: boolean;
   onNeedRaster: (inscriptionId: string) => void;
+  selected?: boolean | undefined;
   children: ReactNode;
 }): ReactNode {
   const ref = useRef<HTMLElement | null>(null);
@@ -119,6 +127,7 @@ function LazyCard(props: {
   return <article
     className={styles['card']}
     data-gallery-inscription={props.inscriptionId}
+    data-selected={props.selected === true ? 'true' : undefined}
     ref={ref}
   >{props.children}</article>;
 }
@@ -283,7 +292,12 @@ export function Gallery(props: {
   const rpc = useRpc();
   const { t, lang } = useI18n();
   const recoveredNoticeTitleId = useId();
+  const sameSatDialogTitleId = useId();
   const firstGalleryTabRef = useRef<HTMLButtonElement>(null);
+  const sameSatDialogRef = useRef<HTMLDialogElement>(null);
+  const sameSatCancelRef = useRef<HTMLButtonElement>(null);
+  const sameSatOpenerRef = useRef<HTMLElement | null>(null);
+  const sameSatWasOpenRef = useRef(false);
   const viewerDialogRef = useRef<HTMLDialogElement>(null);
   const viewerCloseRef = useRef<HTMLButtonElement>(null);
   const viewerOpenerRef = useRef<HTMLElement | null>(null);
@@ -315,6 +329,16 @@ export function Gallery(props: {
   const countsKnown = result !== null;
   const [filter, setFilter] = useState<Filter>('visible');
   const [selectedGroupKey, setSelectedGroupKey] = useState<string | null>(null);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedInscriptionIds, setSelectedInscriptionIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [selectedBindings, setSelectedBindings] = useState<Map<string, {
+    outpoint: { txid: string; vout: number };
+    satpoint: string;
+    classificationRevision: string;
+  }>>(() => new Map());
+  const [pendingSameSat, setPendingSameSat] = useState<GalleryItem[] | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [recoveredNotice, setRecoveredNotice] = useState<{
     vaultId: string;
@@ -432,7 +456,32 @@ export function Gallery(props: {
 
   useEffect(() => {
     setSelectedGroupKey(null);
+    setSelectionMode(false);
+    setSelectedInscriptionIds(new Set());
+    setSelectedBindings(new Map());
+    setPendingSameSat(null);
   }, [expectedSessionId, expectedVaultId, props.accountId]);
+
+  useEffect(() => {
+    if (pendingSameSat !== null) {
+      sameSatWasOpenRef.current = true;
+      const dialog = sameSatDialogRef.current;
+      if (dialog && !dialog.open) {
+        if (typeof dialog.showModal === 'function') dialog.showModal();
+        else dialog.setAttribute('open', '');
+      }
+      sameSatCancelRef.current?.focus();
+      return;
+    }
+    if (!sameSatWasOpenRef.current) return;
+    sameSatWasOpenRef.current = false;
+    const opener = sameSatOpenerRef.current;
+    sameSatOpenerRef.current = null;
+    queueMicrotask(() => {
+      if (opener?.isConnected) opener.focus();
+      else firstGalleryTabRef.current?.focus();
+    });
+  }, [pendingSameSat]);
 
   useEffect(() => {
     if (selectedGroupKey !== null && selectedGroup === null) setSelectedGroupKey(null);
@@ -537,6 +586,165 @@ export function Gallery(props: {
     if (reason === 'unverifiable_location') return t('gallery.action.reason.unverifiableLocation');
     return t('gallery.action.reason.lane');
   };
+  const itemsById = useMemo(
+    () => new Map((result?.items ?? []).map((item) => [item.inscriptionId, item])),
+    [result],
+  );
+  const itemsBySatpoint = useMemo(() => {
+    const grouped = new Map<string, GalleryItem[]>();
+    for (const item of result?.items ?? []) {
+      const existing = grouped.get(item.satpoint);
+      if (existing) existing.push(item);
+      else grouped.set(item.satpoint, [item]);
+    }
+    return grouped;
+  }, [result]);
+  const itemsByOutpoint = useMemo(() => {
+    const grouped = new Map<string, GalleryItem[]>();
+    for (const item of result?.items ?? []) {
+      const key = `${item.outpoint.txid}:${item.outpoint.vout}`;
+      const existing = grouped.get(key);
+      if (existing) existing.push(item);
+      else grouped.set(key, [item]);
+    }
+    return grouped;
+  }, [result]);
+  const selectedItems = useMemo(() => [...selectedInscriptionIds]
+    .map((inscriptionId) => itemsById.get(inscriptionId))
+    .filter((item): item is GalleryItem => item !== undefined),
+  [itemsById, selectedInscriptionIds]);
+  const selectionBindingChanged = useMemo(() =>
+    selectedInscriptionIds.size !== selectedItems.length || selectedItems.some((item) => {
+      const bound = selectedBindings.get(item.inscriptionId);
+      return bound === undefined || bound.satpoint !== item.satpoint ||
+        bound.outpoint.txid !== item.outpoint.txid || bound.outpoint.vout !== item.outpoint.vout ||
+        bound.classificationRevision !== item.classificationRevision;
+    }), [selectedBindings, selectedInscriptionIds, selectedItems]);
+  const missingSourceCompanions = useMemo(() => {
+    const missing = new Map<string, GalleryItem>();
+    for (const selectedItem of selectedItems) {
+      const key = `${selectedItem.outpoint.txid}:${selectedItem.outpoint.vout}`;
+      for (const companion of itemsByOutpoint.get(key) ?? []) {
+        if (!selectedInscriptionIds.has(companion.inscriptionId)) {
+          missing.set(companion.inscriptionId, companion);
+        }
+      }
+    }
+    return [...missing.values()];
+  }, [itemsByOutpoint, selectedInscriptionIds, selectedItems]);
+  const cancelSelection = useCallback(() => {
+    setSelectionMode(false);
+    setSelectedInscriptionIds(new Set());
+    setSelectedBindings(new Map());
+    setPendingSameSat(null);
+    setNotice(null);
+  }, []);
+  const addToSelection = useCallback((items: readonly GalleryItem[]): void => {
+    const additions = items.filter((item) =>
+      !selectedInscriptionIds.has(item.inscriptionId));
+    if (selectedInscriptionIds.size + additions.length > 16) {
+      setPendingSameSat(null);
+      setNotice(t('gallery.selection.limit'));
+      return;
+    }
+    setSelectedInscriptionIds((current) => {
+      const next = new Set(current);
+      for (const entry of items) next.add(entry.inscriptionId);
+      return next;
+    });
+    setSelectedBindings((current) => {
+      const next = new Map(current);
+      for (const item of items) next.set(item.inscriptionId, {
+        outpoint: { ...item.outpoint },
+        satpoint: item.satpoint,
+        classificationRevision: item.classificationRevision,
+      });
+      return next;
+    });
+    setPendingSameSat(null);
+    setNotice(null);
+  }, [selectedInscriptionIds, t]);
+  const toggleSelection = useCallback((item: GalleryItem, opener: HTMLElement): void => {
+    if (unverified || !batchSelectable(item)) return;
+    if (selectedInscriptionIds.has(item.inscriptionId)) {
+      const sameSatIds = new Set(
+        (itemsBySatpoint.get(item.satpoint) ?? [item]).map((entry) => entry.inscriptionId),
+      );
+      setSelectedInscriptionIds((current) => {
+        const next = new Set(current);
+        for (const inscriptionId of sameSatIds) next.delete(inscriptionId);
+        return next;
+      });
+      setSelectedBindings((current) => {
+        const next = new Map(current);
+        for (const inscriptionId of sameSatIds) next.delete(inscriptionId);
+        return next;
+      });
+      setNotice(null);
+      return;
+    }
+    const sameSat = itemsBySatpoint.get(item.satpoint) ?? [item];
+    if (sameSat.some((entry) => !batchSelectable(entry))) {
+      setNotice(t('gallery.selection.coLocatedBlocked'));
+      return;
+    }
+    const additions = sameSat.filter((entry) => !selectedInscriptionIds.has(entry.inscriptionId));
+    if (selectedInscriptionIds.size + additions.length > 16) {
+      setNotice(t('gallery.selection.limit'));
+      return;
+    }
+    if (sameSat.length > 1) {
+      sameSatOpenerRef.current = opener;
+      setPendingSameSat(sameSat);
+      return;
+    }
+    addToSelection(sameSat);
+  }, [addToSelection, itemsBySatpoint, selectedInscriptionIds, t, unverified]);
+  const selectMissingSourceCompanions = useCallback((): void => {
+    if (selectedInscriptionIds.size + missingSourceCompanions.length > 16) {
+      setNotice(t('gallery.selection.limit'));
+      return;
+    }
+    if (missingSourceCompanions.some((item) => !batchSelectable(item))) {
+      setNotice(t('gallery.selection.sourceBlocked'));
+      return;
+    }
+    setSelectedInscriptionIds((current) => {
+      const next = new Set(current);
+      for (const item of missingSourceCompanions) next.add(item.inscriptionId);
+      return next;
+    });
+    setSelectedBindings((current) => {
+      const next = new Map(current);
+      for (const item of missingSourceCompanions) next.set(item.inscriptionId, {
+        outpoint: { ...item.outpoint },
+        satpoint: item.satpoint,
+        classificationRevision: item.classificationRevision,
+      });
+      return next;
+    });
+    setNotice(null);
+  }, [missingSourceCompanions, selectedInscriptionIds.size, t]);
+  const continueBatch = useCallback((): void => {
+    if (selectedItems.length === 0 || selectedItems.length > 16 ||
+        selectedInscriptionIds.size > 16 || missingSourceCompanions.length > 0 ||
+        selectionBindingChanged) return;
+    props.onOrdinalAction?.({
+      kind: 'ordinal_batch_transfer',
+      account: props.account,
+      selections: selectedItems.map((item) => ({
+        inscriptionId: item.inscriptionId,
+        ...selectedBindings.get(item.inscriptionId)!,
+        presentation: {
+          number: item.number,
+          preview: item.preview.kind === 'placeholder'
+            ? { kind: 'placeholder' as const }
+            : { ...item.preview },
+        },
+      })),
+    });
+  }, [missingSourceCompanions.length, props.account, props.onOrdinalAction, selectedBindings,
+    selectedInscriptionIds.size, selectedItems, selectionBindingChanged]);
   const startItemAction = (item: GalleryItem): void => {
     if (item.action.status !== 'available') return;
     const presentation = {
@@ -554,6 +762,25 @@ export function Gallery(props: {
           presentation,
         }
       : { kind: 'rescue', outpoint: { ...item.outpoint }, presentation });
+  };
+  const manageItemPostage = (item: GalleryItem): void => {
+    if (item.action.status !== 'available' || item.action.kind !== 'send') return;
+    props.onOrdinalAction?.({
+      kind: 'ordinal_postage_manage',
+      account: props.account,
+      selection: {
+        inscriptionId: item.inscriptionId,
+        outpoint: { ...item.outpoint },
+        satpoint: item.satpoint,
+        classificationRevision: item.classificationRevision,
+        presentation: {
+          number: item.number,
+          preview: item.preview.kind === 'placeholder'
+            ? { kind: 'placeholder' as const }
+            : { ...item.preview },
+        },
+      },
+    });
   };
   const needRaster = useMemo(
     () => (inscriptionId: string) => requestRasters([inscriptionId]),
@@ -585,12 +812,25 @@ export function Gallery(props: {
   return <>
     <div className={styles['heading']}>
       <h1>{t('gallery.title')}</h1>
-      <button
-        aria-label={t('gallery.refresh')}
-        disabled={refreshing || status === 'loading' || status === 'syncing'}
-        type="button"
-        onClick={() => void refresh(true, false)}
-      >{t(status === 'syncing' ? 'gateway.state.checking' : 'gallery.refresh')}</button>
+      {selectionMode ? <button type="button" onClick={cancelSelection}>
+        {t('common.cancel')}
+      </button> : <div className={styles['headingActions']}>
+        <button
+          className={styles['selectionModeButton']}
+          disabled={unverified || (result?.items.length ?? 0) === 0}
+          type="button"
+          onClick={() => {
+            setSelectionMode(true);
+            setNotice(null);
+          }}
+        >{t('gallery.selection.select')}</button>
+        <button
+          aria-label={t('gallery.refresh')}
+          disabled={refreshing || status === 'loading' || status === 'syncing'}
+          type="button"
+          onClick={() => void refresh(true, false)}
+        >{t(status === 'syncing' ? 'gateway.state.checking' : 'gallery.refresh')}</button>
+      </div>}
     </div>
     {selectedGroup === null ? <div className={styles['filters']} role="tablist" aria-label={t('gallery.title')}>
       {(['visible', 'hidden'] as const).map((entry) => (
@@ -686,12 +926,30 @@ export function Gallery(props: {
         const previewLoading =
           item.preview.kind === 'placeholder' &&
           (item.preview.reason === NOT_REQUESTED || item.preview.reason === 'render_pending');
+        const selectedForBatch = selectedInscriptionIds.has(item.inscriptionId);
         return <LazyCard
         key={item.inscriptionId}
         inscriptionId={item.inscriptionId}
         needsRaster={item.preview.kind === 'placeholder' && item.preview.reason === NOT_REQUESTED}
         onNeedRaster={needRaster}
+        selected={selectedForBatch}
       >
+        {selectionMode ? (
+          <button
+            aria-pressed={selectedForBatch}
+            aria-label={t(selectedForBatch
+              ? 'gallery.selection.remove'
+              : 'gallery.selection.add', {
+              ordinal: item.number === null ? item.inscriptionId : `#${item.number}`,
+            })}
+            className={styles['selectionToggle']}
+            disabled={unverified || !batchSelectable(item)}
+            onClick={(event) => toggleSelection(item, event.currentTarget)}
+            type="button"
+          >
+            <span aria-hidden="true">{selectedForBatch ? '✓' : ''}</span>
+          </button>
+        ) : null}
         {item.preview.kind === 'raster'
           ? <Raster
               inscriptionId={item.inscriptionId}
@@ -766,9 +1024,23 @@ export function Gallery(props: {
               catalogRevision={result?.collectionCatalog?.revision}
               item={item}
             />
+            {item.action.status === 'available' && item.action.kind === 'send' ? (
+              <Button
+                aria-label={t('gallery.action.managePostage')}
+                title={t('gallery.action.managePostage')}
+                variant="secondary"
+                onClick={() => manageItemPostage(item)}
+              >
+                {t('gallery.action.managePostageCompact')}
+              </Button>
+            ) : null}
           </details>}
         </div>
-        <div className={styles['actions']}>
+        {selectionMode && item.action.status === 'blocked' &&
+        item.action.reason !== 'co_located' ? (
+          <small className={styles['selectionBlocked']}>{actionReason(item.action.reason)}</small>
+        ) : null}
+        {!selectionMode ? <div className={styles['actions']}>
           <Button
             disabled={unverified || item.action.status !== 'available'}
             onClick={() => startItemAction(item)}
@@ -795,13 +1067,66 @@ export function Gallery(props: {
           >
             <PopupIcon name={hidden ? 'eye' : 'eyeOff'} />
           </Button>
-        </div>
+        </div> : null}
       </LazyCard>;
       })}
         </div>
       </section>}
     </div>
-    {attentionItems.length > 0 || liveSweeps.length > 0 ? (
+    {selectionMode ? (
+      <section
+        aria-label={t('gallery.selection.summary')}
+        className={styles['selectionFooter']}
+        data-gallery-selection-footer
+      >
+        {selectionBindingChanged ? <p role="alert">{t('gallery.selection.changed')}</p> : null}
+        {missingSourceCompanions.length > 0 ? (
+          <>
+            <p role="alert">{t('gallery.selection.missingSource', {
+              count: missingSourceCompanions.length,
+            })}</p>
+            <Button
+              variant="secondary"
+              onClick={selectMissingSourceCompanions}
+            >{t('gallery.selection.selectSource')}</Button>
+          </>
+        ) : null}
+        <Button
+          disabled={selectedItems.length === 0 || missingSourceCompanions.length > 0 ||
+            selectedItems.length > 16 || selectedInscriptionIds.size > 16 ||
+            selectionBindingChanged}
+          onClick={continueBatch}
+        >{t('gallery.selection.continue', { count: selectedItems.length })}</Button>
+      </section>
+    ) : null}
+    {pendingSameSat !== null ? (
+      <dialog
+        aria-labelledby={sameSatDialogTitleId}
+        className={styles['selectionDialog']}
+        onCancel={(event) => {
+          event.preventDefault();
+          setPendingSameSat(null);
+        }}
+        onClose={() => setPendingSameSat(null)}
+        ref={sameSatDialogRef}
+      >
+        <strong id={sameSatDialogTitleId}>{t('gallery.selection.coLocatedTitle')}</strong>
+        <p>{t('gallery.selection.coLocatedPrompt', { count: pendingSameSat.length })}</p>
+        <div className={styles['actions']}>
+          <Button
+            ref={sameSatCancelRef}
+            variant="secondary"
+            onClick={() => setPendingSameSat(null)}
+          >
+            {t('common.cancel')}
+          </Button>
+          <Button onClick={() => addToSelection(pendingSameSat)}>
+            {t('gallery.selection.includeTogether', { count: pendingSameSat.length })}
+          </Button>
+        </div>
+      </dialog>
+    ) : null}
+    {!selectionMode && (attentionItems.length > 0 || liveSweeps.length > 0) ? (
       <section>
         <h2>{t('gallery.attention.title')}</h2>
         <p>{t('gallery.attention.body')}</p>
@@ -852,14 +1177,16 @@ export function Gallery(props: {
         plain bitcoin in the Ordinals lane, not a task. Aggregated because a
         wallet can accumulate several such outputs and one line per output
         would read like a list of problems. */}
-    {restingPostage.length > 0 ? (
+    {!selectionMode && restingPostage.length > 0 ? (
       <p className={styles['notice']}>
         {t('gallery.postage.resting', {
           sats: restingPostageSats.toLocaleString(lang),
         })}
       </p>
     ) : null}
-    <button type="button" className={styles['receive']} onClick={props.onReceive}>{t('home.receive')}</button>
+    {!selectionMode ? <button type="button" className={styles['receive']} onClick={props.onReceive}>
+      {t('home.receive')}
+    </button> : null}
     {media !== null && mediaMessage !== null ? <dialog
       aria-label={t('gallery.viewerTitle')}
       className={styles['viewer']}
@@ -892,6 +1219,18 @@ export function Gallery(props: {
         */}
       {mediaItem !== null ? (
         <div className={styles['viewerDetails']}>
+          {mediaItem.action.status === 'available' && mediaItem.action.kind === 'send' ? (
+            <Button
+              className={styles['viewerPostageAction']}
+              variant="secondary"
+              onClick={() => {
+                closeViewer();
+                manageItemPostage(mediaItem);
+              }}
+            >
+              {t('gallery.action.managePostage')}
+            </Button>
+          ) : null}
           <DetailList
             catalogRevision={result?.collectionCatalog?.revision}
             item={mediaItem}

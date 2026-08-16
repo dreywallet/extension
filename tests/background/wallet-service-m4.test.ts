@@ -92,11 +92,15 @@ describe('revealMnemonic (§7.6)', () => {
 describe('verifyBackup + backupStatus (§7.1)', () => {
   it('opens the gate only on a worker-verified match, with word folding', async () => {
     const { h, vaultId, active } = await createdUnlocked();
-    expect(await h.service.backupStatus(active)).toEqual({ backupVerified: false });
+    expect(await h.service.backupStatus(active)).toMatchObject({
+      backupVerified: false,
+      metadata: { origin: 'generated', wordCount: 12, usageGatePassed: false },
+    });
 
     const words = (await h.service.revealMnemonic({ password: PASSWORD, ...active })).mnemonic.split(' ');
     const wrong = await h.service.verifyBackup({
       ...active,
+      wordCount: 12,
       words: [
         { index: 0, word: 'zoo' },
         { index: 5, word: words[5] ?? '' },
@@ -104,10 +108,11 @@ describe('verifyBackup + backupStatus (§7.1)', () => {
       ],
     });
     expect(wrong).toEqual({ verified: false });
-    expect(await h.service.backupStatus(active)).toEqual({ backupVerified: false });
+    expect(await h.service.backupStatus(active)).toMatchObject({ backupVerified: false });
 
     const right = await h.service.verifyBackup({
       ...active,
+      wordCount: 12,
       words: [
         { index: 2, word: `  ${(words[2] ?? '').toUpperCase()} ` }, // trim + case-fold
         { index: 7, word: words[7] ?? '' },
@@ -115,8 +120,13 @@ describe('verifyBackup + backupStatus (§7.1)', () => {
       ],
     });
     expect(right).toEqual({ verified: true });
-    expect(await h.service.backupStatus(active)).toEqual({ backupVerified: true });
-    expect(await loadVaultMeta(h.local)).toEqual({ [vaultId]: { backupVerified: true } });
+    expect(await h.service.backupStatus(active)).toMatchObject({
+      backupVerified: true,
+      metadata: { usageGatePassed: true, lastSpotCheckAt: expect.any(Number) },
+    });
+    expect(await loadVaultMeta(h.local)).toMatchObject({
+      [vaultId]: { backupVerified: true, metadata: { usageGatePassed: true } },
+    });
   });
 
   it('marks restored vaults verified and clears meta on removal', async () => {
@@ -126,11 +136,34 @@ describe('verifyBackup + backupStatus (§7.1)', () => {
       password: PASSWORD,
       mnemonic: VALID_MNEMONIC,
     });
-    expect(await loadVaultMeta(h.local)).toEqual({ [vaultId]: { backupVerified: true } });
+    expect(await loadVaultMeta(h.local)).toMatchObject({
+      [vaultId]: {
+        backupVerified: true,
+        metadata: { origin: 'imported', wordCount: 12, usageGatePassed: true },
+      },
+    });
     const unlocked = await h.service.unlock({ vaultId, password: PASSWORD });
     await h.service.removeVault({ targetVaultId: vaultId, password: PASSWORD,
       expectedVaultId: vaultId, expectedSessionId: unlocked.sessionId });
     expect(await loadVaultMeta(h.local)).toEqual({});
+  });
+
+  it('performs an aggregate full recovery rehearsal and records only success metadata', async () => {
+    const { h, active } = await createdUnlocked();
+    const mnemonic = (await h.service.revealMnemonic({ password: PASSWORD, ...active })).mnemonic;
+
+    await expect(h.service.verifyFullRecovery({
+      ...active,
+      mnemonic: VALID_MNEMONIC,
+    })).resolves.toEqual({ verified: false });
+    expect((await h.service.backupStatus(active)).metadata?.lastFullRecoveryCheckAt).toBeNull();
+
+    await expect(h.service.verifyFullRecovery({
+      ...active,
+      mnemonic,
+    })).resolves.toEqual({ verified: true });
+    expect((await h.service.backupStatus(active)).metadata?.lastFullRecoveryCheckAt)
+      .toEqual(expect.any(Number));
   });
 });
 

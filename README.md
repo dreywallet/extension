@@ -13,9 +13,11 @@ request.
 
 ## Status
 
-Published to the Chrome Web Store as item `kngidlmmbfmnoeimngkajdlbdenlhgof`. Ordinals and
-marketplace interoperability are fixture-backed and deliberately fail-closed; see
-`docs/marketplace-templates.md`.
+Published to the Chrome Web Store as item `kngidlmmbfmnoeimngkajdlbdenlhgof`.
+The current source adds native Bitcoin batching, atomic one-recipient
+inscription transfers, and deliberate collectible-postage management. Reviewed
+ord.net single-inscription flows are enabled; unknown or unsupported
+marketplace shapes still fail closed. See `docs/marketplace-templates.md`.
 
 Web applications can integrate the promise-based JSON-RPC provider at
 `window.drey` through WBIP004 discovery or Sats Connect Core. See
@@ -74,11 +76,17 @@ sibling core checkout and skip themselves when one is not present; to run them, 
 the core repository next to this one at the pinned tag:
 
 ```bash
-git clone --branch v0.7.12 https://github.com/dreywallet/core.git ../core
+git clone --branch v0.8.2 https://github.com/dreywallet/core.git ../core
 ```
 
 `pnpm test:marketplace-contracts` runs the marketplace contract suite from that sibling
 checkout and fails without it.
+
+A standalone public clone can run `pnpm build` for an inspectable unpacked
+extension. Its build metadata records the unavailable private workspace and
+gateway provenance explicitly. `pnpm zip` and `pnpm audit:production` remain
+release-only commands and fail closed without the exact reviewed private tags
+and source bindings.
 
 ### End-to-end tests
 

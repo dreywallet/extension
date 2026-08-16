@@ -199,7 +199,7 @@ describe('C5 two-role quorums (ADR 0007 §§2-3)', () => {
     expect(
       finalizeVaultTransaction({ ...context(built), psbtHex: combined.psbtHex }).roles,
     ).toEqual(['desktop-a', 'mobile-b']);
-  });
+  }, 20_000);
 
   it('signs a multi-input plan on every input or not at all', () => {
     const built = scenarioWithdrawal({
@@ -215,7 +215,9 @@ describe('C5 two-role quorums (ADR 0007 §§2-3)', () => {
       }).psbtHex,
     });
     expect(final.vsize).toBeLessThanOrEqual(built.plan.vsize);
-  });
+    // This case performs two complete two-input signings and finalization. It
+    // can exceed the shared five-second clock under full-suite load.
+  }, 20_000);
 });
 
 describe('C5 refuses what a quorum is not', () => {

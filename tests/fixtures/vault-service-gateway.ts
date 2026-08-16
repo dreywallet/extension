@@ -173,6 +173,16 @@ function makeVaultGateway(
         value: {
           ...envelope(),
           requestedScriptHashes: req.scriptHashes,
+          activeScriptHashes: [
+            ...new Set([
+              ...matched.map((utxo) => utxo.scriptHash),
+              ...(options.reconciliationControl?.txid === null ||
+                options.reconciliationControl?.txid === undefined
+                ? []
+                : req.scriptHashes.slice(0, 1)),
+            ]),
+          ],
+          historyCoverage: { status: 'complete' as const, limitedScriptHashes: [] },
           utxos: matched.map((utxo) => ({
             txid: utxo.txid,
             vout: utxo.vout,
