@@ -135,10 +135,12 @@ describe('Home with live balances (§10.2)', () => {
   it('keeps protected and reserved bitcoin compact until the user asks for its breakdown', async () => {
     renderHome(homeResult());
     expect(await screen.findByText('205,556 sats')).toBeInTheDocument();
+    expect(screen.getByText('Available to send')).toBeInTheDocument();
+    expect(screen.queryByText('Bitcoin balance')).not.toBeInTheDocument();
     expect(screen.getByText('0.00205556 BTC')).toBeInTheDocument();
     expect(screen.getByText('10,000 sats')).toBeInTheDocument();
     const disclosure = screen.getByRole('button', {
-      name: 'Protected and reserved bitcoin, 10,000 sats',
+      name: 'Bitcoin set aside from regular sends, 10,000 sats',
     });
     expect(disclosure).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByText(/outputs carrying protected assets or collectibles/iu))
@@ -151,6 +153,55 @@ describe('Home with live balances (§10.2)', () => {
       .toBeInTheDocument();
     expect(screen.queryByText(/sample data/iu)).not.toBeInTheDocument();
     expect(screen.getByTestId('home-collectibles-count')).toHaveTextContent('1');
+  });
+
+  it('omits the set-aside disclosure when every protected band is zero', async () => {
+    renderHome(homeResult({
+      balances: {
+        availableSats: '205556',
+        protectedSats: '0',
+        reservedSats: '0',
+        pendingSats: '0',
+        frozenSats: '0',
+        unavailableCleanSats: '0',
+      },
+      protectionBreakdown: {
+        assetSats: '0',
+        awaitingClassificationSats: '0',
+        userFrozenSats: '0',
+        dustQuarantinedSats: '0',
+      },
+    }));
+
+    expect(await screen.findByText('Available to send')).toBeInTheDocument();
+    expect(screen.queryByText('Set aside')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /set aside from regular sends/iu }))
+      .not.toBeInTheDocument();
+  });
+
+  it('keeps cached account data visible with a compact status during refresh', async () => {
+    renderHome(homeResult({
+      scan: {
+        kind: 'running',
+        scanId: 'scan-2',
+        unitsDone: 0,
+        unitsTotal: 2,
+        currentUnit: {
+          source: 'standard',
+          accountId: ACCOUNT_ID,
+          account: 0,
+          lane: 'payment',
+        },
+        boundaryUnits: [],
+        failureReason: null,
+        historyPartial: false,
+      },
+    }));
+
+    expect(await screen.findByText('205,556 sats')).toBeInTheDocument();
+    const syncStatus = screen.getByRole('status', { name: /Syncing with Bitcoin/iu });
+    expect(syncStatus).toHaveTextContent('Syncing');
+    expect(screen.getByTestId('balance-meta')).toContainElement(syncStatus);
   });
 
   it('shows a fresh mainnet USD estimate and preserves exact sats as accessible detail', async () => {
@@ -236,7 +287,7 @@ describe('Home with live balances (§10.2)', () => {
     expect(await screen.findByText('82,100 sats')).toBeInTheDocument();
     expect(screen.getByText('133,456 sats')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', {
-      name: 'Protected and reserved bitcoin, 133,456 sats',
+      name: 'Bitcoin set aside from regular sends, 133,456 sats',
     }));
     expect(screen.getByText('123,456 sats were frozen by you.')).toBeInTheDocument();
   });
@@ -264,7 +315,7 @@ describe('Home with live balances (§10.2)', () => {
       onManageUtxos,
     );
     const disclosure = await screen.findByRole('button', {
-      name: 'Protected and reserved bitcoin, 293 sats',
+      name: 'Bitcoin set aside from regular sends, 293 sats',
     });
     expect(screen.queryByText(/below Bitcoin's script dust limit/iu)).not.toBeInTheDocument();
     fireEvent.click(disclosure);
@@ -298,7 +349,7 @@ describe('Home with live balances (§10.2)', () => {
       }),
     );
     const disclosure = await screen.findByRole('button', {
-      name: 'Protected and reserved bitcoin, 200,000 sats',
+      name: 'Bitcoin set aside from regular sends, 200,000 sats',
     });
     expect(screen.queryByText(/plain Bitcoin held at your collectibles address/iu))
       .not.toBeInTheDocument();
@@ -372,6 +423,8 @@ describe('Home with live balances (§10.2)', () => {
       const status = await screen.findByRole('status');
       expect(status.textContent, state).toMatch(pattern);
       expect(status.textContent).not.toContain('Unavailable:');
+      expect(screen.getByText('Bitcoin balance')).toBeInTheDocument();
+      expect(screen.queryByText('Available to send')).not.toBeInTheDocument();
     }
   });
 
@@ -397,6 +450,7 @@ describe('Home with live balances (§10.2)', () => {
       await Promise.resolve();
     });
     expect(screen.getByText('205,556 sats')).toBeInTheDocument();
+    expect(screen.getByText('Bitcoin balance')).toBeInTheDocument();
     expect(screen.getByTestId('balance-meta')).toBeInTheDocument();
     expect(screen.queryByText('Syncing', { exact: true })).not.toBeInTheDocument();
     expect(screen.queryByText(/wallet service is catching up/iu)).not.toBeInTheDocument();

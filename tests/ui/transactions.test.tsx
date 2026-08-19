@@ -1226,6 +1226,7 @@ describe('transaction screen orchestration', () => {
 
     await act(async () => { release?.(); await Promise.resolve(); });
     await waitFor(() => expect(screen.getByText(/No coins yet/iu)).toBeInTheDocument());
+    expect(screen.getByText(/No coins yet/iu).closest('[role="status"]')).not.toBeNull();
     expect(screen.queryByText('Loading your coins…')).not.toBeInTheDocument();
   });
 

@@ -41,8 +41,7 @@ function session(refresh: () => void, overrides: Partial<SessionView> = {}): Ses
     expectation: EXPECTATION, deadline: Date.now() + 60_000, quarantinedVaultCount: 0,
     activeAccountId: ACCOUNT_ID, activeAccount: 0, selectableAccounts: [0],
     accountSummaries: [{ accountId: ACCOUNT_ID, account: 0, name: 'Main', signingSource: 'software' }],
-    canAddAccount: false,
-    accountAddRequirement: { fundAccount: 0, nextAccount: 1 },
+    accountAddState: null,
     activeRecoveredAddressCount: 0,
     capabilities: {
       canView: true, canDeriveAddresses: true, canPlanTransactions: true,
@@ -89,6 +88,7 @@ describe('provider settings', () => {
     expect(screen.queryByRole('heading', { name: 'Wallets' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open wallets & accounts' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Open recovery center' })).toBeVisible();
+    expect(screen.getByText('No approved sites.').closest('[role="status"]')).not.toBeNull();
 
     const advancedControl = screen.getByLabelText('Advanced PSBT signing');
     expect(advancedControl).not.toBeVisible();
@@ -185,7 +185,11 @@ describe('provider settings', () => {
     (chrome.tabs as unknown as { create: typeof createTab }).create = createTab;
     render(
       <UiRoot sender="popup">
-        <AccountSelector session={session(() => undefined)} compact />
+        <AccountSelector session={session(() => undefined, {
+          accountAddState: {
+            kind: 'empty_limit', firstEmptyAccount: 1, lastEmptyAccount: 5, limit: 5,
+          },
+        })} compact />
       </UiRoot>,
     );
     const selector = await screen.findByRole('button', { name: 'Active account' });
@@ -206,12 +210,9 @@ describe('provider settings', () => {
     expect(within(menu).getByRole('menuitem', { name: 'Wallets & accounts' })).toBeEnabled();
     expect(within(menu).queryByText("Accounts use this wallet's recovery phrase."))
       .not.toBeInTheDocument();
-    expect(within(menu).queryByText(/Receive bitcoin or an ordinal/u)).not.toBeInTheDocument();
+    expect(within(menu).queryByText(/five unused accounts/u)).not.toBeInTheDocument();
     await userEvent.click(addAccount);
-    expect(within(menu).getByText(
-      'Receive bitcoin or an ordinal in Account 1 before adding Account 2. This prevents accounts being missed when you restore.',
-    ))
-      .toBeInTheDocument();
+    expect(within(menu).getByText(/You already have five unused accounts/iu)).toBeInTheDocument();
     expect(within(menu).queryByText('Account 20')).not.toBeInTheDocument();
     expect(within(menu).queryByText(/recovered address/u)).not.toBeInTheDocument();
     await userEvent.click(within(menu).getByRole('menuitem', { name: 'Wallets & accounts' }));
@@ -280,7 +281,10 @@ describe('provider settings', () => {
     render(
       <UiRoot sender="popup">
         <AccountSelector
-          session={session(refresh, { canAddAccount: true })}
+          session={session(refresh, { accountAddState: {
+            kind: 'available', nextAccount: 1, trailingEmptyAccounts: 0,
+            limit: 5, requiresAcknowledgement: false,
+          } })}
           compact
         />
       </UiRoot>,
@@ -289,8 +293,44 @@ describe('provider settings', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Active account' }));
     await userEvent.click(screen.getByRole('menuitem', { name: 'Add account' }));
     await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
-    expect(payloads).toEqual([EXPECTATION]);
+    expect(payloads).toEqual([{ ...EXPECTATION, acknowledgeEmptyAccountRisk: false }]);
     expect(screen.queryByRole('menu', { name: 'Active account' })).not.toBeInTheDocument();
+  });
+
+  it('shows the recovery warning before crossing an unused account and supports cancellation', async () => {
+    const payloads: unknown[] = [];
+    const refresh = vi.fn();
+    installFakeChrome({
+      'account.add': (payload) => {
+        payloads.push(payload);
+        return { ok: true, result: { accountId: ACCOUNT_ID, account: 2 } };
+      },
+    });
+    render(
+      <UiRoot sender="popup">
+        <AccountSelector session={session(refresh, { accountAddState: {
+          kind: 'available', nextAccount: 2, trailingEmptyAccounts: 1,
+          limit: 5, requiresAcknowledgement: true,
+        } })} compact />
+      </UiRoot>,
+    );
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Active account' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Add account' }));
+    expect(screen.getByText(/Drey can recover activity through up to five empty accounts/iu))
+      .toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(payloads).toHaveLength(0);
+    expect(screen.queryByText(/Drey can recover activity through up to five empty accounts/iu))
+      .not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Add account' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Create account' }));
+    await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+    expect(payloads).toEqual([{
+      ...EXPECTATION,
+      acknowledgeEmptyAccountRisk: true,
+    }]);
   });
 
   it('revokes a scoped connected-site grant', async () => {

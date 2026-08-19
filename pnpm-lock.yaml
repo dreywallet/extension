@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@drey/core':
-        specifier: git+https://github.com/dreywallet/core.git#v0.8.2
-        version: git+https://github.com/dreywallet/core.git#51e9356d97496844d445d9ce5a83ea1190593569
+        specifier: git+https://github.com/dreywallet/core.git#v0.14.4
+        version: git+https://github.com/dreywallet/core.git#00c050e077cbf60c92cf717307b0fee65dedd6bb
       '@ngraveio/bc-ur':
         specifier: 1.1.13
         version: 1.1.13
@@ -105,6 +105,9 @@ importers:
       typescript-eslint:
         specifier: ^8.35.0
         version: 8.65.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3)
+      vite:
+        specifier: 8.1.5
+        version: 8.1.5(@types/node@26.1.1)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.23.5)
       vitest:
         specifier: ^3.2.0
         version: 3.2.7(@types/node@26.1.1)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@2.2.0))(lightningcss@1.33.0)(tsx@4.23.5)
@@ -223,9 +226,9 @@ packages:
     engines: {node: '>= 0.10.4'}
     hasBin: true
 
-  '@drey/core@git+https://github.com/dreywallet/core.git#51e9356d97496844d445d9ce5a83ea1190593569':
-    resolution: {commit: 51e9356d97496844d445d9ce5a83ea1190593569, repo: https://github.com/dreywallet/core.git, type: git}
-    version: 0.8.2
+  '@drey/core@git+https://github.com/dreywallet/core.git#00c050e077cbf60c92cf717307b0fee65dedd6bb':
+    resolution: {commit: 00c050e077cbf60c92cf717307b0fee65dedd6bb, repo: https://github.com/dreywallet/core.git, type: git}
+    version: 0.14.4
 
   '@emnapi/core@1.11.1':
     resolution: {integrity: sha512-RSvbQmHzdKzNsLYa/wHrbc3KN4sYLKAdPZxqiM2HATqv/SBk2/ENSHpvXGaLOMcsAyz0poEGqkmmKYG3OWiJEQ==}
@@ -3418,7 +3421,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@drey/core@git+https://github.com/dreywallet/core.git#51e9356d97496844d445d9ce5a83ea1190593569':
+  '@drey/core@git+https://github.com/dreywallet/core.git#00c050e077cbf60c92cf717307b0fee65dedd6bb':
     dependencies:
       '@noble/curves': 1.9.7
       '@scure/base': 1.2.6

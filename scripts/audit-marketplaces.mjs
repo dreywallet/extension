@@ -21,16 +21,19 @@ assert(registry.includes('ORDNET_SALE_PUBLIC_KEY') === false,
   'pinned signing keys belong in the verified adapter, not a remotely replaceable registry field');
 assert(registry.includes(createHash('sha256').update(manifest).digest('hex')),
   'compile-time registry is not bound to the pinned fixture manifest');
-// Reviewed activation scope (2026-08-10): only ord.net single-inscription
-// templates may be enabled. Every template({...}) block that enables must
-// name ord.net and the inscription asset; anything else fails the audit.
+// Reviewed activation scope: ord.net single-inscription templates plus the
+// exact-origin OMB Wiki buyer-only ORD.NET/Satflow contracts.
 for (const block of registry.split(/template\(\{/u).slice(1)) {
   if (!block.includes("activation: 'enabled'")) continue;
-  assert(block.includes("marketplaceId: 'ordnet'") && block.includes("assetKind: 'inscription'"),
-    'marketplace template enabled outside the reviewed ord.net inscription scope');
+  const nativeOrdnet = block.includes("marketplaceId: 'ordnet'") &&
+    block.includes("assetKind: 'inscription'");
+  const ombBuyer = block.includes('origins: OMB_WIKI_ORIGIN') &&
+    block.includes("role: 'buyer'") && block.includes("assetKind: 'inscription'") &&
+    block.includes("broadcaster: 'site'") &&
+    (block.includes("action: 'buy'") || block.includes("action: 'secure_buy'"));
+  assert(nativeOrdnet || ombBuyer,
+    'marketplace template enabled outside the reviewed ord.net/OMB buyer scope');
 }
-assert(!/marketplaceId:\s*'satflow'[^}]*activation:\s*'enabled'/su.test(registry),
-  'Satflow template was enabled before its vendor gates passed');
 
 if (failures.length) {
   console.error(failures.map((failure) => `FAIL: ${failure}`).join('\n'));

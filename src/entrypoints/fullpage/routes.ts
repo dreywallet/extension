@@ -6,6 +6,7 @@ export const FULLPAGE_HASH = {
   reveal: '#/settings/reveal',
   passkeys: '#/settings/passkeys',
   vault: '#/settings/vault',
+  communityVault: '#/settings/community-vault',
   messageSigning: '#/settings/sign-message',
   addressBook: '#/settings/contacts',
   siteBlocked: '#/settings/site-blocked',
@@ -32,6 +33,8 @@ export function fullpageViewFromHash(hash: string): FullpageView {
       return 'passkeys';
     case FULLPAGE_HASH.vault:
       return 'vault';
+    case FULLPAGE_HASH.communityVault:
+      return 'communityVault';
     case FULLPAGE_HASH.messageSigning:
       return 'messageSigning';
     case FULLPAGE_HASH.addressBook:

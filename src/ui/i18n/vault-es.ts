@@ -2,7 +2,7 @@
 import type { VaultMessageKey } from './vault-en';
 
 export const vaultEs: Record<VaultMessageKey, string> = {
-  'vault.import.challengeQrCreate': 'Crear QR de desafío para Móvil B',
+  'vault.import.challengeQrCreate': 'Crear QR de emparejamiento',
   'vault.import.challengeQrAlt': 'QR de desafío para Móvil B, fotograma {index} de {count}',
   'vault.import.challengeQrPart': 'Fotograma de desafío {index} de {count}',
   'vault.import.challengeQrPrevious': 'Fotograma anterior',
@@ -16,14 +16,53 @@ export const vaultEs: Record<VaultMessageKey, string> = {
     'Custodia multifirma 2 de 3. Cada transacción requiere dos roles independientes; Recuperación C permanece sin conexión para emergencias.',
   'vault.scope':
     'Crea Escritorio A, empareja Mobile B independiente, configura Recuperación C sin conexión, verifica las copias y usa transporte QR autenticado para revisar y firmar.',
+  'vault.create.after':
+    'A continuación, conectarás tu teléfono y configurarás un rol de recuperación sin conexión. No depositarás bitcoin hasta verificar los tres roles y sus copias de seguridad.',
+  'vault.setup.desktopReady': 'Paso 1 completado',
+  'vault.setup.connectTitle': 'Siguiente: conecta tus otros dos roles',
+  'vault.setup.connectBody':
+    'Ten preparados tu teléfono y el dispositivo de recuperación sin conexión. Drey te guiará primero por Mobile B y después por Recuperación C.',
+  'vault.setup.mobileReady': 'Paso 2 completado',
+  'vault.setup.recoveryTitle': 'Siguiente: crea Recuperación C sin conexión',
+  'vault.setup.recoveryBody':
+    'Prepara un ordenador sin conexión, papel y una unidad extraíble. Drey te guiará para crear y comprobar el rol de recuperación sin exponer sus palabras en línea.',
+  'vault.setup.rolesReady': 'Los tres roles están listos',
+  'vault.setup.createTitle': 'Siguiente: crea la Bóveda',
+  'vault.setup.createBody':
+    'Vincula los tres roles en una Bóveda 2 de 3. Aún no depositarás bitcoin hasta completar las comprobaciones de recuperación.',
+  'vault.import.mobileStep': 'Paso 2 de 4',
+  'vault.import.mobileTitle': 'Conectar Mobile B',
+  'vault.import.mobileIntro':
+    'En el teléfono que usarás como Mobile B, abre Drey Vault y muestra su QR de identidad de Mobile B.',
+  'vault.import.scanIdentityHelp': 'Primero, escanea el QR de identidad que aparece en tu teléfono.',
+  'vault.import.identityScanned': 'Identidad de Mobile B escaneada.',
+  'vault.import.passwordHint':
+    'Esto confirma Escritorio A antes de que Drey cree un QR que solo este teléfono puede responder.',
+  'vault.import.scanChallengeHelp':
+    'Escanea este QR de emparejamiento con Mobile B. El teléfono mostrará dos respuestas; vuelve aquí y escanea primero la Respuesta 1 y luego la Respuesta 2.',
+  'vault.import.responseOneScanned': 'Respuesta 1 de 2 escaneada. Ahora escanea la Respuesta 2.',
+  'vault.import.responseScanned': 'Ambas respuestas escaneadas. Termina de conectar Mobile B abajo.',
+  'vault.import.technical': 'Detalles técnicos y entrada manual',
+  'vault.import.recoveryStep': 'Paso 3 de 4',
+  'vault.import.continue': 'Continuar configuración',
+  'vault.import.backToOverview': 'Volver al resumen de configuración',
 
   'vault.role.defaultLabel': 'Escritorio A',
   'vault.policy.defaultLabel': 'Drey Vault',
+  'vault.policy.placeholder': 'p. ej., Bóveda familiar',
+  'vault.policy.hint':
+    'Elige cualquier nombre que te ayude a reconocer esta Bóveda. Déjalo en blanco para usar «Drey Vault».',
   'vault.policy.qrHeading': 'Termina el emparejamiento en Mobile B',
   'vault.policy.qrBody':
     'Escanea este QR de política autenticado en el mismo teléfono antes de salir. Confirma los firmantes y descriptores exactos en Mobile B.',
   'vault.policy.qrAlt': 'Parte {index} de {count} del QR de política de Vault',
   'vault.policy.qrPart': 'Parte {index} de {count} del QR de política',
+  'vault.policy.mobileStep': 'Paso 4 de 4',
+  'vault.policy.qrCompleteAction': 'Mobile B muestra «Vault lista»',
+  'vault.policy.qrComplete': 'Emparejamiento de Mobile B completado. La configuración de tu Vault está guardada.',
+  'vault.policy.qrMissing':
+    'El QR final caducó o se cerró. Introduce la contraseña de la aplicación para crear uno nuevo; tu Vault y los pasos completados están a salvo.',
+  'vault.policy.qrRefresh': 'Crear un nuevo QR final',
 
   'vault.next':
     'Guarda el kit de recuperación y la frase de Recuperación C sin conexión y separados de Escritorio A y Mobile B.',
@@ -163,7 +202,8 @@ export const vaultEs: Record<VaultMessageKey, string> = {
   'vault.recoveryC.stepSetupDone': '1. Firmante público de Recuperación C verificado.',
   'vault.recoveryC.stepKit': '2. Guardar el kit público separado de las palabras.',
   'vault.recoveryC.stepKitDone': '2. Kit público de recuperación guardado.',
-  'vault.recoveryC.stepBackup': '3. Volver a introducir las palabras en papel sin conexión y devolver la comprobación firmada.',
+  'vault.recoveryC.stepBackup':
+    '3. Lleva el kit de recuperación guardado y el desafío de comprobación al ordenador sin conexión, vuelve a introducir las palabras del papel y devuelve la comprobación firmada.',
   'vault.recoveryC.stepBackupDone': '3. Comprobación de la copia en papel superada.',
   'vault.recoveryC.kitRequired':
     'Muestra el kit de recuperación abajo y descarga su archivo. Este archivo público revela todas las direcciones, así que protege su privacidad y mantenlo separado de las palabras.',
@@ -174,7 +214,7 @@ export const vaultEs: Record<VaultMessageKey, string> = {
   'vault.recoveryC.backupStart': 'Descargar desafío de comprobación',
   'vault.recoveryC.backupReplace': 'Reemplazar desafío de comprobación',
   'vault.recoveryC.backupDownloaded':
-    'Desafío descargado. En el ordenador sin conexión, vuelve a introducir las 12 palabras del papel y devuelve solo el archivo público de respuesta.',
+    'Desafío descargado. Lleva el desafío y el kit de recuperación guardado al ordenador sin conexión, vuelve a introducir allí las 12 palabras del papel y devuelve solo el archivo público de respuesta.',
   'vault.recoveryC.backupWaiting':
     'Esperando la respuesta pública de comprobación. Huella del desafío: {fingerprint}.',
   'vault.recoveryC.fundingBlocked':
@@ -195,6 +235,8 @@ export const vaultEs: Record<VaultMessageKey, string> = {
 
   'vault.transportScanner.open': 'Abrir escáner QR de Vault',
   'vault.transportScanner.scanOrigin': 'Escanear QR de identidad de Móvil B',
+  'vault.transportScanner.scanResponseOne': 'Escanear respuesta 1 de 2 de Mobile B',
+  'vault.transportScanner.scanResponseTwo': 'Escanear respuesta 2 de 2 de Mobile B',
   'vault.transportScanner.title': 'Escáner QR de Vault',
   'vault.transportScanner.body':
     'Los escaneos parciales se descartan al salir de primer plano o cancelar. Drey solo importa un contexto Vault completo y verificado o un PSBT estándar válido.',

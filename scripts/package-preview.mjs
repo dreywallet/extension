@@ -78,7 +78,7 @@ const currentSourceBinding = {
   // digest recorded at build time.
   workspaceContentDigest: treeDigest(workspace, new Set([
     'node_modules', 'prototype', 'playwright-report', 'test-results',
-    'extension', 'gateway', 'mobile',
+    'core', 'extension', 'gateway', 'hardware', 'mobile',
   ])),
   extensionRevision: gitRevision(root),
   extensionContentDigest: treeDigest(root, new Set([

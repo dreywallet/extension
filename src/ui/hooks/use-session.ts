@@ -3,6 +3,7 @@ import { isSessionStateChangedEvent, isWalletDataChangedEvent } from '@drey/core
 import { loadActiveVaultId } from '../../adapters/storage/vault-store';
 import { useRpc } from './use-rpc';
 import type { AccountCapabilities } from '@drey/core/domain/accounts/capabilities';
+import type { AccountAddState } from '@drey/core/messaging/ops';
 
 /** UI-level wallet state; error is distinct from an actually empty profile. */
 export type WalletUiState = 'loading' | 'error' | 'no-vault' | 'locked' | 'unverified' | 'ready';
@@ -30,8 +31,7 @@ export interface SessionView {
     name: string;
     signingSource: 'software' | 'none';
   }[];
-  canAddAccount: boolean;
-  accountAddRequirement: { fundAccount: number; nextAccount: number } | null;
+  accountAddState: AccountAddState | null;
   activeRecoveredAddressCount: number;
   capabilities: AccountCapabilities;
   refresh: () => void;
@@ -51,8 +51,7 @@ const INITIAL_VIEW: StoredView = {
   activeAccount: 0,
   selectableAccounts: [0],
   accountSummaries: [],
-  canAddAccount: false,
-  accountAddRequirement: null,
+  accountAddState: null,
   activeRecoveredAddressCount: 0,
   capabilities: {
     canView: false, canDeriveAddresses: false, canPlanTransactions: false,
@@ -102,8 +101,7 @@ export function useSession(): SessionView {
           activeAccount: result.activeAccount,
           selectableAccounts: result.selectableAccounts,
           accountSummaries: result.accountSummaries,
-          canAddAccount: result.canAddAccount,
-          accountAddRequirement: result.accountAddRequirement,
+          accountAddState: result.accountAddState,
           activeRecoveredAddressCount: result.activeRecoveredAddressCount,
           capabilities: result.capabilities,
         });
@@ -122,14 +120,15 @@ export function useSession(): SessionView {
           activeAccount: result.activeAccount,
           selectableAccounts: result.selectableAccounts,
           accountSummaries: result.accountSummaries,
-          canAddAccount: result.canAddAccount,
-          accountAddRequirement: result.accountAddRequirement,
+          accountAddState: result.accountAddState,
           activeRecoveredAddressCount: result.activeRecoveredAddressCount,
           capabilities: result.capabilities,
         });
         return;
       }
-      setView({
+      const activeVaultId = result.activeVaultId;
+      const sessionId = result.sessionId;
+      setView((previous) => ({
         // Backup verification protects a software signer. A descriptor-only
         // account has no seed to reveal or acknowledge, so it remains usable
         // for its read-only capabilities even when the containing vault's
@@ -137,24 +136,30 @@ export function useSession(): SessionView {
         state: result.backupVerified || result.capabilities.signMethod === 'none'
           ? 'ready'
           : 'unverified',
-        activeVaultId: result.activeVaultId,
-        preferredUnlockVaultId: result.activeVaultId,
+        activeVaultId,
+        preferredUnlockVaultId: activeVaultId,
         vaults,
-        expectation: {
-          expectedVaultId: result.activeVaultId,
-          expectedSessionId: result.sessionId,
-        },
+        // Preserve referential identity for an unchanged live session. Several
+        // screens bind local reads and secret-clearing effects to this object;
+        // replacing it for an unrelated account/config refresh can otherwise
+        // restart those effects even though their security scope did not move.
+        expectation: previous.expectation?.expectedVaultId === activeVaultId &&
+          previous.expectation.expectedSessionId === sessionId
+          ? previous.expectation
+          : {
+              expectedVaultId: activeVaultId,
+              expectedSessionId: sessionId,
+            },
         deadline: result.deadline,
         quarantinedVaultCount: result.quarantinedVaultCount,
         activeAccountId: result.activeAccountId,
         activeAccount: result.activeAccount,
         selectableAccounts: result.selectableAccounts,
         accountSummaries: result.accountSummaries,
-        canAddAccount: result.canAddAccount,
-        accountAddRequirement: result.accountAddRequirement,
+        accountAddState: result.accountAddState,
         activeRecoveredAddressCount: result.activeRecoveredAddressCount,
         capabilities: result.capabilities,
-      });
+      }));
     });
   }, [rpc]);
 

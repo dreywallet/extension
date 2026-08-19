@@ -33,8 +33,7 @@ const READY_SESSION = {
     name: 'Main',
     signingSource: 'software',
   }],
-  canAddAccount: false,
-  accountAddRequirement: { fundAccount: 0, nextAccount: 1 },
+  accountAddState: null,
   activeRecoveredAddressCount: 0,
   capabilities: {
     signMethod: 'software',
@@ -94,6 +93,7 @@ describe('full-page routing', () => {
       ['reveal', 'reveal'],
       ['passkeys', 'passkeys'],
       ['vault', 'vault'],
+      ['communityVault', 'communityVault'],
       ['messageSigning', 'messageSigning'],
       ['addressBook', 'addressBook'],
       ['siteBlocked', 'siteBlocked'],
@@ -127,6 +127,27 @@ describe('full-page routing', () => {
       .toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Manage coins' }))
       .toHaveAttribute('aria-current', 'page');
+  });
+
+  it('opens Community Vault as a separate, keyless shared-ownership surface', async () => {
+    window.location.hash = FULLPAGE_HASH.communityVault;
+    installFakeChrome({
+      'session.snapshot': () => ({ ok: true, result: READY_SESSION }),
+      'communityVault.status': () => ({
+        ok: true,
+        result: { owners: [], unusableCampaignIds: [] },
+      }),
+    });
+
+    render(
+      <UiRoot sender="fullpage">
+        <App />
+      </UiRoot>,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Community Vault' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Join a campaign' })).toBeVisible();
+    expect(screen.getByText(/Drey and the gallery cannot spend or recover the vault/u)).toBeVisible();
   });
 
   it('connects Settings to every ordinary full-page destination without changing routes', async () => {
@@ -193,7 +214,7 @@ describe('full-page routing', () => {
       'provider.sites.list': () => ({ ok: true, result: { sites: [] } }),
       'account.list': () => ({
         ok: true,
-        result: { accounts: [{
+        result: { accountAddState: null, accounts: [{
           accountId: ACCOUNT_ID,
           account: 0,
           name: 'Main',
@@ -246,7 +267,7 @@ describe('full-page routing', () => {
         }
         return {
           ok: true,
-          result: { accounts: [{
+          result: { accountAddState: null, accounts: [{
             accountId: ACCOUNT_ID,
             account: 0,
             name: 'Main',
@@ -282,6 +303,25 @@ describe('full-page routing', () => {
         result: { idleTimeoutMs: 3_600_000, highSecurityMode: false, advancedPsbtSigning: false },
       }),
       'provider.sites.list': () => ({ ok: true, result: { sites: [] } }),
+      'backup.status': () => ({
+        ok: true,
+        result: {
+          backupVerified: true,
+          metadata: {
+            version: 1, origin: 'generated', usageGatePassed: true, wordCount: 12,
+            usesPassphrase: false, lastSpotCheckAt: null, lastFullRecoveryCheckAt: null,
+          },
+        },
+      }),
+      'vaultCoordinator.recoveryCReadiness': () => ({
+        ok: true,
+        result: {
+          state: 'not_started', localRole: 'absent', policyState: 'absent',
+          phoneSignerPaired: false, standaloneRecoveryPackageAvailable: true,
+          policyId: null, setupComplete: false, kitExported: false,
+          backupCheckComplete: false, ready: false,
+        },
+      }),
     });
 
     render(

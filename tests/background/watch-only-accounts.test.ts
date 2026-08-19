@@ -197,7 +197,7 @@ describe('descriptor-backed watch-only accounts', () => {
       wordCount: 12,
       ...expectation,
     })).rejects.toMatchObject({ code: 'ERR_UNSAFE_TRANSACTION' });
-    await expect(restarted.addAccount(expectation))
+    await expect(restarted.addAccount({ ...expectation, acknowledgeEmptyAccountRisk: false }))
       .rejects.toMatchObject({ code: 'ERR_UNSAFE_TRANSACTION' });
     await expect(restarted.providerAccountView()).rejects.toMatchObject({
       code: 'ERR_UNAUTHORIZED_CONTEXT',

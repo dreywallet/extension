@@ -91,9 +91,64 @@ unsubscribe();
 | BTC transfer | `sendTransfer` | Fresh transaction review required |
 | Ordinals | `ord_getInscriptions`, `ord_sendInscriptions` | Single inscription transfer |
 
+Before `sendTransfer` creates a transaction plan, Drey checks the selected
+account against the gateway's active revision. If the gateway is healthy but
+the local cache is behind, Drey joins or starts one bounded selected-account
+refresh and continues only if the original document, session, account, and
+permissions are still exact. Failure to restore freshness returns
+`ERR_DATA_STALE` (`-32009`); it is never reported as stale document authority.
+
+`ERR_STALE_CONTEXT` (`-32004`) is reserved for a request invalidated by its
+document, navigation, connection, session, account, permission, or plan. If a
+broadcast may have been dispatched but no definitive response is available,
+Drey returns `ERR_BROADCAST_OUTCOME_UNKNOWN` (`-32010`) when the transport still
+exists and retains manual-reconciliation evidence. Sites must not automatically
+retry either condition; after an interrupted result they should ask the user to
+check Drey Activity before starting another payment.
+
 Drey does not expose Stacks, Spark, Starknet, Runes, ECDSA message signing, or
 another wallet's legacy namespace. Requests for unsupported methods or address
 purposes return a JSON-RPC error.
+
+## Privacy and lifecycle boundaries
+
+- Discovery metadata, the frozen method list, the initialization event, and
+  `getInfo` remain available while the wallet is locked. They disclose that
+  Drey is installed and its static version/capabilities, but no wallet, account,
+  permission, balance, address, or inscription state. Unconnected read methods
+  return the same not-connected result without consulting lock-sensitive account
+  state. A locked `wallet_connect` request opens Drey's trusted unlock surface;
+  after a successful unlock, the original document-bound request continues into
+  connection approval without the site resending it. Closing the unlock surface
+  rejects the request.
+- The provider is injected into supported top-level pages and frames for
+  embedded-dApp compatibility. Chrome's sender origin, tab, frame, document ID,
+  and active lifecycle are the authority. Each document must connect; an origin
+  string or frame identity supplied by the page grants nothing.
+- Account and disconnect events are emitted only to documents with an exact
+  live connection. Merely discovering Drey, sharing an origin with another
+  connected frame, or holding a permission previously used by another document
+  does not expose account/session transition timing.
+- Connections are session-bound and document-bound. Lock, vault/session change,
+  revocation, frame destruction, and full-document replacement invalidate live
+  authority. Same-document History API navigation rotates the runtime port while
+  retaining the same browser document binding; an MV3 worker restart restores
+  only that exact binding from extension-only session storage.
+- Permission grants are encrypted and scoped to origin, network, vault, account,
+  and data category. They persist until the site disconnects/renounces, the user
+  revokes the site, or the vault is removed. Drey deliberately does not apply an
+  arbitrary time-based expiry to non-address categories: reconnect still requires
+  a live unlocked session and exact category set, and the connected-sites screen
+  gives the user explicit revocation control. Address purpose is narrower than
+  the interoperable permission-journal category, so Drey also binds the approved
+  payment/Ordinals purpose set to the exact live document connection. A worker
+  restart restores that exact set, but another document or a new unlock session
+  must renew address-purpose approval. A broader expiry policy should be added
+  only with a defined user-visible renewal contract.
+- Requested payment and Ordinals addresses are returned together in the single
+  authorized response and filtered to the approved purposes. A later request may
+  narrow that set but cannot widen it without approval. Drey does not emit
+  addresses piecemeal or publish address-bearing events to unconnected documents.
 
 ## Marketplace status
 
@@ -122,3 +177,23 @@ shows the exact payout.
 
 The provider contract is tested against `@sats-connect/core@0.16.0`, the Core
 version used by `sats-connect@4.2.1`.
+
+## Community Vault coordination
+
+Community Purchase requests use separately versioned, exact contexts from
+`@drey/core`: `communityVaultAcquisitionContext` for the buyer-funded purchase
+and `communityVaultSaleContext` for an owner-approved resale. These contexts
+cannot be combined with each other or with marketplace context. Drey rebuilds
+the expected plan from the PSBT and context; a changed input, output, payout,
+fee, policy commitment, or expiration fails closed.
+
+For an acquisition, Drey signs only the buyer inputs authorized by the normal
+wallet. For a sale, one password approval signs every unit that owner holds by
+using the independently derived Community Vault root. The approval shows the
+owner's direct payout and makes clear that the buyer pays the network fee on
+top. It does not expose an Advanced-signing phrase for this fixed policy.
+
+Both operations return a partial PSBT to the coordinating site. Drey never
+combines other owners' signatures, finalizes the threshold transaction, or
+broadcasts it. The site must preserve the exact reviewed policy package and
+observe settlement on Bitcoin independently.

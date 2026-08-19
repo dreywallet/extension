@@ -278,7 +278,8 @@ test('injects the frozen provider facade into the top page and iframe', async ({
     avoidsLegacyNamespaceClaims: true,
   });
   expect(facade.methods).toEqual(expect.arrayContaining([
-    'wallet_connect', 'wallet_disconnect', 'getAddresses', 'signMessage', 'sendTransfer',
+    'drey_openCommunityVault', 'wallet_connect', 'wallet_disconnect', 'getAddresses', 'signMessage',
+    'sendTransfer',
   ]));
 
   await dapp.invoke('Permissions');

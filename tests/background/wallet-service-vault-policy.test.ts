@@ -578,6 +578,67 @@ describe('C1 policy commitment (ADR 0007 §§3-4)', () => {
     await expect(restarted.vaultCoordinatorPolicy({ ...s.expectation })).resolves.toEqual(before);
   });
 
+  it('resumes the final Mobile B handoff and records the observed ready state', async () => {
+    const s = await withPolicy();
+    const initial = await s.h.service.vaultCoordinatorPolicy({ ...s.expectation });
+    expect(initial.policyQrFrames?.length).toBeGreaterThan(0);
+    expect(initial.mobilePairingComplete).toBe(false);
+
+    s.h.clock.now += 24 * 60 * 60 * 1_000 + 1;
+    await s.h.service.lock();
+    const unlocked = await s.h.service.unlock({ vaultId: s.vaultId, password: PASSWORD });
+    const refreshedExpectation = {
+      expectedVaultId: s.vaultId,
+      expectedSessionId: unlocked.sessionId,
+    };
+    await expect(s.h.service.vaultCoordinatorPolicy(refreshedExpectation)).resolves.toMatchObject({
+      state: 'present',
+      policyQrFrames: null,
+      mobilePairingComplete: false,
+    });
+
+    const refreshed = await s.h.service.vaultCoordinatorPolicyPairingQr({
+      password: PASSWORD,
+      ...refreshedExpectation,
+    });
+    expect(refreshed.policyQrFrames.length).toBeGreaterThan(0);
+
+    const policyId = initial.policy!.policyId;
+    await expect(s.h.rebuild().vaultCoordinatorAcknowledgePolicyPairing({
+      policyId,
+      ...refreshedExpectation,
+    })).resolves.toEqual({ policyId, mobilePairingComplete: true });
+    await expect(s.h.service.vaultCoordinatorPolicy(refreshedExpectation)).resolves.toMatchObject({
+      state: 'present',
+      policyQrFrames: null,
+      mobilePairingComplete: true,
+    });
+    const acknowledged = await loadVaultPolicy(s.h.local);
+    expect(acknowledged.state === 'valid'
+      ? acknowledged.stored.transport?.pendingPairingPolicyEnvelope
+      : null).not.toBeNull();
+  });
+
+  it('treats a pre-resume policy as already handed off after an upgrade', async () => {
+    const s = await withPolicy();
+    const stored = await loadVaultPolicy(s.h.local);
+    if (stored.state !== 'valid' || stored.stored.transport === null) {
+      throw new Error('expected a committed policy with Mobile B transport');
+    }
+    const legacyTransport = { ...stored.stored.transport };
+    delete legacyTransport.pendingPairingPolicyEnvelope;
+    delete legacyTransport.mobilePairingConfirmedAt;
+    await s.h.local.set({
+      'squirrel:vaultCoordinator:policy': { ...stored.stored, transport: legacyTransport },
+    });
+
+    await expect(s.h.rebuild().vaultCoordinatorPolicy({ ...s.expectation })).resolves.toMatchObject({
+      state: 'present',
+      policyQrFrames: null,
+      mobilePairingComplete: true,
+    });
+  });
+
   it('rejects an odd Desktop A change-reservation counter', async () => {
     const s = await withPolicy();
     const stored = await loadVaultPolicy(s.h.local);
@@ -615,6 +676,18 @@ describe('C1 policy commitment (ADR 0007 §§3-4)', () => {
     await expect(restarted.vaultCoordinatorPolicy({ ...s.expectation })).resolves.toEqual({
       state: 'unusable',
       policy: null,
+      policyQrFrames: null,
+      mobilePairingComplete: false,
+    });
+    await expect(
+      restarted.vaultCoordinatorRecoveryCReadiness({ ...s.expectation }),
+    ).resolves.toMatchObject({
+      state: 'unusable',
+      localRole: 'usable',
+      policyState: 'unusable',
+      phoneSignerPaired: false,
+      policyId: null,
+      ready: false,
     });
     await expect(
       restarted.vaultCoordinatorRecoveryKit({ ...s.expectation }),
@@ -694,6 +767,7 @@ describe('the coordinator surface is a deliberate list', () => {
     // path. What the list still asserts is that nothing arrived unnoticed:
     // every op that can move value is here because someone wrote it here.
     expect(Object.keys(VAULT_COORDINATOR_OP_SCHEMAS).sort()).toEqual([
+      'vaultCoordinator.acknowledgePolicyPairing',
       'vaultCoordinator.acknowledgeRecoveryKitExport',
       'vaultCoordinator.beginImport',
       'vaultCoordinator.beginRecoveryCBackupCheck',
@@ -715,6 +789,7 @@ describe('the coordinator surface is a deliberate list', () => {
       'vaultCoordinator.importSigner',
       'vaultCoordinator.plan',
       'vaultCoordinator.policy',
+      'vaultCoordinator.policyPairingQr',
       'vaultCoordinator.proveRole',
       'vaultCoordinator.reconcilePlan',
       'vaultCoordinator.recoveryCReadiness',

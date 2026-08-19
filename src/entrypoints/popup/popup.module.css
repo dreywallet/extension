@@ -247,6 +247,7 @@
 }
 
 .balancePrivacyButton {
+  border-color: transparent;
   color: var(--color-text-muted);
   height: 2rem;
   min-height: 2rem;
@@ -255,6 +256,12 @@
   right: calc(var(--space-3) + 4.5rem);
   top: var(--space-3);
   width: 2rem;
+}
+
+.balancePrivacyButton:hover:not(:disabled) {
+  background: transparent;
+  border-color: transparent;
+  color: var(--color-text);
 }
 
 .balancePrivacyButton svg {
@@ -283,14 +290,49 @@
   text-align: right;
 }
 
-.protectedDisclosure .protectedRow {
+.setAsideDisclosure {
+  margin-top: calc(-1 * var(--space-2));
+}
+
+.setAsideRow {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--color-text-muted);
   cursor: pointer;
+  display: flex;
+  font-size: var(--text-sm);
+  font-weight: 700;
+  gap: var(--space-2);
+  justify-content: space-between;
+  min-height: 2rem;
+  padding: .25rem var(--space-3);
+  text-align: left;
+  width: 100%;
+}
+
+.setAsideRow:hover {
+  background: var(--color-surface-raised);
+}
+
+.setAsideRow:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+.setAsideRow > span:first-child {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
 }
 
 .protectedValue {
   align-items: center;
+  color: var(--color-text);
   display: inline-flex;
+  flex: none;
   gap: var(--space-2);
+  white-space: nowrap;
 }
 
 .protectedChevron {
@@ -302,7 +344,7 @@
   transition: transform 120ms ease;
 }
 
-.protectedRow[aria-expanded='true'] .protectedChevron {
+.setAsideRow[aria-expanded='true'] .protectedChevron {
   transform: rotate(180deg);
 }
 
@@ -320,7 +362,7 @@
 
 .protectedDetails {
   background: var(--color-surface);
-  border: 2px solid var(--color-border);
+  border: 1px solid var(--color-border);
   border-top: 0;
   margin: 0 var(--space-2);
   padding: var(--space-3);

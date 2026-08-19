@@ -63,6 +63,14 @@ export const VAULT_COORDINATOR_POLICY_KEY = `${NS}:vaultCoordinator:policy`;
  */
 export const VAULT_COORDINATOR_PLANS_KEY = `${NS}:vaultCoordinator:plans`;
 
+/**
+ * Community Vault owner records, keyed by campaign id. Each record holds one
+ * independently generated, password-encrypted owner campaign root plus the
+ * exact public policy it has accepted. This is deliberately separate from
+ * both the Spending vault map and the personal Vault coordinator keys.
+ */
+export const COMMUNITY_VAULT_OWNERS_KEY = `${NS}:communityVault:owners`;
+
 export function derivationKey(
   vaultId: string,
   network: Network,

@@ -47,8 +47,10 @@ function session(refresh: () => void): SessionView {
       name: 'Account 1',
       signingSource: 'software',
     }],
-    canAddAccount: false,
-    accountAddRequirement: { fundAccount: 0, nextAccount: 1 },
+    accountAddState: {
+      kind: 'available', nextAccount: 1, trailingEmptyAccounts: 1,
+      limit: 5, requiresAcknowledgement: true,
+    },
     activeRecoveredAddressCount: 0,
     capabilities: {
       canView: true,

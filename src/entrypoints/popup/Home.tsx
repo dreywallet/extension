@@ -129,7 +129,8 @@ export function Home(props: {
   const banner = gatingBanner(home, t) ?? gatewayBanner(props.gateway, t);
   const showSyncing =
     banner === null &&
-    (showTransientIndexLag ||
+    (home?.scan.kind === 'running' ||
+      showTransientIndexLag ||
       (props.gateway !== null && isGatewaySyncing(props.gateway)));
 
   const available = home === null ? null : parseSats(home.balances.availableSats);
@@ -151,6 +152,9 @@ export function Home(props: {
     available === null || unavailableClean === null || pendingPayment === null
       ? null
       : available + unavailableClean + pendingPayment;
+  const showsOnlyAvailableBalance =
+    bitcoinBalance !== null && unavailableClean === 0n && pendingPayment === 0n &&
+    home?.dataGating.state === 'fresh';
   const formatAmount = (value: bigint): string =>
     amountsHidden
       ? t('privacy.amountHidden')
@@ -208,7 +212,9 @@ export function Home(props: {
       ) : null}
 
       <div className={styles['balanceCard']} data-testid="balance-card">
-        <span className={styles['balanceLabel']}>{t('home.balance')}</span>
+        <span className={styles['balanceLabel']}>
+          {t(showsOnlyAvailableBalance ? 'home.availableToSend' : 'home.balance')}
+        </span>
         <Button
           variant="ghost"
           className={styles['balancePrivacyButton']}
@@ -282,11 +288,11 @@ export function Home(props: {
       ) : null}
 
       {protectedSats !== null && protectedSats > 0n ? (
-        <div className={styles['protectedDisclosure']}>
-          {/* §10.2: protected sats stay separate without occupying permanent detail space. */}
+        <div className={styles['setAsideDisclosure']}>
+          {/* §10.2: the consequence stays visible; advanced reasons remain on demand. */}
           <button
             type="button"
-            className={styles['protectedRow']}
+            className={styles['setAsideRow']}
             aria-expanded={protectionExpanded}
             aria-controls={protectionDetailsId}
             aria-label={t('home.protected.toggle', { amount: formatAmount(protectedSats) })}
@@ -312,12 +318,7 @@ export function Home(props: {
             </div>
           ) : null}
         </div>
-      ) : (
-        <div className={styles['protectedRow']} title={t('home.protected.hint')}>
-          <span>{t('home.protected')}</span>
-          <span>{protectedSats === null ? '—' : formatAmount(protectedSats)}</span>
-        </div>
-      )}
+      ) : null}
 
       {home !== null && home.wrongLaneCount > 0 ? (
         <p role="alert" className={styles['statusBanner']}>

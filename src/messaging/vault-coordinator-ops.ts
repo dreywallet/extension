@@ -358,6 +358,14 @@ const createPolicyRequest = z
   .strict();
 
 const policyRequest = z.object(sessionExpectation).strict();
+const policyPairingQrRequest = z.object({
+  password: z.string().min(1),
+  ...sessionExpectation,
+}).strict();
+const acknowledgePolicyPairingRequest = z.object({
+  policyId: hex(32),
+  ...sessionExpectation,
+}).strict();
 
 const recoveryKitRequest = z.object(sessionExpectation).strict();
 const acknowledgeRecoveryKitExportRequest = z.object({
@@ -805,6 +813,14 @@ const recoveryCReadinessResult = z.object({
     'not_started', 'setup_open', 'setup_complete', 'kit_required', 'backup_required',
     'backup_open', 'ready', 'unusable',
   ]),
+  /** Locally stored Desktop approval role evidence; never inferred from a policy. */
+  localRole: z.enum(['absent', 'usable', 'unusable']),
+  /** A policy is usable only after its descriptors and exact local role binding verify. */
+  policyState: z.enum(['absent', 'usable', 'unusable']),
+  /** True only when that verified committed policy contains its canonical phone signer. */
+  phoneSignerPaired: z.boolean(),
+  /** Derived from the compiled, reviewed standalone package release digests. */
+  standaloneRecoveryPackageAvailable: z.boolean(),
   policyId: hex(32).nullable(),
   setupComplete: z.boolean(),
   kitExported: z.boolean(),
@@ -833,8 +849,20 @@ const policyResult = z
     /** `unusable` means a stored policy exists but does not parse. */
     state: z.enum(['absent', 'present', 'unusable']),
     policy: policySummary.nullable(),
+    /** Restart-safe final handoff. Null when no authenticated Mobile B
+     * pairing envelope is available for this policy. */
+    policyQrFrames: z.array(z.string().startsWith('ur:x-drey-vault/')).min(1).max(256).nullable(),
+    mobilePairingComplete: z.boolean(),
   })
   .strict();
+
+const policyPairingQrResult = z.object({
+  policyQrFrames: z.array(z.string().startsWith('ur:x-drey-vault/')).min(1).max(256),
+}).strict();
+const acknowledgePolicyPairingResult = z.object({
+  policyId: hex(32),
+  mobilePairingComplete: z.literal(true),
+}).strict();
 
 /**
  * ADR 0007 §6. Non-spending but highly privacy-sensitive: it names every xpub
@@ -1011,6 +1039,18 @@ export const VAULT_COORDINATOR_OP_SCHEMAS = {
     allowedSenders: TRUSTED_SENDERS,
     requiresUnlock: true,
   },
+  'vaultCoordinator.policyPairingQr': {
+    request: policyPairingQrRequest,
+    response: policyPairingQrResult,
+    allowedSenders: TRUSTED_SENDERS,
+    requiresUnlock: true,
+  },
+  'vaultCoordinator.acknowledgePolicyPairing': {
+    request: acknowledgePolicyPairingRequest,
+    response: acknowledgePolicyPairingResult,
+    allowedSenders: TRUSTED_SENDERS,
+    requiresUnlock: true,
+  },
   'vaultCoordinator.recoveryKit': {
     request: recoveryKitRequest,
     response: recoveryKitResult,
@@ -1158,6 +1198,10 @@ export type VaultCoordinatorCreatePolicyRequest = z.infer<typeof createPolicyReq
 export type VaultCoordinatorCreatePolicyResult = z.infer<typeof createPolicyResult>;
 export type VaultCoordinatorPolicyRequest = z.infer<typeof policyRequest>;
 export type VaultCoordinatorPolicyResult = z.infer<typeof policyResult>;
+export type VaultCoordinatorPolicyPairingQrRequest = z.infer<typeof policyPairingQrRequest>;
+export type VaultCoordinatorPolicyPairingQrResult = z.infer<typeof policyPairingQrResult>;
+export type VaultCoordinatorAcknowledgePolicyPairingRequest = z.infer<typeof acknowledgePolicyPairingRequest>;
+export type VaultCoordinatorAcknowledgePolicyPairingResult = z.infer<typeof acknowledgePolicyPairingResult>;
 export type VaultCoordinatorPolicySummary = z.infer<typeof policySummary>;
 export type VaultCoordinatorRecoveryKitRequest = z.infer<typeof recoveryKitRequest>;
 export type VaultCoordinatorRecoveryKitResult = z.infer<typeof recoveryKitResult>;

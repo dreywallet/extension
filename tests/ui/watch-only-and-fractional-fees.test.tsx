@@ -103,8 +103,7 @@ describe('watch-only and fractional-fee UI boundaries', () => {
         { accountId: SOFTWARE_ID, account: 0, name: 'Everyday', signingSource: 'software' },
         { accountId: WATCH_ID, account: 7, name: 'Cold observer', signingSource: 'none' },
       ],
-      canAddAccount: false,
-      accountAddRequirement: null,
+      accountAddState: null,
       activeRecoveredAddressCount: 0,
       capabilities: {
         signMethod: 'software', canView: true, canDeriveAddresses: true,

@@ -28,9 +28,41 @@ function accountRow(account: number, fields: Omit<AccountListResult['accounts'][
 afterEach(cleanup);
 
 describe('ManageAccounts', () => {
+  it('confirms the empty-account recovery tradeoff before adding', async () => {
+    const additions: unknown[] = [];
+    installFakeChrome({
+      'account.list': () => ({ ok: true, result: {
+        accountAddState: {
+          kind: 'available', nextAccount: 2, trailingEmptyAccounts: 1,
+          limit: 5, requiresAcknowledgement: true,
+        },
+        accounts: [
+          accountRow(0, { active: true, hidden: false, hasHistory: true, canHide: false, hideBlocker: 'active' }),
+          accountRow(1, { active: false, hidden: false, hasHistory: false, canHide: true, hideBlocker: null }),
+        ],
+      } }),
+      'account.add': (payload) => {
+        additions.push(payload);
+        return { ok: true, result: { accountId: ACCOUNT_IDS[2], account: 2 } };
+      },
+    });
+    render(<UiRoot sender="fullpage"><ManageAccounts expectation={EXPECTATION} onBack={vi.fn()} /></UiRoot>);
+    await userEvent.click(await screen.findByRole('button', { name: 'Add account' }));
+    expect(screen.getByText(/Some other wallets may stop at the first empty account/iu)).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(additions).toHaveLength(0);
+    await userEvent.click(screen.getByRole('button', { name: 'Add account' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Create account' }));
+    await waitFor(() => expect(additions).toEqual([{
+      ...EXPECTATION,
+      acknowledgeEmptyAccountRisk: true,
+    }]));
+  });
+
   it('keeps switching compact, explains blockers, and hides or shows reversibly', async () => {
     const visibilityPayloads: unknown[] = [];
     let state: AccountListResult = {
+      accountAddState: null,
       accounts: [
         accountRow(0, { active: true, hidden: false, hasHistory: true, canHide: false, hideBlocker: 'active' }),
         accountRow(1, { active: false, hidden: false, hasHistory: false, canHide: false, hideBlocker: 'stale' }),
@@ -44,6 +76,7 @@ describe('ManageAccounts', () => {
         visibilityPayloads.push(payload);
         const request = payload as { accountId: string; hidden: boolean };
         state = {
+          accountAddState: state.accountAddState,
           accounts: state.accounts.map((account) => account.accountId === request.accountId
             ? { ...account, hidden: request.hidden, canHide: !request.hidden, hideBlocker: null }
             : account),
@@ -98,6 +131,7 @@ describe('ManageAccounts', () => {
       'account.list': () => ({
         ok: true,
         result: {
+          accountAddState: null,
           accounts: [
             accountRow(0, { active: true, hidden: false, hasHistory: true, canHide: false, hideBlocker: 'active' }),
             accountRow(1, { active: false, hidden, hasHistory: hidden, canHide: !hidden, hideBlocker: null }),
@@ -126,7 +160,7 @@ describe('ManageAccounts', () => {
     const imports: unknown[] = [];
     const scans: unknown[] = [];
     installFakeChrome({
-      'account.list': () => ({ ok: true, result: { accounts: [
+      'account.list': () => ({ ok: true, result: { accountAddState: null, accounts: [
         accountRow(0, { active: true, hidden: false, hasHistory: true, canHide: false, hideBlocker: 'active' }),
       ] } }),
       'account.watch.import': (payload) => {
@@ -165,7 +199,7 @@ describe('ManageAccounts', () => {
     const definition = publicAccountFromSeed(Uint8Array.from({ length: 32 }, (_, index) => 64 - index), 'signet', 0);
     const exports: unknown[] = [];
     installFakeChrome({
-      'account.list': () => ({ ok: true, result: { accounts: [
+      'account.list': () => ({ ok: true, result: { accountAddState: null, accounts: [
         { ...accountRow(0, { active: true, hidden: false, hasHistory: true, canHide: false, hideBlocker: 'active' }), accountId: definition.accountId },
       ] } }),
       'account.public.export': (payload) => {

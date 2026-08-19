@@ -19,6 +19,13 @@ const vectors = JSON.parse(readFileSync(new URL('../fixtures/bip39-trezor-vector
 };
 const PUBLIC_SIGNET_MNEMONIC = vectors.english[0]?.[1] ?? '';
 const TEST_PASSWORD = ['public', 'e2e', 'password', 'only'].join('-');
+// Public, unfunded signet Mobile B origin from tests/fixtures/vault-peer-signers.ts.
+const PUBLIC_MOBILE_B_ORIGIN_HEX =
+  '5351564201010101de5b636e0000000e6d2f3438272f31272f30272f32270000006f' +
+  '7470756244456b71425042416b574a613178515168576459793864624e4c474c5572' +
+  '6f68456e476f666178516175556d35576d7a764a674a4364543472574d7035484852' +
+  '646375366547794b6b677641446347727166337434766e7244695233367862653650' +
+  '565a43476436635132';
 
 /** Count opaque durable-preview slots without exposing their keys or contents. */
 async function durablePreviewRecordCount(page: Page): Promise<number> {
@@ -177,7 +184,7 @@ test('@visual captures privacy-audited Drey 0.7.0 release surfaces', async ({
   const output = 'test-results/e2e/release-0.7.0';
   mkdirSync(output, { recursive: true });
   await popup.open();
-  await expect(popup.page.getByText('Bitcoin balance')).toBeVisible();
+  await expect(popup.page.getByText('Available to send')).toBeVisible();
   await expect(popup.page.getByText('60,000 sats').first()).toBeVisible();
   await expect(popup.page.getByText('20,000 sats')).toBeVisible();
   await expect(popup.page.getByText('Received', { exact: true })).toBeVisible();
@@ -187,7 +194,7 @@ test('@visual captures privacy-audited Drey 0.7.0 release surfaces', async ({
     animations: 'disabled',
   });
 
-  await popup.page.getByRole('button', { name: /Protected and reserved bitcoin/u }).click();
+  await popup.page.getByRole('button', { name: /Bitcoin set aside from regular sends/u }).click();
   const review = popup.page.getByRole('button', { name: 'Review protected sats' });
   await expect(review).toBeVisible();
   const reviewPagePromise = extensionContext.waitForEvent('page');
@@ -234,11 +241,18 @@ test('reassembles public animated UR frames through the real extension camera su
   await extensionPage.page.getByRole('button', { name: 'Create Desktop role' }).click();
   await fillPrivate(extensionPage.page.getByLabel('App password'), TEST_PASSWORD);
   await extensionPage.page.getByRole('button', { name: 'Create Desktop role' }).click();
-  await expect(extensionPage.page.getByRole('heading', { name: 'Desktop role (A)' })).toBeVisible();
+  await expect(extensionPage.page.getByRole('heading', {
+    name: 'Next: connect your other two roles',
+  })).toBeVisible();
 
   await extensionPage.page.getByRole('button', { name: 'Start setup' }).click();
-  await expect(extensionPage.page.getByText('Challenge for the other signer')).toBeVisible();
-  await extensionPage.page.getByRole('button', { name: 'Open Vault QR scanner' }).click();
+  await expect(extensionPage.page.getByRole('heading', { name: 'Connect Mobile B' })).toBeVisible();
+  await extensionPage.page.getByText('Technical details and manual entry').click();
+  await extensionPage.page.getByLabel('Signer record from the other device')
+    .fill(PUBLIC_MOBILE_B_ORIGIN_HEX);
+  await fillPrivate(extensionPage.page.getByLabel('App password'), TEST_PASSWORD);
+  await extensionPage.page.getByRole('button', { name: 'Create pairing QR' }).click();
+  await extensionPage.page.getByRole('button', { name: 'Scan Mobile B response 1 of 2' }).click();
   await extensionPage.page.getByRole('button', { name: 'Start camera' }).click();
 
   await expect(extensionPage.page.getByText(
@@ -246,7 +260,8 @@ test('reassembles public animated UR frames through the real extension camera su
   )).toBeVisible({ timeout: 20_000 });
   await expect(extensionPage.page.getByRole('progressbar')).toHaveAttribute('value', '5');
   await expect(extensionPage.page.getByRole('progressbar')).toHaveAttribute('max', '5');
-  await expect(extensionPage.page.getByLabel('Signer record from the other device')).toHaveValue('');
+  await expect(extensionPage.page.getByLabel('Signer record from the other device'))
+    .toHaveValue(PUBLIC_MOBILE_B_ORIGIN_HEX);
   await expect(extensionPage.page.getByLabel('Proof of possession from the other device')).toHaveValue('');
 });
 
@@ -399,12 +414,12 @@ test('creates a disposable wallet and enforces backup verification', async ({
     };
   })).toEqual({ hasInsetFocus: true, outlineStyle: 'none' });
   await popup.lock();
-  await expect(popup.page.getByText('Bitcoin balance')).toHaveCount(0);
+  await expect(popup.page.getByText('Available to send')).toHaveCount(0);
   await expect(popup.page.getByRole('button', { name: 'Send' })).toHaveCount(0);
   await terminateExtensionWorker(extensionContext, extensionId);
   await wakeExtensionWorker(popup.page, extensionId);
   await expect(popup.page.getByRole('heading', { name: 'Unlock Drey' })).toBeVisible();
-  await expect(popup.page.getByText('Bitcoin balance')).toHaveCount(0);
+  await expect(popup.page.getByText('Available to send')).toHaveCount(0);
   const password = popup.page.getByLabel('App password');
   await password.click();
   await popup.page.keyboard.press('Tab');
@@ -455,7 +470,7 @@ test('renders the restored wallet home at compact popup scale', async ({
   });
 
   await popup.open();
-  await expect(popup.page.getByText('Bitcoin balance')).toBeVisible();
+  await expect(popup.page.getByText('Available to send')).toBeVisible();
   await popup.page.getByRole('button', { name: 'Receive' }).click();
   await expect(popup.page.getByRole('img', { name: 'QR code for your receive address' }))
     .toBeVisible();
@@ -490,7 +505,7 @@ test('renders the restored wallet home at compact popup scale', async ({
     () => document.body.dataset['sawTransientIndexLag'],
   )).toBe('false');
   await expect(popup.page.getByText(/Unavailable: rare-sat detection/u)).toBeVisible();
-  const protectedDisclosure = popup.page.getByRole('button', { name: /Protected and reserved bitcoin/u });
+  const protectedDisclosure = popup.page.getByRole('button', { name: /Bitcoin set aside from regular sends/u });
   await expect(protectedDisclosure).toHaveAttribute('aria-expanded', 'false');
   await protectedDisclosure.click();
   await expect(popup.page.getByText(/outputs carrying protected assets or collectibles/u))
@@ -575,7 +590,7 @@ test('renders the restored wallet home at compact popup scale', async ({
   await expect(accountMenu).toHaveCount(0);
   const layout = await popup.page.evaluate(() => {
     const balanceLabel = [...document.querySelectorAll('span')]
-      .find((element) => element.textContent === 'Bitcoin balance');
+      .find((element) => element.textContent === 'Available to send');
     const rectHeight = (element: Element | null | undefined) =>
       element?.getBoundingClientRect().height ?? null;
     const rectWidth = (element: Element | null | undefined) =>
@@ -621,6 +636,9 @@ test('renders the restored wallet home at compact popup scale', async ({
               labelClearance: control.left - label.right,
               shortcutClearance:
                 quickAddresses === undefined ? null : quickAddresses.left - control.right,
+              borderColor: getComputedStyle(
+                document.querySelector('button[aria-label="Hide balances"]')!,
+              ).borderColor,
               topOffset: control.top - card.top,
             }
           : null;
@@ -671,6 +689,7 @@ test('renders the restored wallet home at compact popup scale', async ({
   expect(layout.balanceHeight).toBeLessThanOrEqual(135);
   expect(layout.balancePrivacyAlignment).not.toBeNull();
   expect(layout.balancePrivacyAlignment?.contained).toBe(true);
+  expect(layout.balancePrivacyAlignment?.borderColor).toBe('rgba(0, 0, 0, 0)');
   expect(layout.balancePrivacyAlignment?.labelClearance).toBeGreaterThanOrEqual(8);
   expect(layout.balancePrivacyAlignment?.shortcutClearance).toBeGreaterThanOrEqual(4);
   expect(layout.balancePrivacyAlignment?.topOffset).toBeGreaterThanOrEqual(12);
@@ -688,13 +707,13 @@ test('renders the restored wallet home at compact popup scale', async ({
   expect(layout.iconControls.every(({ height, width }) => height >= 40 && width >= 40)).toBe(true);
 
   const hideBalances = popup.page.getByRole('button', { name: 'Hide balances' });
-  const balanceHeightBeforePrivacy = await popup.page.getByText('Bitcoin balance')
+  const balanceHeightBeforePrivacy = await popup.page.getByText('Available to send')
     .locator('..')
     .evaluate((card) => card.getBoundingClientRect().height);
   await hideBalances.click();
   await expect(popup.page.getByRole('button', { name: 'Show balances' }))
     .toHaveAttribute('aria-pressed', 'true');
-  const hiddenBalanceLayout = await popup.page.getByText('Bitcoin balance')
+  const hiddenBalanceLayout = await popup.page.getByText('Available to send')
     .locator('..')
     .evaluate((card) => ({
       height: card.getBoundingClientRect().height,
@@ -718,7 +737,7 @@ test('renders the restored wallet home at compact popup scale', async ({
     .toBe('none');
 
   const pageCount = extensionContext.pages().length;
-  await popup.page.getByRole('button', { name: 'Send' }).click();
+  await popup.page.getByRole('button', { name: 'Send', exact: true }).click();
   await expect(popup.page.getByRole('heading', { name: 'Send Bitcoin' })).toBeVisible();
   await expect(popup.page.getByLabel('Amount (BTC)')).toBeVisible();
   await expect(popup.page.getByRole('button', { name: 'Open send in full page' })).toBeVisible();
@@ -819,8 +838,8 @@ test('updates one incoming payment from pending to confirmed after hide and resu
   await expect(popup.page.getByText('Bitcoin balance').locator('..'))
     .toContainText('10,000 sats');
   await expect(popup.page.getByText('Available now').locator('..')).toContainText('0 sats');
-  await expect(popup.page.getByText('Protected & reserved', { exact: true }).locator('..'))
-    .toContainText('0 sats');
+  await expect(popup.page.getByText('Set aside', { exact: true }))
+    .toHaveCount(0);
   await popup.page.getByRole('button', { name: 'Activity' }).click();
 
   const away = await extensionContext.newPage();
@@ -841,7 +860,7 @@ test('updates one incoming payment from pending to confirmed after hide and resu
     await expect(payment).not.toContainText('Pending');
 
     await popup.page.getByRole('button', { name: 'Bitcoin' }).click();
-    const balanceCard = popup.page.getByText('Bitcoin balance').locator('..');
+    const balanceCard = popup.page.getByText('Available to send').locator('..');
     await expect(balanceCard).toContainText('10,000 sats');
     const recentPayment = popup.page.getByRole('link').filter({ hasText: '+10,000 sats' });
     await expect(recentPayment).toHaveCount(1);
@@ -866,9 +885,9 @@ test('labels a signed sat-flow-verified mempool inscription as a pending Ordinal
   await expect(pendingOrdinal).toContainText('546 sats');
   await expect(popup.page.getByText('Verification completes after confirmation')).toBeVisible();
   await expect(popup.page.getByText('Pending confirmation')).toHaveCount(0);
-  await expect(popup.page.getByText('Bitcoin balance').locator('..')).toContainText('0 sats');
-  await expect(popup.page.getByText('Protected & reserved', { exact: true }).locator('..'))
-    .toContainText('0 sats');
+  await expect(popup.page.getByText('Available to send').locator('..')).toContainText('0 sats');
+  await expect(popup.page.getByText('Set aside', { exact: true }))
+    .toHaveCount(0);
   await expect(popup.page.getByTestId('home-collectibles-count')).toHaveText('0');
 
   await popup.page.getByRole('button', { name: 'Ordinals', exact: true }).click();
@@ -917,7 +936,7 @@ test('labels a signed sat-flow-verified mempool inscription as a pending Ordinal
     await expect(pendingCard).not.toContainText('Preview pending confirmation');
     await popup.page.getByRole('button', { name: 'Bitcoin' }).click();
     await expect(popup.page.getByText('Pending Ordinal', { exact: true })).toHaveCount(0);
-    await expect(popup.page.getByText('Protected & reserved', { exact: true }).locator('..'))
+    await expect(popup.page.getByText('Set aside', { exact: true }).locator('..'))
       .toContainText('546 sats');
     await expect(popup.page.getByTestId('home-collectibles-count')).toHaveText('1');
   } finally {
@@ -1142,10 +1161,11 @@ test('restores the public fixture, persists privacy, and exercises provider appr
   await dapp.invoke('Unknown flexible marketplace');
   // Since the §21.1 generic listing, an unknown flexible request is no longer
   // refused by origin: it proceeds to core analysis and fails closed there —
-  // this fixture's inputs cannot be classified, so the context is stale. A
+  // this fixture's inputs cannot be classified, so wallet data cannot be made
+  // current. A
   // flexible PSBT never reaches approval without proven listing invariants.
-  await expect(dapp.output()).toContainText('Request context is stale');
-  await expect(dapp.output()).toContainText('-32004');
+  await expect(dapp.output()).toContainText('Wallet data is not current');
+  await expect(dapp.output()).toContainText('-32009');
   await dapp.invoke('Same-document navigate');
   await expect(dapp.output()).toContainText('"providerAvailable": true');
   await dapp.invoke('Permissions');
@@ -1173,11 +1193,12 @@ test('restores the public fixture, persists privacy, and exercises provider appr
   await dapp.invoke('Permissions');
   await expect(dapp.output()).toHaveText('[]');
 
-  // The new document starts disconnected, but a valid packaged security list
-  // permits the exact previously approved identity grant to reconnect without
-  // another prompt. The controller unit suite separately proves that broader
-  // requests still require approval.
-  await dapp.invoke('Connect');
+  // The exact data grant survives, but approved address purposes are bound to
+  // one browser document. A full navigation therefore requires a new purpose
+  // review even when the signed security list allows the origin.
+  const reconnected = await dapp.invokeWithApproval('Connect');
+  await reconnected.expectMethod('wallet_connect');
+  await reconnected.approve();
   await expect(dapp.output()).toContainText('"walletType": "software"');
 
   await dapp.invoke('Disconnect');
@@ -1257,6 +1278,18 @@ test('restores the public fixture, persists privacy, and exercises provider appr
     await settingsAccountMenu.getByRole('menuitem', { name: 'Add account' }).click();
     await expect(fullpage.getByRole('button', { name: 'Active account' }))
       .toContainText('Account 2');
+    await activeAccount.click();
+    const reopenedAccountMenu = fullpage.getByRole('menu', { name: 'Active account' });
+    await reopenedAccountMenu.getByRole('menuitem', { name: 'Add account' }).click();
+    await expect(reopenedAccountMenu.getByText('Create another empty account?')).toBeVisible();
+    await expect(reopenedAccountMenu.getByText(/Some other wallets may stop at the first empty account/iu))
+      .toBeVisible();
+    await reopenedAccountMenu.getByRole('button', { name: 'Cancel' }).click();
+    await expect(reopenedAccountMenu.getByText('Create another empty account?')).toHaveCount(0);
+    await reopenedAccountMenu.getByRole('menuitem', { name: 'Add account' }).click();
+    await reopenedAccountMenu.getByRole('button', { name: 'Create account' }).click();
+    await expect(fullpage.getByRole('button', { name: 'Active account' }))
+      .toContainText('Account 3');
   } finally {
     await fullpage.close();
   }
@@ -1398,7 +1431,8 @@ test('@m9p reviews signed inert inscription previews and fails closed across mis
   await popup.page.getByRole('button', { name: 'Close' }).click();
   await expect(popup.page.getByRole('dialog', { name: 'Sandboxed inscription media' })).toHaveCount(0);
   await popup.page.getByRole('button', { name: 'Hide' }).first().click();
-  await popup.page.getByRole('button', { name: 'Back' }).click();
+  // Hide and Unhide return to the shelves so the new filter counts and the
+  // item's removal from the current view are immediately clear.
   await expect(popup.page.getByRole('tab', { name: 'All (2)' })).toBeVisible();
   await expect(popup.page.getByRole('tab', { name: 'Hidden (1)' })).toBeVisible();
 
@@ -1646,7 +1680,7 @@ test('pastes a BIP-321 on-chain fallback into Send and reviews request metadata'
     password: TEST_PASSWORD,
   });
   await popup.open();
-  await expect(popup.page.getByText('Bitcoin balance')).toBeVisible();
+  await expect(popup.page.getByText('Available to send')).toBeVisible();
 
   const fullpage = await extensionContext.newPage();
   try {
@@ -1909,7 +1943,7 @@ test('@m9x serves Ordinals tab switches from memory without refetching or loggin
   await activity.click();
   await expect(allTab).toHaveCount(0);
   await bitcoin.click();
-  await expect(popup.page.getByText('Bitcoin balance')).toBeVisible();
+  await expect(popup.page.getByText('Available to send')).toBeVisible();
   const homeCarousel = popup.page.getByTestId('home-collectibles-carousel');
   await expect(homeCarousel).toBeVisible({ timeout: 30_000 });
   expect(await homeCarousel.evaluate((element) => {
@@ -1942,7 +1976,7 @@ test('@m9x serves Ordinals tab switches from memory without refetching or loggin
     await activity.click();
     await expect(allTab).toHaveCount(0);
     await bitcoin.click();
-    await expect(popup.page.getByText('Bitcoin balance')).toBeVisible();
+    await expect(popup.page.getByText('Available to send')).toBeVisible();
     await ordinals.click();
     await expect(allTab).toHaveText(painted ?? '');
     await openFirstGalleryShelf(popup.page);

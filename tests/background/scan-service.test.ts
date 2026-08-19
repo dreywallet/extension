@@ -30,7 +30,7 @@ import {
   scanCheckpointSchema,
   type GalleryRecord,
 } from '@drey/core/scan/cache-schemas';
-import { buildScanUnits } from '@drey/core/scan/scan-state';
+import { buildScanUnits, unitKey } from '@drey/core/scan/scan-state';
 import { mnemonicToSeed } from '@drey/core/domain/keys/mnemonic';
 import { publicAccountFromSeed } from '@drey/core/domain/accounts/public-account';
 import { base64ToBytes } from '@drey/core/domain/vault/encoding';
@@ -601,13 +601,56 @@ describe('discovery scan end-to-end (§8.2, §10.2, §12)', () => {
     const beforeRefresh = fake.counts.snapshot;
     await service.startScan({ mode: 'refresh', ...expectation });
     expect(await waitForScanEnd(service, expectation)).toBe('completed');
-    // All known-active payment lanes remain fresh; both lanes are additionally
-    // probed for account 0 and the selected account. No fixed
-    // discovery window is reintroduced.
-    expect(fake.counts.snapshot - beforeRefresh).toBeLessThanOrEqual(60);
+    // Routine work stays constant even with 25 known accounts: only the
+    // selected account's two lanes are probed.
+    expect(fake.counts.snapshot - beforeRefresh).toBeLessThanOrEqual(4);
   }, 15_000);
 
-  it('persists one explicit empty account and blocks skipping or adding past it', async () => {
+  it('restores intermediate accounts through a later confirmed Ordinals account', async () => {
+    const seed = mnemonicToSeed(DEV_MNEMONIC);
+    const ring = buildAccountKeyRing(seed, 'signet', buildScanUnits('signet', false));
+    seed.fill(0);
+    const unit = { source: 'standard' as const, account: 4, lane: 'ordinals' as const };
+    const hash = windowScriptHashes(ring, unit, 0, 0, 1)[0]!.scriptHash;
+    ring.standard.clear();
+    ring.legacy.clear();
+    const cache = new MemoryWalletCache();
+    const clock = { now: Date.parse('2026-07-20T00:00:05.000Z') };
+    const harness = makeHarness(clock.now, {
+      network: 'signet',
+      walletCache: cache,
+      gateway: makeFakeGateway({
+        scenario: 'clean',
+        clock,
+        extraHistoryByScriptHash: {
+          [hash]: [{
+            txid: '6'.repeat(64),
+            height: 249_900,
+            timestamp: null,
+            fundedScriptHashes: [hash],
+            spentScriptHashes: [],
+            deltaSats: '1',
+            replacesTxid: null,
+            replacedByTxid: null,
+            confirmationState: 'confirmed',
+            feeSats: null,
+            vsize: null,
+            replaceable: false,
+            packageFeeSats: null,
+            packageVsize: null,
+            cpfpEligible: false,
+          }],
+        },
+      }).gateway,
+    });
+    const { service, expectation } = await setupWallet(harness);
+
+    await service.startScan({ mode: 'initial', ...expectation });
+    expect(await waitForScanEnd(service, expectation)).toBe('completed');
+    expect((await service.sessionSnapshot()).selectableAccounts).toEqual([0, 1, 2, 3, 4]);
+  }, 15_000);
+
+  it('persists an explicit empty account and requires the one-time gap acknowledgement', async () => {
     const cache = new MemoryWalletCache();
     const clock = { now: Date.parse('2026-07-20T00:00:05.000Z') };
     const harness = makeHarness(clock.now, {
@@ -617,7 +660,8 @@ describe('discovery scan end-to-end (§8.2, §10.2, §12)', () => {
     });
     const { service, expectation } = await setupWallet(harness);
 
-    await expect(service.addAccount(expectation)).rejects.toMatchObject({
+    await expect(service.addAccount({ ...expectation, acknowledgeEmptyAccountRisk: false }))
+      .rejects.toMatchObject({
       code: 'ERR_INVALID_PAYLOAD',
     });
     await expect(
@@ -629,16 +673,24 @@ describe('discovery scan end-to-end (§8.2, §10.2, §12)', () => {
     expect(await service.sessionSnapshot()).toMatchObject({
       activeAccount: 0,
       selectableAccounts: [0],
-      canAddAccount: true,
+      accountAddState: {
+        kind: 'available', nextAccount: 1, trailingEmptyAccounts: 0,
+        requiresAcknowledgement: false,
+      },
     });
 
-    expect(await service.addAccount(expectation)).toEqual({ accountId: accountId(1), account: 1 });
+    expect(await service.addAccount({ ...expectation, acknowledgeEmptyAccountRisk: false }))
+      .toEqual({ accountId: accountId(1), account: 1 });
     expect(await service.sessionSnapshot()).toMatchObject({
       activeAccount: 1,
       selectableAccounts: [0, 1],
-      canAddAccount: false,
+      accountAddState: {
+        kind: 'available', nextAccount: 2, trailingEmptyAccounts: 1,
+        requiresAcknowledgement: true,
+      },
     });
-    await expect(service.addAccount(expectation)).rejects.toMatchObject({
+    await expect(service.addAccount({ ...expectation, acknowledgeEmptyAccountRisk: false }))
+      .rejects.toMatchObject({
       code: 'ERR_INVALID_PAYLOAD',
     });
     await expect(
@@ -674,7 +726,10 @@ describe('discovery scan end-to-end (§8.2, §10.2, §12)', () => {
     expect(await service.sessionSnapshot()).toMatchObject({
       activeAccount: 0,
       selectableAccounts: [0],
-      canAddAccount: false,
+      accountAddState: {
+        kind: 'available', nextAccount: 2, trailingEmptyAccounts: 1,
+        requiresAcknowledgement: true,
+      },
     });
     await expect(
       service.setActiveAccount({ ...expectation, accountId: accountId(1) }),
@@ -687,7 +742,94 @@ describe('discovery scan end-to-end (§8.2, §10.2, §12)', () => {
     expect((await service.sessionSnapshot()).selectableAccounts).toEqual([0, 1]);
   });
 
-  it('automatically shows a hidden account when a later scan finds pending activity', async () => {
+  it('allows five consecutive empty accounts, remembers the warning, and reopens after Ordinals confirms', async () => {
+    const seed = mnemonicToSeed(DEV_MNEMONIC);
+    const ring = buildAccountKeyRing(seed, 'signet', buildScanUnits('signet', false));
+    seed.fill(0);
+    const unit = { source: 'standard' as const, account: 5, lane: 'ordinals' as const };
+    const ordinalHash = windowScriptHashes(ring, unit, 0, 0, 1)[0]!.scriptHash;
+    ring.standard.clear();
+    ring.legacy.clear();
+
+    const extraHistoryByScriptHash: Record<string, unknown[]> = {};
+    const cache = new MemoryWalletCache();
+    const clock = { now: Date.parse('2026-07-20T00:00:05.000Z') };
+    const harness = makeHarness(clock.now, {
+      network: 'signet',
+      walletCache: cache,
+      gateway: makeFakeGateway({ scenario: 'clean', clock, extraHistoryByScriptHash }).gateway,
+    });
+    const { service, expectation } = await setupWallet(harness);
+    await service.startScan({ mode: 'initial', ...expectation });
+    expect(await waitForScanEnd(service, expectation)).toBe('completed');
+
+    await service.addAccount({ ...expectation, acknowledgeEmptyAccountRisk: false });
+    await expect(service.addAccount({ ...expectation, acknowledgeEmptyAccountRisk: false }))
+      .rejects.toMatchObject({ code: 'ERR_INVALID_PAYLOAD' });
+    await service.addAccount({ ...expectation, acknowledgeEmptyAccountRisk: true });
+
+    const restarted = harness.rebuild();
+    await expect(restarted.sessionSnapshot()).resolves.toMatchObject({
+      accountAddState: {
+        kind: 'available', nextAccount: 3, trailingEmptyAccounts: 2,
+        requiresAcknowledgement: false,
+      },
+    });
+    for (let account = 3; account <= 5; account += 1) {
+      await expect(restarted.addAccount({
+        ...expectation,
+        acknowledgeEmptyAccountRisk: false,
+      })).resolves.toEqual({ accountId: accountId(account), account });
+    }
+    await expect(restarted.sessionSnapshot()).resolves.toMatchObject({
+      accountAddState: {
+        kind: 'empty_limit', firstEmptyAccount: 1, lastEmptyAccount: 5, limit: 5,
+      },
+    });
+    await expect(restarted.addAccount({
+      ...expectation,
+      acknowledgeEmptyAccountRisk: true,
+    })).rejects.toMatchObject({ code: 'ERR_INVALID_PAYLOAD' });
+
+    extraHistoryByScriptHash[ordinalHash] = [{
+      txid: '7'.repeat(64),
+      height: null,
+      timestamp: null,
+      fundedScriptHashes: [ordinalHash],
+      spentScriptHashes: [],
+      deltaSats: '1',
+      replacesTxid: null,
+      replacedByTxid: null,
+      confirmationState: 'mempool',
+      feeSats: null,
+      vsize: null,
+      replaceable: false,
+      packageFeeSats: null,
+      packageVsize: null,
+      cpfpEligible: false,
+    }];
+    await restarted.startScan({ mode: 'rescan', ...expectation });
+    expect(await waitForScanEnd(restarted, expectation)).toBe('completed');
+    await expect(restarted.sessionSnapshot()).resolves.toMatchObject({
+      accountAddState: { kind: 'empty_limit' },
+    });
+
+    extraHistoryByScriptHash[ordinalHash] = [{
+      ...(extraHistoryByScriptHash[ordinalHash]![0] as Record<string, unknown>),
+      height: 249_900,
+      confirmationState: 'confirmed',
+    }];
+    await restarted.startScan({ mode: 'rescan', ...expectation });
+    expect(await waitForScanEnd(restarted, expectation)).toBe('completed');
+    await expect(restarted.sessionSnapshot()).resolves.toMatchObject({
+      accountAddState: {
+        kind: 'available', nextAccount: 6, trailingEmptyAccounts: 0,
+        requiresAcknowledgement: false,
+      },
+    });
+  }, 20_000);
+
+  it('shows a hidden inactive account when a manual rescan finds pending activity', async () => {
     const extraHistoryByScriptHash: Record<string, unknown[]> = {};
     const walletChanges: string[] = [];
     const cache = new MemoryWalletCache();
@@ -701,7 +843,7 @@ describe('discovery scan end-to-end (§8.2, §10.2, §12)', () => {
     const { service, expectation } = await setupWallet(harness);
     await service.startScan({ mode: 'initial', ...expectation });
     expect(await waitForScanEnd(service, expectation)).toBe('completed');
-    await service.addAccount(expectation);
+    await service.addAccount({ ...expectation, acknowledgeEmptyAccountRisk: false });
     await service.startScan({ mode: 'rescan', ...expectation });
     expect(await waitForScanEnd(service, expectation)).toBe('completed');
     await service.setActiveAccount({ ...expectation, accountId: accountId(0) });
@@ -734,7 +876,7 @@ describe('discovery scan end-to-end (§8.2, §10.2, §12)', () => {
     }];
 
     walletChanges.length = 0;
-    await service.startScan({ mode: 'refresh', ...expectation });
+    await service.startScan({ mode: 'rescan', ...expectation });
     expect(await waitForScanEnd(service, expectation)).toBe('completed');
     expect((await service.sessionSnapshot()).selectableAccounts).toEqual([0, 1]);
     expect(await service.listAccounts(expectation)).toMatchObject({
@@ -748,7 +890,7 @@ describe('discovery scan end-to-end (§8.2, §10.2, §12)', () => {
       })]),
     });
     expect(walletChanges).toContain('account');
-  });
+  }, 10_000);
 
   it('does not hide an account with a pending mempool transaction', async () => {
     const seed = mnemonicToSeed(DEV_MNEMONIC);
@@ -1236,7 +1378,7 @@ describe('discovery scan end-to-end (§8.2, §10.2, §12)', () => {
     expect(home.dataGating.state).toBe('conflicting_sources');
   });
 
-  it('preserves the last consistent cache on conflict and clears the gate only after a clean rescan', async () => {
+  it('preserves the last consistent cache and rechecks all conflicted units before clearing', async () => {
     const cache = new MemoryWalletCache();
     const clock = { now: Date.parse('2026-07-20T00:00:05.000Z') };
     const fake = makeFakeGateway({ scenario: 'clean', clock });
@@ -1272,9 +1414,37 @@ describe('discovery scan end-to-end (§8.2, §10.2, §12)', () => {
     expect(conflicted.balances.unavailableCleanSats).toBe('205556');
     expect(conflicted.lastSyncedAt).toBe(consistentAt);
 
+    const session = await getSession(harness.session);
+    if (!session) throw new Error('missing conflict recovery session');
+    const dek = base64ToBytes(session.dekB64);
+    const conflictedCheckpoint = scanCheckpointSchema.parse(openRecord(
+      dek,
+      (await cache.get({
+        vaultId: expectation.expectedVaultId,
+        network: 'signet',
+        type: 'scanState',
+        key: 'all',
+      }))!,
+      scanCheckpointSchema,
+    ));
+    const conflictedUnits = new Set(conflictedCheckpoint.done.map(unitKey));
+
     fake.setSkewClassifyForTxid(undefined);
-    await service.startScan({ mode: 'rescan', ...expectation });
+    await service.startScan({ mode: 'refresh', ...expectation });
     expect(await waitForScanEnd(service, expectation)).toBe('completed');
+    const recoveredCheckpoint = scanCheckpointSchema.parse(openRecord(
+      dek,
+      (await cache.get({
+        vaultId: expectation.expectedVaultId,
+        network: 'signet',
+        type: 'scanState',
+        key: 'all',
+      }))!,
+      scanCheckpointSchema,
+    ));
+    const recoveredUnits = new Set(recoveredCheckpoint.done.map(unitKey));
+    for (const key of conflictedUnits) expect(recoveredUnits.has(key)).toBe(true);
+    dek.fill(0);
     const reconciled = await service.homeView(expectation);
     expect(reconciled.dataGating.state).toBe('fresh');
     expect(reconciled.balances.availableSats).toBe('205556');
@@ -1597,6 +1767,44 @@ describe('Ordinals gallery and ephemeral media authority', () => {
     });
     expect(refreshed.disposition).toBe('media');
     expect(fake.counts.media).toBe(1);
+  });
+
+  it('refreshes a stale selected account before provider transfer planning', async () => {
+    const cache = new MemoryWalletCache();
+    const clock = { now: Date.parse('2026-07-20T00:00:05.000Z') };
+    const statusControl = {
+      classificationRevision: 'rev-0001',
+      tip: statusTemplate.coreTip,
+    };
+    const fake = makeFakeGateway({ scenario: 'clean', clock, statusControl });
+    const harness = makeHarness(clock.now, {
+      network: 'signet',
+      walletCache: cache,
+      gateway: fake.gateway,
+    });
+    const { service, expectation } = await setupWallet(harness);
+    await service.startScan({ mode: 'initial', ...expectation });
+    expect(await waitForScanEnd(service, expectation)).toBe('completed');
+
+    statusControl.classificationRevision = 'rev-0002';
+    statusControl.tip = {
+      height: statusTemplate.coreTip.height + 1,
+      hash: 'bc'.repeat(32),
+    };
+    expect((await service.homeView(expectation)).dataGating.state).toBe('index_lag');
+    const beforeRefresh = fake.counts.snapshot;
+    let guardChecks = 0;
+
+    await expect(service.providerEnsureSpendReady({
+      expectedVaultId: expectation.expectedVaultId,
+      expectedSessionId: expectation.expectedSessionId,
+      expectedAccountId: expectation.accountId,
+      expectedAccount: 0,
+    }, () => { guardChecks += 1; })).resolves.toBeUndefined();
+
+    expect(fake.counts.snapshot).toBeGreaterThan(beforeRefresh);
+    expect(guardChecks).toBeGreaterThan(3);
+    expect((await service.homeView(expectation)).dataGating.state).toBe('fresh');
   });
 
   it('distinguishes unverifiable satpoints from genuine co-location', async () => {

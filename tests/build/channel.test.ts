@@ -42,7 +42,8 @@ describe('build channel configuration', () => {
     ) as { scripts: Record<string, string> };
     expect(packageJson.scripts['build']).toContain('.output/production');
     expect(packageJson.scripts['build:next']).toBe(
-      'DREY_BUILD_OUTPUT_ROOT=.output/next wxt build --mode production',
+      'DREY_BUILD_OUTPUT_ROOT=.output/next wxt build --mode production && ' +
+      'node scripts/check-approval-gallery-isolation.mjs .output/next/chrome-mv3',
     );
     expect(packageJson.scripts['zip']).toBe(
       'DREY_BUILD_OUTPUT_ROOT=.output/production node scripts/package-production.mjs',

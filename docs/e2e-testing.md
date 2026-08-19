@@ -207,6 +207,23 @@ Persistent browser profiles are never evidence and must never be retained. Test
 output, reports, profiles, screenshots, traces, and videos must stay ignored by
 Git. Redaction is not permission to use a real seed or password.
 
+The packaged Recovery Center overview has one additional safe presentation path:
+
+```bash
+pnpm exec playwright test tests/e2e/recovery-center.spec.ts --project extension
+pnpm audit:e2e-artifacts
+```
+
+It opens the real full-page Recovery Center with fixed, non-secret test-channel
+status responses for Spending and Vault readiness. The fixture accepts only the
+named overview scenarios and the expected synthetic session; ceremonies and
+mutations fail closed. Its deliberate screenshots stay below
+`test-results/e2e/extension/`. Run the artifact audit before opening any image.
+The matrix covers English and Spanish, all three accents, narrow and desktop
+sizes, and the product's intentionally dark-only theme.
+The compile-time test branch and fixture marker are absent from production,
+next-version, preview, and pilot artifacts.
+
 ## Preview and production checks
 
 Keep channel checks distinct:
@@ -237,6 +254,20 @@ release artifact: do not package, distribute, or represent it as the submitted
 Store version. The command never overwrites `.output/production` or the
 deterministic release ZIP. Any mainnet wallet ceremony remains manual and no
 recovery material may enter automation, screenshots, traces, logs, or chat.
+
+The site-request approval surface can also be reviewed without a supported
+site, wallet, gateway, or funds:
+
+```bash
+pnpm approval:gallery
+```
+
+Open the printed loopback URL and switch among the synthetic connection,
+payment, marketplace, fee-warning, and Advanced PSBT requests. The gallery
+imports the real approval component but lives outside `src/entrypoints`, builds
+only to `.output/approval-gallery`, and replaces approval actions with local
+status messages. `build` and `build:next` scan their output and fail if the
+gallery's isolation marker or path appears in the extension artifact.
 
 The first group verifies that production remains mainnet and retains its existing
 identity and security checks. The test build drives the local harness. The final

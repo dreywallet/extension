@@ -87,6 +87,18 @@ describe('i18n catalogs', () => {
     }
   });
 
+  it('explains Recovery Kit loss and carries both files into the offline check', () => {
+    expect(CATALOGS.en['vault.kit.body']).toContain('losing every copy can make recovery impossible');
+    expect(CATALOGS.en['vault.kit.body']).toContain('Sharing it reveals every Vault address');
+    expect(CATALOGS.es['vault.kit.body']).toContain('perder todas las copias');
+    expect(CATALOGS.es['vault.kit.body']).toContain('revela todas las direcciones de la Bóveda');
+
+    for (const key of ['vault.recoveryC.stepBackup', 'vault.recoveryC.backupDownloaded'] as const) {
+      expect(CATALOGS.en[key], key).toMatch(/Recovery Kit.*paper-check challenge|paper-check challenge.*Recovery Kit/iu);
+      expect(CATALOGS.es[key], key).toMatch(/kit de recuperación.*desafío|desafío.*kit de recuperación/iu);
+    }
+  });
+
   it('keeps catalogs structurally identical and removes stale launch promises', () => {
     expect(Object.keys(CATALOGS.es).sort()).toEqual(Object.keys(CATALOGS.en).sort());
     for (const catalog of Object.values(CATALOGS)) {

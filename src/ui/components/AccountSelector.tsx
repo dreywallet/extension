@@ -37,6 +37,7 @@ export function AccountSelector(props: {
   const [open, setOpen] = useState(false);
   const [addFailed, setAddFailed] = useState(false);
   const [showAddUnavailable, setShowAddUnavailable] = useState(false);
+  const [showGapWarning, setShowGapWarning] = useState(false);
   const expectedVaultId = props.session.expectation?.expectedVaultId ?? null;
   const expectedSessionId = props.session.expectation?.expectedSessionId ?? null;
   const refresh = props.session.refresh;
@@ -53,17 +54,16 @@ export function AccountSelector(props: {
   const activeAccountName = active?.name ?? t('account.number', {
     account: props.session.activeAccount + 1,
   });
-  const addUnavailable = props.session.accountAddRequirement === null
-    ? t('account.addExhausted')
-    : t('account.addUnavailable', {
-        fundAccount: props.session.accountAddRequirement.fundAccount + 1,
-        nextAccount: props.session.accountAddRequirement.nextAccount + 1,
-      });
+  const addState = props.session.accountAddState;
+  const addUnavailable = addState?.kind === 'empty_limit'
+    ? t('account.addLimit')
+    : t('account.addExhausted');
 
   const closeMenu = useCallback((restoreFocus = false) => {
     setOpen(false);
     setAddFailed(false);
     setShowAddUnavailable(false);
+    setShowGapWarning(false);
     if (restoreFocus) triggerRef.current?.focus();
   }, []);
 
@@ -108,19 +108,27 @@ export function AccountSelector(props: {
     ],
   );
 
-  const addAccount = useCallback(async () => {
+  const addAccount = useCallback(async (acknowledgeEmptyAccountRisk = false) => {
     if (
       expectedVaultId === null ||
       expectedSessionId === null
     ) return;
-    if (!props.session.canAddAccount) {
+    if (addState?.kind !== 'available') {
       setShowAddUnavailable(true);
+      return;
+    }
+    if (addState.requiresAcknowledgement && !acknowledgeEmptyAccountRisk) {
+      setShowGapWarning(true);
       return;
     }
     setBusy(true);
     setAddFailed(false);
     try {
-      const result = await rpc('account.add', { expectedVaultId, expectedSessionId });
+      const result = await rpc('account.add', {
+        expectedVaultId,
+        expectedSessionId,
+        acknowledgeEmptyAccountRisk,
+      });
       if (!result.ok) {
         setAddFailed(true);
         return;
@@ -134,7 +142,7 @@ export function AccountSelector(props: {
     closeMenu,
     expectedSessionId,
     expectedVaultId,
-    props.session.canAddAccount,
+    addState,
     refresh,
     rpc,
   ]);
@@ -257,12 +265,28 @@ export function AccountSelector(props: {
             className={[styles['option'], styles['add']].join(' ')}
             role="menuitem"
             disabled={busy}
-            onClick={() => void addAccount()}
+            onClick={() => void addAccount(false)}
           >
             <span className={styles['check']} aria-hidden="true">+</span>
             {showMarks ? <span className={styles['markGap']} aria-hidden="true" /> : null}
             <span className={styles['optionLabel']}>{t('account.add')}</span>
           </button>
+          {showGapWarning ? (
+            <div className={styles['warning']} role="note">
+              <strong>{t('account.addWarning.title')}</strong>
+              <p className={styles['hint']}>{t('account.addWarning.body')}</p>
+              <div className={styles['warningActions']}>
+                <button type="button" className={styles['warningButton']}
+                  onClick={() => setShowGapWarning(false)}>
+                  {t('common.cancel')}
+                </button>
+                <button type="button" className={styles['warningButton']}
+                  disabled={busy} onClick={() => void addAccount(true)}>
+                  {t('account.addWarning.confirm')}
+                </button>
+              </div>
+            </div>
+          ) : null}
           {props.showManageAction === false ? null : (
             <button type="button" className={styles['option']} role="menuitem"
               onClick={() => openDestination(FULLPAGE_HASH.walletAccounts)}>

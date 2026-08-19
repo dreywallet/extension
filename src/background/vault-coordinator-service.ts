@@ -82,6 +82,7 @@ import type {
   RecoveryCSetupChallengeV1,
   VaultPolicyIdentityV1,
   VaultPolicyRecordV1,
+  VaultPairingEnvelopeV1,
   VaultSignerOriginV1,
   VaultUnsignedPlanV1,
 } from '@drey/core/domain/vault/multisig-contracts';
@@ -193,6 +194,9 @@ import type {
   VaultCoordinatorImportRecoveryCSetupResponseRequest,
   VaultCoordinatorPolicyRequest,
   VaultCoordinatorPolicyResult,
+  VaultCoordinatorPolicyPairingQrRequest,
+  VaultCoordinatorPolicyPairingQrResult,
+  VaultCoordinatorAcknowledgePolicyPairingRequest,
   VaultCoordinatorProveRoleRequest,
   VaultCoordinatorProveRoleResult,
   VaultCoordinatorRecoveryKitRequest,
@@ -1252,6 +1256,47 @@ export async function vaultCoordinatorImportSigner(
  * grafted or swapped origin is caught before it can be baked into a policyId
  * that outlives it.
  */
+async function createMobilePolicyEnvelope(
+  ctx: VaultCoordinatorContext,
+  input: {
+    role: VaultCoordinatorRoleRecordV1;
+    password: string;
+    network: VaultCoordinatorNetwork;
+    policy: VaultPolicyIdentityV1;
+    sessionIdHex: string;
+    senderChannelIdHex: string;
+    recipientChannelIdHex: string;
+    transcriptHashHex: string;
+  },
+): Promise<VaultPairingEnvelopeV1> {
+  const now = ctx.vaultDeps.now();
+  const unlocked = await unlockVault(input.role.secret, input.password);
+  const seed = hexToBytes(unlocked.payload.seedHex);
+  const root = HDKey.fromMasterSeed(seed, bip32Versions(input.network));
+  try {
+    return signVaultPairingEnvelope({
+      version: 1,
+      network: input.network,
+      sessionIdHex: input.sessionIdHex,
+      senderChannelIdHex: input.senderChannelIdHex,
+      recipientChannelIdHex: input.recipientChannelIdHex,
+      counter: '4',
+      createdAtMs: String(now),
+      // The policy exists already and contains no secret. A full day lets a
+      // user resume after a reload without weakening proof-input expiry.
+      expiresAtMs: String(BigInt(now) + RECOVERY_C_MAX_CHALLENGE_LIFETIME_MS),
+      antiReplayNonceHex: bytesToHex(ctx.vaultDeps.random(32)),
+      transcriptHashHex: input.transcriptHashHex,
+      messageType: 'policy',
+      payloadHex: bytesToHex(canonicalVaultPolicyBytes(input.policy)),
+    }, root, input.role.origin);
+  } finally {
+    root.wipePrivateData();
+    zeroize(seed);
+    zeroize(unlocked.dek);
+  }
+}
+
 export async function vaultCoordinatorCreatePolicy(
   ctx: VaultCoordinatorContext,
   input: VaultCoordinatorCreatePolicyRequest,
@@ -1316,33 +1361,16 @@ export async function vaultCoordinatorCreatePolicy(
         signerLabels: input.signerLabels,
       },
     );
-    const envelopeUnlocked = await unlockVault(role.secret, input.password);
-    const envelopeSeed = hexToBytes(envelopeUnlocked.payload.seedHex);
-    const envelopeRoot = HDKey.fromMasterSeed(envelopeSeed, bip32Versions(network));
-    let policyEnvelope: ReturnType<typeof signVaultPairingEnvelope>;
-    try {
-      policyEnvelope = signVaultPairingEnvelope({
-        version: 1,
-        network,
-        sessionIdHex: importSession.sessionIdHex,
-        senderChannelIdHex: vaultTransportChannelId(role.origin),
-        recipientChannelIdHex: vaultTransportChannelId(importSession.signers['mobile-b']!),
-        counter: '4',
-        createdAtMs: String(now),
-        // Recovery C may intentionally finish after the shorter peer-proof
-        // window. The proofs are already durably accepted; this fresh response
-        // window exists only to deliver the now-committed public policy.
-        expiresAtMs: String(now + VAULT_IMPORT_TTL_MS),
-        antiReplayNonceHex: bytesToHex(ctx.vaultDeps.random(32)),
-        transcriptHashHex: importSession.transcriptHashHex,
-        messageType: 'policy',
-        payloadHex: bytesToHex(canonicalVaultPolicyBytes(record.identity)),
-      }, envelopeRoot, role.origin);
-    } finally {
-      envelopeRoot.wipePrivateData();
-      zeroize(envelopeSeed);
-      zeroize(envelopeUnlocked.dek);
-    }
+    const policyEnvelope = await createMobilePolicyEnvelope(ctx, {
+      role,
+      password: input.password,
+      network,
+      policy: record.identity,
+      sessionIdHex: importSession.sessionIdHex,
+      senderChannelIdHex: vaultTransportChannelId(role.origin),
+      recipientChannelIdHex: vaultTransportChannelId(importSession.signers['mobile-b']!),
+      transcriptHashHex: importSession.transcriptHashHex,
+    });
     const policyQrFrames = [...vaultPairingContextUrEncoder(policyEnvelope).frames];
     await saveVaultPolicyWithRecoveryCCeremony(
       ctx.local,
@@ -1359,6 +1387,8 @@ export async function vaultCoordinatorCreatePolicy(
           transcriptHashHex: importSession.transcriptHashHex,
           highestInboundCounter: '3',
           nextOutboundCounter: '5',
+          pendingPairingPolicyEnvelope: policyEnvelope,
+          mobilePairingConfirmedAt: null,
           pendingMobileResponse: null,
         },
       },
@@ -1394,11 +1424,32 @@ export async function vaultCoordinatorPolicy(
     await ctx.touchSessionLocked(session);
     if (resolved === null) {
       const stored = await loadVaultPolicy(ctx.local);
-      return { state: stored.state === 'absent' ? 'absent' : 'unusable', policy: null };
+      return {
+        state: stored.state === 'absent' ? 'absent' : 'unusable',
+        policy: null,
+        policyQrFrames: null,
+        mobilePairingComplete: false,
+      };
     }
+    const stored = await loadVaultPolicy(ctx.local);
+    const pairingEnvelope = stored.state === 'valid'
+      ? stored.stored.transport?.pendingPairingPolicyEnvelope ?? null
+      : null;
+    const mobilePairingComplete = stored.state === 'valid' &&
+      stored.stored.transport?.mobilePairingConfirmedAt != null;
+    const policyQrFrames = !mobilePairingComplete && pairingEnvelope !== null &&
+      BigInt(String(ctx.vaultDeps.now())) <= BigInt(pairingEnvelope.expiresAtMs)
+      ? [...vaultPairingContextUrEncoder(pairingEnvelope).frames]
+      : null;
     const readiness = projectRecoveryCReadiness(
       resolved.identity.policyId,
       await loadVaultRecoveryCCeremony(ctx.local),
+      {
+        localRole: 'usable',
+        policyState: 'usable',
+        phoneSignerPaired: true,
+        standaloneRecoveryPackageAvailable: vaultStandaloneToolPublished(),
+      },
     );
     const summary = summarizeVaultPolicy(resolved.record);
     return {
@@ -1407,7 +1458,72 @@ export async function vaultCoordinatorPolicy(
         ...summary,
         firstReceiveAddress: readiness.ready ? summary.firstReceiveAddress : null,
       },
+      policyQrFrames,
+      mobilePairingComplete,
     };
+  });
+}
+
+/** Record the user's observed green ready state on Mobile B. This is setup
+ * presentation progress only; signing still authenticates every QR envelope. */
+export async function vaultCoordinatorAcknowledgePolicyPairing(
+  ctx: VaultCoordinatorContext,
+  input: VaultCoordinatorAcknowledgePolicyPairingRequest,
+): Promise<{ policyId: string; mobilePairingComplete: true }> {
+  return ctx.runExclusive(async () => {
+    requireVaultCoordinator(ctx);
+    const { session } = await ctx.activeRecord(input);
+    const stored = await loadVaultPolicy(ctx.local);
+    if (stored.state !== 'valid' || stored.stored.transport === null ||
+        stored.stored.record.identity.policyId !== input.policyId) {
+      throw new RpcError('ERR_VAULT_POLICY_MISSING', 'that Vault policy is not stored');
+    }
+    await saveVaultPolicy(ctx.local, {
+      ...stored.stored,
+      transport: {
+        ...stored.stored.transport,
+        mobilePairingConfirmedAt: ctx.vaultDeps.now(),
+      },
+    });
+    await ctx.touchSessionLocked(session);
+    return { policyId: input.policyId, mobilePairingComplete: true };
+  });
+}
+
+/** Reissue the public final Mobile B policy handoff after a reload or expiry. */
+export async function vaultCoordinatorPolicyPairingQr(
+  ctx: VaultCoordinatorContext,
+  input: VaultCoordinatorPolicyPairingQrRequest,
+): Promise<VaultCoordinatorPolicyPairingQrResult> {
+  return ctx.runExclusive(async () => {
+    const network = requireVaultCoordinator(ctx);
+    const { session } = await ctx.activeRecord(input);
+    const role = await requireVaultRole(ctx);
+    const stored = await loadVaultPolicy(ctx.local);
+    if (stored.state !== 'valid' || stored.stored.transport === null) {
+      throw new RpcError('ERR_VAULT_POLICY_MISSING', 'no paired Vault policy is stored');
+    }
+    const transport = stored.stored.transport;
+    const prior = transport.pendingPairingPolicyEnvelope;
+    if (prior === undefined || prior === null || prior.messageType !== 'policy') {
+      throw new RpcError('ERR_VAULT_IMPORT_SESSION_MISSING', 'no Mobile B pairing transcript is stored');
+    }
+    const envelope = await createMobilePolicyEnvelope(ctx, {
+      role,
+      password: input.password,
+      network,
+      policy: stored.stored.record.identity,
+      sessionIdHex: prior.sessionIdHex,
+      senderChannelIdHex: transport.extensionChannelIdHex,
+      recipientChannelIdHex: transport.mobileChannelIdHex,
+      transcriptHashHex: transport.transcriptHashHex,
+    });
+    await saveVaultPolicy(ctx.local, {
+      ...stored.stored,
+      transport: { ...transport, pendingPairingPolicyEnvelope: envelope },
+    });
+    await ctx.touchSessionLocked(session);
+    return { policyQrFrames: [...vaultPairingContextUrEncoder(envelope).frames] };
   });
 }
 
@@ -1417,13 +1533,17 @@ export async function vaultCoordinatorPolicy(
  * no longer reproduce their own policyId — or that no longer names the role
  * this profile actually holds — must read as unusable, never as watchable.
  */
-async function resolveVaultPolicy(ctx: VaultCoordinatorContext): Promise<{
+type LoadedVaultRole = Awaited<ReturnType<typeof loadVaultRole>>;
+type LoadedVaultPolicy = Awaited<ReturnType<typeof loadVaultPolicy>>;
+
+function resolveLoadedVaultPolicy(
+  stored: LoadedVaultPolicy,
+  role: LoadedVaultRole,
+): {
   record: VaultPolicyRecordV1;
   identity: VaultPolicyIdentityV1;
-} | null> {
-  const stored = await loadVaultPolicy(ctx.local);
+} | null {
   if (stored.state !== 'valid') return null;
-  const role = await loadVaultRole(ctx.local);
   if (role.state !== 'valid' || role.record.roleId !== stored.stored.roleId) return null;
   const identity = stored.stored.record.identity;
   if (!sameSignerOrigin(identity.signers[0], role.record.origin)) return null;
@@ -1433,6 +1553,17 @@ async function resolveVaultPolicy(ctx: VaultCoordinatorContext): Promise<{
     return null;
   }
   return { record: stored.stored.record, identity };
+}
+
+async function resolveVaultPolicy(ctx: VaultCoordinatorContext): Promise<{
+  record: VaultPolicyRecordV1;
+  identity: VaultPolicyIdentityV1;
+} | null> {
+  const [stored, role] = await Promise.all([
+    loadVaultPolicy(ctx.local),
+    loadVaultRole(ctx.local),
+  ]);
+  return resolveLoadedVaultPolicy(stored, role);
 }
 
 /**
@@ -1607,24 +1738,37 @@ export async function vaultCoordinatorImportRecoveryCBackupCheckResponse(
 function projectRecoveryCReadiness(
   policyId: string | null,
   stored: Awaited<ReturnType<typeof loadVaultRecoveryCCeremony>>,
+  evidence: Pick<
+    VaultCoordinatorRecoveryCReadinessResult,
+    'localRole' | 'policyState' | 'phoneSignerPaired' | 'standaloneRecoveryPackageAvailable'
+  >,
 ): VaultCoordinatorRecoveryCReadinessResult {
-  if (stored.state === 'unusable') {
+  if (stored.state === 'unusable' || evidence.localRole === 'unusable' ||
+      evidence.policyState === 'unusable') {
     return {
-      state: 'unusable', policyId, setupComplete: false, kitExported: false,
+      ...evidence, state: 'unusable', policyId, setupComplete: false, kitExported: false,
       backupCheckComplete: false, ready: false,
     };
   }
   if (stored.state === 'absent') {
+    if (evidence.policyState === 'usable') {
+      return {
+        ...evidence, state: 'unusable', policyId, setupComplete: false, kitExported: false,
+        backupCheckComplete: false, ready: false,
+      };
+    }
     return {
-      state: 'not_started', policyId, setupComplete: false, kitExported: false,
+      ...evidence, state: 'not_started', policyId, setupComplete: false, kitExported: false,
       backupCheckComplete: false, ready: false,
     };
   }
   const setupComplete = stored.record.setup.completed !== null;
   const boundPolicy = stored.record.policy;
-  if (policyId !== null && (boundPolicy === null || boundPolicy.policyId !== policyId)) {
+  if (evidence.localRole === 'absent' ||
+      (policyId === null) !== (boundPolicy === null) ||
+      (policyId !== null && boundPolicy?.policyId !== policyId)) {
     return {
-      state: 'unusable', policyId, setupComplete, kitExported: false,
+      ...evidence, state: 'unusable', policyId, setupComplete, kitExported: false,
       backupCheckComplete: false, ready: false,
     };
   }
@@ -1645,7 +1789,15 @@ function projectRecoveryCReadiness(
             : boundPolicy?.backupCheck.open !== null
               ? 'backup_open'
               : 'backup_required';
-  return { state, policyId, setupComplete, kitExported, backupCheckComplete, ready };
+  return {
+    ...evidence,
+    state,
+    policyId,
+    setupComplete,
+    kitExported,
+    backupCheckComplete,
+    ready,
+  };
 }
 
 export async function vaultCoordinatorRecoveryCReadiness(
@@ -1655,10 +1807,27 @@ export async function vaultCoordinatorRecoveryCReadiness(
   return ctx.runExclusive(async () => {
     requireVaultCoordinator(ctx);
     const { session } = await ctx.activeRecord(input);
-    const resolved = await resolveVaultPolicy(ctx);
+    const [role, policy, ceremony] = await Promise.all([
+      loadVaultRole(ctx.local),
+      loadVaultPolicy(ctx.local),
+      loadVaultRecoveryCCeremony(ctx.local),
+    ]);
+    const resolved = resolveLoadedVaultPolicy(policy, role);
+    const localRole = role.state === 'valid' ? 'usable' : role.state;
+    const policyState = policy.state === 'absent'
+      ? 'absent'
+      : resolved === null
+        ? 'unusable'
+        : 'usable';
     const readiness = projectRecoveryCReadiness(
       resolved?.identity.policyId ?? null,
-      await loadVaultRecoveryCCeremony(ctx.local),
+      ceremony,
+      {
+        localRole,
+        policyState,
+        phoneSignerPaired: resolved?.identity.signers[1]?.role === 'mobile-b',
+        standaloneRecoveryPackageAvailable: vaultStandaloneToolPublished(),
+      },
     );
     await ctx.touchSessionLocked(session);
     return readiness;
@@ -1666,10 +1835,25 @@ export async function vaultCoordinatorRecoveryCReadiness(
 }
 
 async function requireRecoveryCReady(ctx: VaultCoordinatorContext): Promise<void> {
-  const resolved = await resolveVaultPolicy(ctx);
+  const [role, policy, ceremony] = await Promise.all([
+    loadVaultRole(ctx.local),
+    loadVaultPolicy(ctx.local),
+    loadVaultRecoveryCCeremony(ctx.local),
+  ]);
+  const resolved = resolveLoadedVaultPolicy(policy, role);
   const readiness = projectRecoveryCReadiness(
     resolved?.identity.policyId ?? null,
-    await loadVaultRecoveryCCeremony(ctx.local),
+    ceremony,
+    {
+      localRole: role.state === 'valid' ? 'usable' : role.state,
+      policyState: policy.state === 'absent'
+        ? 'absent'
+        : resolved === null
+          ? 'unusable'
+          : 'usable',
+      phoneSignerPaired: resolved?.identity.signers[1]?.role === 'mobile-b',
+      standaloneRecoveryPackageAvailable: vaultStandaloneToolPublished(),
+    },
   );
   if (!readiness.ready) {
     throw new RpcError(

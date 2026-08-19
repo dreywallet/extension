@@ -43,7 +43,7 @@ const ADDRESSES = [
 
 const RESULTS: Record<string, unknown> = {
   getInfo: {
-    version: '0.10.8',
+    version: '0.10.10',
     platform: 'web',
     methods: Object.keys(PROVIDER_OPERATIONS),
     supports: ['WBIP001', 'WBIP004'],

@@ -4,7 +4,7 @@
  * gate, and the fact that the channel gate is enforced by the worker rather
  * than negotiated in a payload.
  */
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { dispatch } from '../../src/background/dispatch';
 import { installTestCryptoProvider } from '../helpers/install-crypto-provider';
 import type { MessageEnvelope, SenderContext } from '@drey/core/messaging/envelope';
@@ -14,6 +14,7 @@ import { PASSWORD } from '@drey/core/testing/vault-helpers';
 import { EXTENSION_OP_SCHEMAS } from '../../src/messaging/extension-ops';
 import { PASSKEY_OP_SCHEMAS } from '../../src/messaging/passkey-ops';
 import { VAULT_COORDINATOR_OP_SCHEMAS } from '../../src/messaging/vault-coordinator-ops';
+import { COMMUNITY_VAULT_OP_SCHEMAS } from '../../src/messaging/community-vault-ops';
 import { makeHarness } from './service-helpers';
 
 beforeAll(installTestCryptoProvider);
@@ -54,7 +55,8 @@ describe('vault coordinator op registry', () => {
     }
     // The composed registry is the union, with nothing lost in the merge.
     expect(Object.keys(EXTENSION_OP_SCHEMAS)).toHaveLength(
-      Object.keys(OP_SCHEMAS).length + Object.keys(PASSKEY_OP_SCHEMAS).length + OPS.length + 3,
+      Object.keys(OP_SCHEMAS).length + Object.keys(PASSKEY_OP_SCHEMAS).length +
+        OPS.length + Object.keys(COMMUNITY_VAULT_OP_SCHEMAS).length + 3,
     );
   });
 
@@ -94,6 +96,30 @@ describe('vault coordinator op registry', () => {
       expect(spec.allowedSenders, op).not.toContain('content-bridge');
       expect(spec.allowedSenders, op).not.toContain('approval');
     }
+  });
+
+  it('closes the Recovery Center evidence response over every locally verified fact', () => {
+    const response = VAULT_COORDINATOR_OP_SCHEMAS['vaultCoordinator.recoveryCReadiness'].response;
+    const complete = {
+      state: 'not_started',
+      localRole: 'absent',
+      policyState: 'absent',
+      phoneSignerPaired: false,
+      standaloneRecoveryPackageAvailable: true,
+      policyId: null,
+      setupComplete: false,
+      kitExported: false,
+      backupCheckComplete: false,
+      ready: false,
+    };
+    expect(response.safeParse(complete).success).toBe(true);
+    expect(response.safeParse({
+      ...complete,
+      standaloneRecoveryPackageAvailable: undefined,
+    }).success).toBe(false);
+    expect(response.safeParse({ ...complete, recoveryScore: 100 }).success).toBe(false);
+    expect(response.safeParse({ ...complete, localRole: 'unknown' }).success).toBe(false);
+    expect(response.safeParse({ ...complete, policyState: 'present' }).success).toBe(false);
   });
 });
 
@@ -147,6 +173,8 @@ describe('vault coordinator dispatch', () => {
         birthdayHeight: null,
       },
       'vaultCoordinator.policy': {},
+      'vaultCoordinator.policyPairingQr': { password: PASSWORD },
+      'vaultCoordinator.acknowledgePolicyPairing': { policyId: '11'.repeat(32) },
       'vaultCoordinator.recoveryKit': {},
       'vaultCoordinator.acknowledgeRecoveryKitExport': { policyId: '11'.repeat(32) },
       'vaultCoordinator.beginRecoveryCBackupCheck': {},
@@ -251,6 +279,47 @@ describe('vault coordinator dispatch', () => {
         importPending: [],
       },
     });
+  });
+
+  it('routes one session-bound Recovery Center evidence read without invoking heavy paths', async () => {
+    const s = await readySetup();
+    const policy = vi.spyOn(s.h.service, 'vaultCoordinatorPolicy');
+    const kit = vi.spyOn(s.h.service, 'vaultCoordinatorRecoveryKit');
+    const deposit = vi.spyOn(s.h.service, 'vaultCoordinatorDepositAddress');
+
+    await expect(
+      dispatch(
+        env('fullpage', 'vaultCoordinator.recoveryCReadiness', { ...s.expectation }),
+        s.h.service,
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      result: {
+        state: 'not_started',
+        localRole: 'absent',
+        policyState: 'absent',
+        phoneSignerPaired: false,
+        standaloneRecoveryPackageAvailable: true,
+        policyId: null,
+        setupComplete: false,
+        kitExported: false,
+        backupCheckComplete: false,
+        ready: false,
+      },
+    });
+    expect(policy).not.toHaveBeenCalled();
+    expect(kit).not.toHaveBeenCalled();
+    expect(deposit).not.toHaveBeenCalled();
+
+    await expect(
+      dispatch(
+        env('fullpage', 'vaultCoordinator.recoveryCReadiness', {
+          ...s.expectation,
+          expectedSessionId: '00000000-0000-4000-8000-000000000099',
+        }),
+        s.h.service,
+      ),
+    ).resolves.toEqual({ ok: false, code: 'ERR_LOCKED' });
   });
 
   it('carries the coordinator error codes end to end', async () => {

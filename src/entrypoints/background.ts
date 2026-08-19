@@ -37,6 +37,8 @@ import {
 import { PROVIDER_PORT_NAME } from '../provider/bridge';
 import { APPROVAL_PORT_NAME, approvalCommandSchema } from '../provider/approval';
 
+const PROVIDER_UNLOCK_TTL_MS = 5 * 60_000;
+
 function toArea(area: chrome.storage.StorageArea): StorageArea {
   return {
     get: (keys) => area.get(keys),
@@ -58,6 +60,13 @@ function toSessionArea(): SessionArea {
 export default defineBackground(() => {
   let approvalWindowId: number | null = null;
   let approvalTabId: number | null = null;
+  let unlockWindowId: number | null = null;
+  let unlockCreation: Promise<void> | null = null;
+  let unlockTimer: ReturnType<typeof setTimeout> | null = null;
+  let unlockAttempt: {
+    promise: Promise<boolean>;
+    resolve: (unlocked: boolean) => void;
+  } | null = null;
   let providerController: ProviderController | null = null;
   let serviceForSessionObservation: WalletService | null = null;
   let observedProviderSession: string | null = null;
@@ -106,11 +115,97 @@ export default defineBackground(() => {
     }
   };
 
+  const openCommunityVaultSetup = async (input: {
+    campaignId: string;
+    ownerId: string;
+    label?: string;
+  }): Promise<void> => {
+    const url = new URL(chrome.runtime.getURL('/fullpage.html'));
+    url.searchParams.set('communityCampaignId', input.campaignId);
+    url.searchParams.set('communityOwnerId', input.ownerId);
+    if (input.label) url.searchParams.set('communityLabel', input.label);
+    url.hash = '/settings/community-vault';
+    await chrome.tabs.create({ url: url.toString(), active: true });
+  };
+
   const closeApproval = async (): Promise<void> => {
     const id = approvalWindowId;
     approvalWindowId = null;
     approvalTabId = null;
     if (id !== null) await chrome.windows.remove(id).catch(() => undefined);
+  };
+
+  const finishUnlockAttempt = (unlocked: boolean): void => {
+    const attempt = unlockAttempt;
+    if (attempt === null) return;
+    unlockAttempt = null;
+    if (unlockTimer !== null) {
+      clearTimeout(unlockTimer);
+      unlockTimer = null;
+    }
+    const id = unlockWindowId;
+    unlockWindowId = null;
+    attempt.resolve(unlocked);
+    if (id !== null) void chrome.windows.remove(id).catch(() => undefined);
+  };
+
+  const openOrFocusUnlock = async (): Promise<void> => {
+    if (unlockWindowId !== null) {
+      try {
+        await chrome.windows.update(unlockWindowId, { focused: true, drawAttention: true });
+        return;
+      } catch {
+        unlockWindowId = null;
+        finishUnlockAttempt(false);
+        return;
+      }
+    }
+    if (unlockCreation !== null) {
+      await unlockCreation;
+      return;
+    }
+    const creation = (async () => {
+      const created = await chrome.windows.create({
+        url: chrome.runtime.getURL('/popup.html?provider=unlock'),
+        type: 'popup',
+        focused: true,
+        width: 420,
+        height: 680,
+      });
+      const windowId = created?.id;
+      if (windowId === undefined) throw new Error('unlock popup did not expose a window identity');
+      if (unlockAttempt === null) {
+        await chrome.windows.remove(windowId).catch(() => undefined);
+        return;
+      }
+      unlockWindowId = windowId;
+    })();
+    unlockCreation = creation;
+    try {
+      await creation;
+    } finally {
+      if (unlockCreation === creation) unlockCreation = null;
+    }
+  };
+
+  const requestUnlock = async (): Promise<boolean> => {
+    if (unlockAttempt !== null) {
+      const current = unlockAttempt;
+      await openOrFocusUnlock();
+      return current.promise;
+    }
+    let resolveAttempt!: (unlocked: boolean) => void;
+    const promise = new Promise<boolean>((resolve) => {
+      resolveAttempt = resolve;
+    });
+    unlockAttempt = { promise, resolve: resolveAttempt };
+    unlockTimer = setTimeout(() => finishUnlockAttempt(false), PROVIDER_UNLOCK_TTL_MS);
+    try {
+      await openOrFocusUnlock();
+    } catch {
+      finishUnlockAttempt(false);
+    }
+    return promise;
   };
   // MV3 event listeners must be registered synchronously. Their callbacks wait
   // on the one-time setup promise rather than registering after async work.
@@ -124,6 +219,7 @@ export default defineBackground(() => {
         void providerController?.invalidateSession();
         return;
       }
+      finishUnlockAttempt(true);
       const service = serviceForSessionObservation;
       if (service === null) return;
       void service.sessionStatus().then((status) => {
@@ -210,8 +306,10 @@ export default defineBackground(() => {
       service,
       sessionStorage: toArea(chrome.storage.session),
       now: () => Date.now(),
+      requestUnlock,
       openOrFocusApproval,
       closeApproval,
+      openCommunityVaultSetup,
       approvalChanged: (snapshot) => {
         for (const port of approvalPorts) {
           try {
@@ -246,6 +344,11 @@ export default defineBackground(() => {
   });
 
   chrome.windows.onRemoved.addListener((windowId) => {
+    if (windowId === unlockWindowId) {
+      unlockWindowId = null;
+      finishUnlockAttempt(false);
+      return;
+    }
     if (windowId !== approvalWindowId) return;
     approvalWindowId = null;
     approvalTabId = null;

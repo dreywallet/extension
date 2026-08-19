@@ -120,7 +120,7 @@ const currentSourceBinding = {
   // digest recorded at build time.
   workspaceContentDigest: treeDigest(
     workspace,
-    new Set([...ignored, 'extension', 'gateway', 'mobile']),
+    new Set([...ignored, 'core', 'extension', 'gateway', 'hardware', 'mobile']),
   ),
   extensionRevision: release.extension.revision,
   extensionContentDigest: treeDigest(root, ignored),

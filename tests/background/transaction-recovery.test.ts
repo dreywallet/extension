@@ -523,7 +523,7 @@ describe('M8 provider indeterminate broadcast recovery', () => {
       undefined,
       () => { guardChecks += 1; },
     )).rejects.toMatchObject({
-      code: 'ERR_BROADCAST_REJECTED',
+      code: 'ERR_BROADCAST_OUTCOME_UNKNOWN',
       message: expect.stringContaining('manual reconciliation'),
     });
     expect(guardChecks).toBe(3);

@@ -235,6 +235,49 @@ describe('role A generation (ADR 0007 §1)', () => {
     });
   });
 
+  it('projects only cheap, locally verified Recovery Center Vault evidence', async () => {
+    const s = await setup();
+    await expect(
+      s.h.service.vaultCoordinatorRecoveryCReadiness({ ...s.expectation }),
+    ).resolves.toEqual({
+      state: 'not_started',
+      localRole: 'absent',
+      policyState: 'absent',
+      phoneSignerPaired: false,
+      standaloneRecoveryPackageAvailable: true,
+      policyId: null,
+      setupComplete: false,
+      kitExported: false,
+      backupCheckComplete: false,
+      ready: false,
+    });
+
+    await createRole(s);
+    await expect(
+      s.h.service.vaultCoordinatorRecoveryCReadiness({ ...s.expectation }),
+    ).resolves.toMatchObject({
+      state: 'not_started',
+      localRole: 'usable',
+      policyState: 'absent',
+      phoneSignerPaired: false,
+      standaloneRecoveryPackageAvailable: true,
+      policyId: null,
+      ready: false,
+    });
+
+    await s.h.local.set({ [VAULT_COORDINATOR_ROLE_KEY]: { schemaVersion: 999 } });
+    await expect(
+      s.h.service.vaultCoordinatorRecoveryCReadiness({ ...s.expectation }),
+    ).resolves.toMatchObject({
+      state: 'unusable',
+      localRole: 'unusable',
+      policyState: 'absent',
+      phoneSignerPaired: false,
+      policyId: null,
+      ready: false,
+    });
+  });
+
   it('keeps role A out of the Spending wallet list entirely', async () => {
     const s = await setup();
     const { role } = await createRole(s);
@@ -598,7 +641,15 @@ describe('offline Recovery C ceremony (ADR 0007 §6)', () => {
     expect(imported).toMatchObject({ role: 'recovery-c', pending: [], complete: true });
     await expect(
       s.h.service.vaultCoordinatorRecoveryCReadiness({ ...s.expectation }),
-    ).resolves.toMatchObject({ state: 'setup_complete', setupComplete: true, ready: false });
+    ).resolves.toMatchObject({
+      state: 'setup_complete',
+      localRole: 'usable',
+      policyState: 'absent',
+      phoneSignerPaired: false,
+      standaloneRecoveryPackageAvailable: true,
+      setupComplete: true,
+      ready: false,
+    });
 
     const stored = JSON.stringify([
       ...s.h.local.store.entries(),
@@ -791,7 +842,14 @@ describe('offline Recovery C ceremony (ADR 0007 §6)', () => {
     });
     await expect(
       s.h.service.vaultCoordinatorRecoveryCReadiness({ ...s.expectation }),
-    ).resolves.toMatchObject({ state: 'kit_required', ready: false });
+    ).resolves.toMatchObject({
+      state: 'kit_required',
+      localRole: 'usable',
+      policyState: 'usable',
+      phoneSignerPaired: true,
+      standaloneRecoveryPackageAvailable: true,
+      ready: false,
+    });
     await expect(
       s.h.service.vaultCoordinatorDepositAddress({ index: 0, ...s.expectation }),
     ).rejects.toMatchObject({ code: 'ERR_VAULT_RECOVERY_C_BACKUP_REQUIRED' });
@@ -820,7 +878,15 @@ describe('offline Recovery C ceremony (ADR 0007 §6)', () => {
     ).rejects.toMatchObject({ code: 'ERR_VAULT_RECOVERY_C_SESSION_MISSING' });
     await expect(
       s.h.service.vaultCoordinatorRecoveryCReadiness({ ...s.expectation }),
-    ).resolves.toMatchObject({ state: 'ready', ready: true, backupCheckComplete: true });
+    ).resolves.toMatchObject({
+      state: 'ready',
+      localRole: 'usable',
+      policyState: 'usable',
+      phoneSignerPaired: true,
+      standaloneRecoveryPackageAvailable: true,
+      ready: true,
+      backupCheckComplete: true,
+    });
     await expect(
       s.h.service.vaultCoordinatorDepositAddress({ index: 0, ...s.expectation }),
     ).resolves.toMatchObject({ index: 0, address: expect.stringMatching(/^tb1/u) });

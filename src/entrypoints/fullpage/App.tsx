@@ -11,6 +11,7 @@ import { PasskeySettings } from './PasskeySettings';
 import { passkeySettingsAvailable } from '../../ui/passkey/availability';
 import { vaultCoordinatorChannelEnabled } from '../../ui/vault/availability';
 import { VaultCoordinator } from './VaultCoordinator';
+import { CommunityVault } from './CommunityVault';
 import { MessageSigning } from './MessageSigning';
 import { AddressBook } from './AddressBook';
 import { Unlock } from '../../ui/components/Unlock';
@@ -125,6 +126,7 @@ export function App(): ReactNode {
           expectation={session.expectation}
           onBack={() => (window.location.hash = FULLPAGE_HASH.settings)}
           onReveal={() => (window.location.hash = FULLPAGE_HASH.reveal)}
+          onVault={() => (window.location.hash = FULLPAGE_HASH.vault)}
         />
       ) : view === 'walletAccounts' ? (
         <WalletAccountSettings
@@ -149,6 +151,11 @@ export function App(): ReactNode {
         />
       ) : view === 'vault' && vaultCoordinatorChannelEnabled() ? (
         <VaultCoordinator
+          expectation={session.expectation}
+          onBack={() => (window.location.hash = FULLPAGE_HASH.settings)}
+        />
+      ) : view === 'communityVault' ? (
+        <CommunityVault
           expectation={session.expectation}
           onBack={() => (window.location.hash = FULLPAGE_HASH.settings)}
         />

@@ -30,8 +30,9 @@ import {
 import { z } from 'zod';
 import { deriveAccountNode, deriveAddress, type Network } from '@drey/core/domain/keys/derivation';
 import {
-  nextAccountIndex,
+  ACCOUNT_GAP_LIMIT,
   normalizeAccountIndexes,
+  standardAccountAddState,
 } from '@drey/core/domain/accounts/limits';
 import {
   derivePublicAccountAddress,
@@ -95,6 +96,8 @@ import {
   vaultCoordinatorImportRecoveryCSetupResponse,
   vaultCoordinatorPlan,
   vaultCoordinatorPolicy,
+  vaultCoordinatorPolicyPairingQr,
+  vaultCoordinatorAcknowledgePolicyPairing,
   vaultCoordinatorProveRole,
   vaultCoordinatorRecoveryKit,
   vaultCoordinatorRecoveryCReadiness,
@@ -112,6 +115,27 @@ import {
   type VaultCoordinatorContext,
 } from './vault-coordinator-service';
 import type { VaultCoordinatorCapability } from './vault-capability';
+import {
+  communityVaultAcceptPolicy,
+  communityVaultConfirmRecovery,
+  communityVaultCreate,
+  communityVaultRestore,
+  communityVaultRevealRecovery,
+  communityVaultSign,
+  communityVaultStatus,
+  type CommunityVaultContext,
+} from './community-vault-service';
+import type {
+  CommunityVaultAcceptPolicyRequest,
+  CommunityVaultConfirmRecoveryRequest,
+  CommunityVaultCreateRequest,
+  CommunityVaultOwnerResult,
+  CommunityVaultPasswordCampaignRequest,
+  CommunityVaultRestoreRequest,
+  CommunityVaultSignRequest,
+  CommunityVaultStatusRequest,
+  CommunityVaultStatusResult,
+} from '../messaging/community-vault-ops';
 import type {
   VaultCoordinatorBeginImportRequest,
   VaultCoordinatorBeginImportResult,
@@ -130,6 +154,10 @@ import type {
   VaultCoordinatorImportRecoveryCSetupResponseRequest,
   VaultCoordinatorPolicyRequest,
   VaultCoordinatorPolicyResult,
+  VaultCoordinatorPolicyPairingQrRequest,
+  VaultCoordinatorPolicyPairingQrResult,
+  VaultCoordinatorAcknowledgePolicyPairingRequest,
+  VaultCoordinatorAcknowledgePolicyPairingResult,
   VaultCoordinatorProveRoleRequest,
   VaultCoordinatorProveRoleResult,
   VaultCoordinatorRecoveryKitRequest,
@@ -196,6 +224,10 @@ import {
   saveVaults,
   type VaultRecordMap,
 } from '../adapters/storage/vault-store';
+import {
+  loadCommunityVaultOwners,
+  saveCommunityVaultOwners,
+} from '../adapters/storage/community-vault-store';
 import {
   clearSession,
   getSession,
@@ -296,6 +328,7 @@ import {
   scanStatusView,
   shadowedByStandardKey,
   removeDescriptorAccountLifecycle,
+  includeIntermediateDiscoveredAccounts,
   stopStandardDiscoveryAfter,
   unitKey,
   unitLaneFromKey,
@@ -328,6 +361,8 @@ import {
 } from '@drey/core/domain/gateway/contract';
 import type {
   AccountListResult,
+  AccountAddRequest,
+  AccountAddState,
   AddressBookAddRequest,
   AddressBookImportRequest,
   AddressBookImportResult,
@@ -403,6 +438,9 @@ import { mergeContactTransferRecipients } from '@drey/core/domain/contact-transf
 import { GALLERY_PREVIEW_UNAVAILABLE } from '@drey/core/messaging/ops';
 import type { WalletDataChangeReason } from '@drey/core/messaging/events';
 import type { MarketplaceContext, MarketplaceResolution } from '@drey/core/domain/marketplaces/types';
+import type { CommunityVaultAcquisitionProviderReviewV1 } from '@drey/core/domain/community-vault/acquisition-provider';
+import type { CommunityVaultSaleProviderReviewV1 } from '@drey/core/domain/community-vault/sale-provider';
+import type { CommunityVaultSaleBuyerProviderReviewV1 } from '@drey/core/domain/community-vault/sale-provider';
 import { verifyOrdnetSaleScriptPath } from '@drey/core/domain/marketplaces/ordnet-script-path';
 import {
   marketplaceReservationSchema,
@@ -1219,18 +1257,32 @@ export class WalletService {
   async changePassword(input: VaultChangePasswordRequest): Promise<{ ok: true }> {
     return this.runExclusive(async () => {
       const map = await loadVaults(this.deps.local);
+      const community = await loadCommunityVaultOwners(this.deps.local);
       if ((await countQuarantinedVaults(this.deps.local)) > 0) {
         throw new RpcError('ERR_VAULT_TAMPERED', 'profile contains quarantined vault records');
+      }
+      if (community.unusableCampaignIds.length > 0) {
+        throw new RpcError('ERR_COMMUNITY_VAULT_UNUSABLE', 'profile contains unreadable Community Vault owner records');
       }
       const records = Object.values(map);
       if (records.length === 0) throw new RpcError('ERR_VAULT_NOT_FOUND', 'no vaults to rewrap');
 
       // Rewrap only rewraps each DEK under the new password; the DEK bytes are
       // unchanged, so an active session's stored DEK stays valid (spec §7.2).
-      const updated = await domainChangePassword(records, input.oldPassword, input.newPassword, this.deps.vaultDeps);
+      const updated = await domainChangePassword(
+        [...records, ...community.records.map((record) => record.secret)],
+        input.oldPassword,
+        input.newPassword,
+        this.deps.vaultDeps,
+      );
       const newMap: VaultRecordMap = {};
-      for (const r of updated) newMap[r.vaultId] = r;
+      for (const r of updated.slice(0, records.length)) newMap[r.vaultId] = r;
+      const communityUpdated = community.records.map((record, index) => ({
+        ...record,
+        secret: updated[records.length + index]!,
+      }));
       await saveVaults(this.deps.local, newMap);
+      await saveCommunityVaultOwners(this.deps.local, communityUpdated);
       return { ok: true };
     });
   }
@@ -1283,8 +1335,7 @@ export class WalletService {
       name: string;
       signingSource: 'software' | 'none';
     }[];
-    canAddAccount: boolean;
-    accountAddRequirement: { fundAccount: number; nextAccount: number } | null;
+    accountAddState: AccountAddState | null;
     activeRecoveredAddressCount: number;
     backupVerified: boolean;
     capabilities: AccountCapabilities;
@@ -1320,8 +1371,7 @@ export class WalletService {
           activeAccount: 0,
           selectableAccounts: [0],
           accountSummaries: [],
-          canAddAccount: false,
-          accountAddRequirement: null,
+          accountAddState: null,
           activeRecoveredAddressCount: 0,
           backupVerified: false,
           capabilities: deriveAccountCapabilities({
@@ -1339,6 +1389,7 @@ export class WalletService {
         name: string;
         signingSource: 'software' | 'none';
       }[] = [];
+      let confirmedStandardAccounts = new Set<number>();
       try {
         accountsMeta = await this.loadAccountsMetaLocked(dek, activeSession.vaultId);
         accountSummaries = await Promise.all(accountsMeta.registeredPublicAccounts.map(async (account) => ({
@@ -1354,6 +1405,9 @@ export class WalletService {
             dek, activeSession.vaultId, accountsMeta.activePublicAccountId,
           );
         }
+        confirmedStandardAccounts = await this.confirmedStandardAccountIndexesLocked(
+          dek, activeSession.vaultId, accountsMeta,
+        );
       } finally {
         zeroize(dek);
       }
@@ -1374,12 +1428,13 @@ export class WalletService {
           .map((account) => account.account),
       );
       const visibleAccounts = selectableAccounts.filter((account) => !hiddenAccounts.has(account));
-      const highestAccount = selectableAccounts.at(-1) ?? 0;
-      const nextAccount = nextAccountIndex(selectableAccounts);
-      const highestHasHistory = accountsMeta.activeUnits.some(
-        (unit) => unit.source === 'standard' && unit.account === highestAccount,
-      );
-      const canAddAccount = nextAccount !== null && highestHasHistory;
+      const accountAddState = activeSigningSource.kind === 'software'
+        ? standardAccountAddState(
+            selectableAccounts,
+            confirmedStandardAccounts,
+            accountsMeta.emptyAccountGapAcknowledged,
+          )
+        : null;
       const activeRecovered = accountsMeta.recoveredAddressCounts.find(
         (entry) => entry.accountId === activeEntry?.accountId,
       );
@@ -1397,10 +1452,7 @@ export class WalletService {
         accountSummaries: accountSummaries.filter(
           (account) => !accountsMeta.hiddenPublicAccountIds.includes(account.accountId),
         ),
-        canAddAccount,
-        accountAddRequirement: nextAccount !== null && !highestHasHistory
-          ? { fundAccount: highestAccount, nextAccount }
-          : null,
+        accountAddState,
         activeRecoveredAddressCount:
           (activeRecovered?.payment ?? 0) + (activeRecovered?.ordinals ?? 0),
         backupVerified: vaultMeta[activeSession.vaultId]?.backupVerified === true,
@@ -1929,7 +1981,7 @@ export class WalletService {
     }));
   }
 
-  async addAccount(input: ActiveSessionRequest): Promise<{ accountId: string; account: number }> {
+  async addAccount(input: AccountAddRequest): Promise<{ accountId: string; account: number }> {
     return this.runExclusive(() => this.withSessionDek(input, async (dek, session) => {
       const { capabilities } = await this.activePublicAccountContextLocked(
         dek, session.vaultId,
@@ -1948,19 +2000,28 @@ export class WalletService {
           .filter((unit) => unit.source === 'standard')
           .map((unit) => unit.account),
       ]);
-      const highest = accounts.at(-1) ?? 0;
-      if (!meta.activeUnits.some(
-        (unit) => unit.source === 'standard' && unit.account === highest,
-      )) {
+      const confirmedAccounts = await this.confirmedStandardAccountIndexesLocked(
+        dek, session.vaultId, meta,
+      );
+      const addState = standardAccountAddState(
+        accounts, confirmedAccounts, meta.emptyAccountGapAcknowledged,
+      );
+      if (addState.kind === 'empty_limit') {
         throw new RpcError(
           'ERR_INVALID_PAYLOAD',
-          'the last account must have transaction history before another is added',
+          'You already have five unused accounts. Use one and let its transaction confirm before adding another.',
         );
       }
-      const account = nextAccountIndex(accounts);
-      if (account === null) {
+      if (addState.kind === 'index_exhausted') {
         throw new RpcError('ERR_INVALID_PAYLOAD', 'BIP32 account index space exhausted');
       }
+      if (addState.requiresAcknowledgement && !input.acknowledgeEmptyAccountRisk) {
+        throw new RpcError(
+          'ERR_INVALID_PAYLOAD',
+          'acknowledge the empty-account recovery warning before creating this account',
+        );
+      }
+      const account = addState.nextAccount;
       const vaults = await loadVaults(this.deps.local);
       const record = vaults[session.vaultId];
       if (!record) throw new RpcError('ERR_VAULT_NOT_FOUND', 'active vault record missing');
@@ -1990,6 +2051,8 @@ export class WalletService {
           },
         ],
         activePublicAccountId: migrated.definition.accountId,
+        emptyAccountGapAcknowledged: meta.emptyAccountGapAcknowledged ||
+          (addState.requiresAcknowledgement && input.acknowledgeEmptyAccountRisk),
       });
       await saveConfig(this.deps.local, {
         ...config,
@@ -2018,6 +2081,18 @@ export class WalletService {
       const records = await this.accountRecordCoverageLocked(dek, session.vaultId);
       const globallyFresh = meta.lastSyncedAt !== null && meta.revision !== null &&
         !meta.hasConflictingSources;
+      const activeSigningSource = meta.activePublicAccountId === null
+        ? { version: 1, kind: 'none' } as const
+        : await this.accountSigningSourceLocked(
+            dek, session.vaultId, meta.activePublicAccountId,
+          );
+      const accountAddState = activeSigningSource.kind === 'software'
+        ? standardAccountAddState(
+            normalizeAccountIndexes(meta.standardAccounts),
+            await this.confirmedStandardAccountIndexesLocked(dek, session.vaultId, meta),
+            meta.emptyAccountGapAcknowledged,
+          )
+        : null;
 
       const result: AccountListResult = {
         accounts: await Promise.all(meta.registeredPublicAccounts.map(async (registered) => {
@@ -2051,6 +2126,7 @@ export class WalletService {
             hideBlocker: isHidden ? null : blocker,
           };
         })),
+        accountAddState,
       };
       return result;
     }));
@@ -3009,6 +3085,86 @@ export class WalletService {
     });
   }
 
+  /**
+   * Bring the selected account to the gateway's active revision before a
+   * provider transaction is planned. This is deliberately a pre-plan action:
+   * it may join an existing scan, but it never retries a transaction request
+   * and never weakens the approval/signing guards.
+   */
+  async providerEnsureSpendReady(input: {
+    expectedVaultId: string;
+    expectedSessionId: string;
+    expectedAccountId: string;
+    expectedAccount: number;
+  }, guard?: ProviderOperationGuard): Promise<void> {
+    const assertFresh = async (): Promise<void> => {
+      guard?.();
+      const [gatewayView, accountView] = await Promise.all([
+        this.gatewayStatus({ forceRefresh: true }),
+        this.providerAccountView(),
+      ]);
+      guard?.();
+      if (accountView.vaultId !== input.expectedVaultId ||
+          accountView.sessionId !== input.expectedSessionId ||
+          accountView.accountId !== input.expectedAccountId ||
+          accountView.account !== input.expectedAccount) {
+        throw new RpcError('ERR_PLAN_CHANGED', 'provider account changed during refresh');
+      }
+      await this.runExclusive(() => this.withSessionDek(
+        {
+          expectedVaultId: input.expectedVaultId,
+          expectedSessionId: input.expectedSessionId,
+        },
+        async (dek, session) => {
+          guard?.();
+          const active = await this.assertProviderAccountLocked(dek, session.vaultId);
+          if (active.accountId !== input.expectedAccountId || active.account !== input.expectedAccount) {
+            throw new RpcError('ERR_PLAN_CHANGED', 'provider account changed during refresh');
+          }
+          await this.assertSpendingFreshLocked(dek, session.vaultId, gatewayView, 'native_send');
+          guard?.();
+        },
+      ));
+      guard?.();
+    };
+
+    try {
+      await assertFresh();
+      return;
+    } catch (error) {
+      if (!(error instanceof RpcError) || error.code !== 'ERR_DATA_STALE') throw error;
+    }
+
+    guard?.();
+    try {
+      await this.startScan({
+        mode: 'refresh',
+        expectedVaultId: input.expectedVaultId,
+        expectedSessionId: input.expectedSessionId,
+      });
+      guard?.();
+      const run = this.scanRun;
+      if (run) {
+        while (this.scanRun === run) {
+          guard?.();
+          await Promise.race([
+            run,
+            new Promise<void>((resolve) => setTimeout(resolve, 100)),
+          ]);
+        }
+        await run;
+      }
+      guard?.();
+    } catch (error) {
+      guard?.();
+      if (error instanceof RpcError &&
+          (error.code === 'ERR_PLAN_CHANGED' || error.code === 'ERR_LOCKED')) throw error;
+      throw new RpcError('ERR_DATA_STALE', 'wallet refresh did not complete');
+    }
+
+    await assertFresh();
+  }
+
   async providerPrepareOrdinalTransfer(input: {
     inscriptionId: string;
     address: string;
@@ -3311,7 +3467,9 @@ export class WalletService {
         throw new RpcError('ERR_PLAN_CHANGED', 'wallet input state changed');
       }
       const result = evaluateEligibility(current, eligibility);
-      const allowedProtected = plan.kind === 'provider_ordinal_transfer' && protectedInputs.has(index);
+      const allowedProtected =
+        (plan.kind === 'provider_ordinal_transfer' || plan.kind === 'community_vault_acquisition') &&
+        protectedInputs.has(index);
       if (result.reasons.some((reason) => !allowedProtected || reason !== 'not_cardinal_clean')) {
         throw new RpcError('ERR_UNSAFE_TRANSACTION', 'provider wallet input is not eligible');
       }
@@ -3326,7 +3484,11 @@ export class WalletService {
     walletOutputs?: Array<{ scriptPubKey: string; output: PlanOutput }>;
     protectedSatFlow?: TransactionPlan['protectedSatFlow'];
     requiresAdvanced?: boolean;
+    expiresAt?: number;
     selectedInputIndexes?: number[];
+    communityVaultAcquisition?: CommunityVaultAcquisitionProviderReviewV1;
+    communityVaultSale?: CommunityVaultSaleProviderReviewV1;
+    communityVaultSaleBuyer?: CommunityVaultSaleBuyerProviderReviewV1;
     marketplace?: {
       context: MarketplaceContext;
       resolution: MarketplaceResolution;
@@ -3470,7 +3632,17 @@ export class WalletService {
               walletOutputs: input.walletOutputs ?? providerReceiveOutputs,
               ...(input.protectedSatFlow === undefined ? {} : { protectedSatFlow: input.protectedSatFlow }),
               ...(input.requiresAdvanced === undefined ? {} : { requiresAdvanced: input.requiresAdvanced }),
+              ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
               ...(input.selectedInputIndexes === undefined ? {} : { selectedInputIndexes: input.selectedInputIndexes }),
+              ...(input.communityVaultAcquisition === undefined ? {} : {
+                communityVaultAcquisition: input.communityVaultAcquisition,
+              }),
+              ...(input.communityVaultSale === undefined ? {} : {
+                communityVaultSale: input.communityVaultSale,
+              }),
+              ...(input.communityVaultSaleBuyer === undefined ? {} : {
+                communityVaultSaleBuyer: input.communityVaultSaleBuyer,
+              }),
               ...(input.marketplace === undefined ? {} : { marketplace: input.marketplace }),
             });
             // The Advanced-signing setting gates only plans that actually need
@@ -3734,13 +3906,13 @@ export class WalletService {
     });
     if (!result.ok) {
       throw new RpcError(
-        'ERR_BROADCAST_REJECTED',
+        'ERR_BROADCAST_OUTCOME_UNKNOWN',
         'provider broadcast outcome is unknown; manual reconciliation is required',
       );
     }
     if (result.value.status === 'indeterminate') {
       throw new RpcError(
-        'ERR_BROADCAST_REJECTED',
+        'ERR_BROADCAST_OUTCOME_UNKNOWN',
         'provider broadcast is indeterminate; manual reconciliation is required',
       );
     }
@@ -3949,8 +4121,8 @@ export class WalletService {
 
     const prep = await this.runExclusive(() =>
       this.withSessionDek(input, async (dek, session) => {
-        const checkpoint =
-          input.mode === 'resume' ? await this.loadCheckpointLocked(dek, session.vaultId) : null;
+        const storedCheckpoint = await this.loadCheckpointLocked(dek, session.vaultId);
+        const checkpoint = input.mode === 'resume' ? storedCheckpoint : null;
         const activeCheckpoint = checkpoint !== null && checkpoint.queue.length > 0 ? checkpoint : null;
         if (input.mode === 'resume' && activeCheckpoint === null) {
           throw new RpcError('ERR_INVALID_PAYLOAD', 'no interrupted scan to resume');
@@ -3965,7 +4137,6 @@ export class WalletService {
         if (!selectedPublicAccount) {
           throw new RpcError('ERR_INVALID_PAYLOAD', 'active public account unavailable');
         }
-        const selectedAccount = selectedPublicAccount.account;
         const descriptorSelected = selectedPublicAccount.source === 'descriptor';
         const standardAccounts = activeCheckpoint?.standardAccounts ??
           normalizeAccountIndexes([
@@ -3988,27 +4159,30 @@ export class WalletService {
         );
         const descriptorUnits = descriptorDefinitions.flatMap((definition) =>
           buildPublicAccountScanUnits(definition));
-        const queue = activeCheckpoint
+        let queue = activeCheckpoint
           ? [...activeCheckpoint.queue]
               .filter((unit) => !descriptorSelected || unit.source === 'descriptor')
-          : descriptorSelected
-            ? descriptorUnits
-            : scope === 'refresh'
-              ? buildRefreshUnits(
-                  this.deps.network,
-                  meta.activeUnits,
-                  selectedAccount,
-                  standardAccounts,
-                  standardAccountIds,
-                  meta.registeredPublicAccounts,
-                  selectedPublicAccount.accountId,
-                )
+          : scope === 'refresh'
+            ? buildRefreshUnits(this.deps.network, selectedPublicAccount)
+            : descriptorSelected
+              ? descriptorUnits
               : [
                   ...buildScanUnits(
                     this.deps.network, true, standardAccounts, standardAccountIds,
                   ),
                   ...descriptorUnits,
                 ];
+        if (activeCheckpoint === null && scope === 'refresh' && meta.hasConflictingSources) {
+          if (storedCheckpoint === null || storedCheckpoint.done.length === 0) {
+            throw new RpcError(
+              'ERR_DATA_STALE',
+              'a complete rescan is required to reconcile conflicting sources',
+            );
+          }
+          const recoveryUnits = new Map(queue.map((unit) => [unitKey(unit), unit]));
+          for (const unit of storedCheckpoint.done) recoveryUnits.set(unitKey(unit), unit);
+          queue = [...recoveryUnits.values()];
+        }
         const done = activeCheckpoint
           ? [...activeCheckpoint.done]
               .filter((unit) => !descriptorSelected || unit.source === 'descriptor')
@@ -4017,6 +4191,12 @@ export class WalletService {
           ? [...activeCheckpoint.activeUnits]
               .filter((unit) => !descriptorSelected || unit.source === 'descriptor')
           : [];
+        const confirmedUnits = activeCheckpoint
+          ? [...activeCheckpoint.confirmedUnits]
+              .filter((unit) => !descriptorSelected || unit.source === 'descriptor')
+          : [];
+        const emptyStandardAccountStreak =
+          activeCheckpoint?.emptyStandardAccountStreak ?? 0;
         // Resume restores ALL safety-relevant scan state, not just the queue:
         // dropping boundaryUnits would lose a pending Extended-scan prompt, and
         // dropping hadConflict would let a resumed scan complete "clean" and
@@ -4086,6 +4266,8 @@ export class WalletService {
           queue: [...queue],
           done: [...done],
           activeUnits: [...activeUnits],
+          confirmedUnits: [...confirmedUnits],
+          emptyStandardAccountStreak,
           standardAccounts: [...standardAccounts],
           revision,
           startedAt,
@@ -4101,6 +4283,8 @@ export class WalletService {
           queue,
           done,
           activeUnits,
+          confirmedUnits,
+          emptyStandardAccountStreak,
           standardAccounts,
           boundaryUnits,
           revision,
@@ -7963,6 +8147,8 @@ export class WalletService {
       queue: ScanUnit[];
       done: ScanUnit[];
       activeUnits: ScanUnit[];
+      confirmedUnits: ScanUnit[];
+      emptyStandardAccountStreak: number;
       standardAccounts: number[];
       boundaryUnits: ScanUnit[];
       revision: string | null;
@@ -7990,10 +8176,14 @@ export class WalletService {
     let queue = [...prep.queue];
     const done = [...prep.done];
     const activeUnits = new Map(prep.activeUnits.map((unit) => [unitKey(unit), unit]));
+    const confirmedUnits = new Map(
+      prep.confirmedUnits.map((unit) => [unitKey(unit), unit]),
+    );
     const boundaryUnits = [...prep.boundaryUnits];
     let revision: string | null = prep.revision;
     let hadConflict = prep.hadConflict;
     let historyPartial = prep.historyPartial;
+    let emptyStandardAccountStreak = prep.emptyStandardAccountStreak;
 
     const checkpoint = (): ScanCheckpoint => ({
       scanId: prep.scanId,
@@ -8001,6 +8191,8 @@ export class WalletService {
       queue: [...queue],
       done: [...done],
       activeUnits: [...activeUnits.values()],
+      confirmedUnits: [...confirmedUnits.values()],
+      emptyStandardAccountStreak,
       standardAccounts: [...prep.standardAccounts],
       revision,
       startedAt: prep.startedAt,
@@ -8091,6 +8283,9 @@ export class WalletService {
         if (result.active) {
           activeUnits.set(unitKey(unit), unit);
         }
+        if (result.confirmedActivity) {
+          confirmedUnits.set(unitKey(unit), unit);
+        }
         if (result.historyCoverage.status === 'partial') {
           historyPartial = true;
           this.scanHistoryPartial = true;
@@ -8099,11 +8294,17 @@ export class WalletService {
         queue.shift();
         done.push(unit);
         if (prep.scope === 'discovery' && unit.source === 'standard' &&
-            unit.lane === 'ordinals' && !hadConflict &&
-            !activeUnits.has(unitKey({ ...unit, lane: 'payment' })) &&
-            !activeUnits.has(unitKey({ ...unit, lane: 'ordinals' }))) {
-          queue = stopStandardDiscoveryAfter(queue, unit.account, prep.standardAccounts);
-          this.setScanUnitsTotal(prep.scanId, done.length + queue.length);
+            unit.lane === 'ordinals' && !hadConflict) {
+          const accountConfirmed =
+            confirmedUnits.has(unitKey({ ...unit, lane: 'payment' })) ||
+            confirmedUnits.has(unitKey({ ...unit, lane: 'ordinals' }));
+          emptyStandardAccountStreak = accountConfirmed
+            ? 0
+            : emptyStandardAccountStreak + 1;
+          if (emptyStandardAccountStreak >= ACCOUNT_GAP_LIMIT) {
+            queue = stopStandardDiscoveryAfter(queue, unit.account, prep.standardAccounts);
+            this.setScanUnitsTotal(prep.scanId, done.length + queue.length);
+          }
         }
         try {
           await this.runExclusive(() =>
@@ -8146,13 +8347,16 @@ export class WalletService {
                 partialHistoryUnits.push(candidate);
               }
             }
-            const standardAccounts = normalizeAccountIndexes([
-              ...prior.standardAccounts,
-              ...prep.standardAccounts,
-              ...[...mergedActiveUnits.values()]
-                .filter((unit) => unit.source === 'standard')
-                .map((unit) => unit.account),
-            ]);
+            const discoveredActiveAccounts = [...mergedActiveUnits.values()]
+              .filter((unit) => unit.source === 'standard')
+              .map((unit) => unit.account);
+            const standardAccounts = includeIntermediateDiscoveredAccounts(
+              normalizeAccountIndexes([
+                ...prior.standardAccounts,
+                ...prep.standardAccounts,
+              ]),
+              discoveredActiveAccounts,
+            );
             let registeredPublicAccounts = prior.registeredPublicAccounts;
             const registeredStandardIndexes = new Set(
               registeredPublicAccounts
@@ -8712,6 +8916,7 @@ export class WalletService {
       hiddenPublicAccountIds: [],
       hiddenStandardAccounts: [],
       recoveredAddressCounts: [],
+      emptyAccountGapAcknowledged: false,
     };
     if (!cache) return empty;
     const record = await cache.get(this.cacheKey(vaultId, 'accountsMeta', 'all'));
@@ -8992,6 +9197,47 @@ export class WalletService {
       }
     }
     return covered;
+  }
+
+  /** Confirmed Bitcoin or Ordinals activity opens the next standard-account slot. */
+  private async confirmedStandardAccountIndexesLocked(
+    dek: Uint8Array,
+    vaultId: string,
+    meta?: AccountsMeta,
+  ): Promise<Set<number>> {
+    const accountsMeta = meta ?? await this.loadAccountsMetaLocked(dek, vaultId);
+    if (accountsMeta.hasConflictingSources) return new Set();
+    const confirmed = new Set<number>();
+    for (const utxo of await this.loadAllUtxosLocked(dek, vaultId)) {
+      if (utxo.height !== null) confirmed.add(utxo.account);
+    }
+    const standardIndexById = new Map(
+      accountsMeta.registeredPublicAccounts
+        .filter((account) => account.source === 'standard')
+        .map((account) => [account.accountId, account.account] as const),
+    );
+    const cache = this.requireCache();
+    for (const key of await cache.listKeys(vaultId, this.deps.network, 'history')) {
+      const legacy = /^a(0|[1-9][0-9]*):(payment|ordinals)$/u.exec(key);
+      const stable = /^pub:(acct_(?:mainnet|signet)_[0-9a-f]{64}):(payment|ordinals)$/u.exec(key);
+      const account = legacy
+        ? Number(legacy[1])
+        : stable
+          ? standardIndexById.get(stable[1]!)
+          : undefined;
+      if (account === undefined) continue;
+      const record = await cache.get(this.cacheKey(vaultId, 'history', key));
+      if (!record) continue;
+      try {
+        const stored = openRecord(dek, record, storedHistoryReadSchema) as StoredHistoryRecord;
+        if (stored.entries.some((entry) => entry.confirmationState === 'confirmed')) {
+          confirmed.add(account);
+        }
+      } catch {
+        // Unknown activity never opens another empty account slot.
+      }
+    }
+    return confirmed;
   }
 
   /** -1 is an unreadable/global pending record, which blocks every account. */
@@ -9312,6 +9558,51 @@ export class WalletService {
     return passkeyRemove(this.passkeyOpsContext(), input);
   }
 
+  // Community Vault is a separate mainnet-only product. These records never
+  // enter the Spending vault map or the personal Vault coordinator namespace.
+  private communityVaultContext(): CommunityVaultContext {
+    return {
+      local: this.deps.local,
+      vaultDeps: this.deps.vaultDeps,
+      calibrateKdf: () => this.deps.calibrateKdf(),
+      runExclusive: <T,>(fn: () => Promise<T>) => this.runExclusive(fn),
+      activeRecord: (expectation) => this.activeRecord(expectation),
+      touchSessionLocked: (session) => this.touchSessionLocked(session),
+    };
+  }
+
+  async communityVaultStatus(input: CommunityVaultStatusRequest): Promise<CommunityVaultStatusResult> {
+    return communityVaultStatus(this.communityVaultContext(), input);
+  }
+
+  async communityVaultCreate(input: CommunityVaultCreateRequest): Promise<CommunityVaultOwnerResult> {
+    return communityVaultCreate(this.communityVaultContext(), input);
+  }
+
+  async communityVaultRestore(input: CommunityVaultRestoreRequest): Promise<CommunityVaultOwnerResult> {
+    return communityVaultRestore(this.communityVaultContext(), input);
+  }
+
+  async communityVaultRevealRecovery(
+    input: CommunityVaultPasswordCampaignRequest,
+  ): Promise<{ mnemonic: string }> {
+    return communityVaultRevealRecovery(this.communityVaultContext(), input);
+  }
+
+  async communityVaultConfirmRecovery(
+    input: CommunityVaultConfirmRecoveryRequest,
+  ) {
+    return communityVaultConfirmRecovery(this.communityVaultContext(), input);
+  }
+
+  async communityVaultAcceptPolicy(input: CommunityVaultAcceptPolicyRequest) {
+    return communityVaultAcceptPolicy(this.communityVaultContext(), input);
+  }
+
+  async communityVaultSign(input: CommunityVaultSignRequest) {
+    return communityVaultSign(this.communityVaultContext(), input);
+  }
+
   // ---- Vault coordinator, disposable Desktop role A (ADR 0007, Workstream C)
   //
   // The whole coordinator surface lives in vault-coordinator-service.ts
@@ -9441,6 +9732,18 @@ export class WalletService {
     input: VaultCoordinatorPolicyRequest,
   ): Promise<VaultCoordinatorPolicyResult> {
     return vaultCoordinatorPolicy(this.vaultCoordinatorContext(), input);
+  }
+
+  async vaultCoordinatorPolicyPairingQr(
+    input: VaultCoordinatorPolicyPairingQrRequest,
+  ): Promise<VaultCoordinatorPolicyPairingQrResult> {
+    return vaultCoordinatorPolicyPairingQr(this.vaultCoordinatorContext(), input);
+  }
+
+  async vaultCoordinatorAcknowledgePolicyPairing(
+    input: VaultCoordinatorAcknowledgePolicyPairingRequest,
+  ): Promise<VaultCoordinatorAcknowledgePolicyPairingResult> {
+    return vaultCoordinatorAcknowledgePolicyPairing(this.vaultCoordinatorContext(), input);
   }
 
   async vaultCoordinatorRecoveryKit(

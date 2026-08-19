@@ -56,6 +56,16 @@ export function errorMessageKey(code: WireErrorCode): MessageKey {
       return 'vault.error.planAlreadyBroadcast';
     case 'ERR_VAULT_BROADCAST_INDETERMINATE':
       return 'vault.error.broadcastIndeterminate';
+    case 'ERR_COMMUNITY_VAULT_EXISTS':
+      return 'communityVault.error.exists';
+    case 'ERR_COMMUNITY_VAULT_MISSING':
+      return 'communityVault.error.missing';
+    case 'ERR_COMMUNITY_VAULT_UNUSABLE':
+      return 'communityVault.error.unusable';
+    case 'ERR_COMMUNITY_VAULT_RECOVERY_REQUIRED':
+      return 'communityVault.error.recoveryRequired';
+    case 'ERR_COMMUNITY_VAULT_POLICY_MISMATCH':
+      return 'communityVault.error.policyMismatch';
     case 'ERR_DATA_STALE':
       return 'send.error.stale';
     case 'ERR_INSUFFICIENT_FUNDS':

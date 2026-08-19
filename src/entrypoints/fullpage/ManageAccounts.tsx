@@ -26,6 +26,8 @@ export function ManageAccounts(props: {
   const [importOpen, setImportOpen] = useState(false);
   const [exporting, setExporting] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [accountAddState, setAccountAddState] = useState<AccountListResult['accountAddState']>(null);
+  const [showGapWarning, setShowGapWarning] = useState(false);
   const accountsRef = useRef(accounts);
   const { expectedVaultId, expectedSessionId } = props.expectation;
 
@@ -43,6 +45,7 @@ export function ManageAccounts(props: {
           if (restored) setRestoredAccount(restored.account);
         }
         setAccounts(result.result.accounts);
+        setAccountAddState(result.result.accountAddState);
         accountsRef.current = result.result.accounts;
         setError(false);
       } else {
@@ -94,18 +97,24 @@ export function ManageAccounts(props: {
 
   const visible = accounts.filter((account) => !account.hidden);
   const hidden = accounts.filter((account) => account.hidden);
-  const standardAccounts = accounts.filter((account) => account.signingSource === 'software');
-  const highestStandard = standardAccounts.reduce((highest, account) =>
-    highest === null || account.account > highest.account ? account : highest,
-  null as AccountListResult['accounts'][number] | null);
-  const canAddStandard = highestStandard?.hasHistory === true;
+  const canAddStandard = accountAddState?.kind === 'available';
 
-  async function addStandardAccount(): Promise<void> {
+  async function addStandardAccount(acknowledgeEmptyAccountRisk = false): Promise<void> {
     if (!canAddStandard || adding) return;
+    if (accountAddState.requiresAcknowledgement && !acknowledgeEmptyAccountRisk) {
+      setShowGapWarning(true);
+      return;
+    }
     setAdding(true);
     setError(false);
-    const result = await rpc('account.add', props.expectation);
-    if (result.ok) load();
+    const result = await rpc('account.add', {
+      ...props.expectation,
+      acknowledgeEmptyAccountRisk,
+    });
+    if (result.ok) {
+      setShowGapWarning(false);
+      load();
+    }
     else {
       setError(true);
       setAdding(false);
@@ -218,9 +227,8 @@ export function ManageAccounts(props: {
       <p className={styles['rowLabel']}>{t('account.manage.recovery')}</p>
       <div className={styles['row']}>
         <Button
-          onClick={() => void addStandardAccount()}
+          onClick={() => void addStandardAccount(false)}
           disabled={!canAddStandard || adding}
-          title={canAddStandard ? undefined : t('account.manage.addGapRule')}
         >
           {t('account.add')}
         </Button>
@@ -234,7 +242,25 @@ export function ManageAccounts(props: {
           {t('account.manage.rescan')}
         </Button>
       </div>
-      {!canAddStandard ? <p className={styles['rowLabel']}>{t('account.manage.addGapRule')}</p> : null}
+      {accountAddState?.kind === 'empty_limit' ? (
+        <p className={styles['rowLabel']} role="status">{t('account.addLimit')}</p>
+      ) : accountAddState?.kind === 'index_exhausted' || accountAddState === null ? (
+        <p className={styles['rowLabel']}>{t('account.addExhausted')}</p>
+      ) : null}
+      {showGapWarning ? (
+        <div className={styles['advisory']} role="note">
+          <strong>{t('account.addWarning.title')}</strong>
+          <p>{t('account.addWarning.body')}</p>
+          <div className={styles['row']}>
+            <Button variant="secondary" onClick={() => setShowGapWarning(false)}>
+              {t('common.cancel')}
+            </Button>
+            <Button disabled={adding} onClick={() => void addStandardAccount(true)}>
+              {t('account.addWarning.confirm')}
+            </Button>
+          </div>
+        </div>
+      ) : null}
       {importOpen ? (
         <WatchOnlyAccountImport
           expectation={props.expectation}

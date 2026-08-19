@@ -33,8 +33,10 @@
 import { z } from 'zod';
 import { vaultRecordV1Schema, type VaultRecordV1 } from '@drey/core/domain/vault/record';
 import {
+  vaultPairingEnvelopeSchema,
   vaultPsbtApprovalEnvelopeSchema,
   vaultSignerOriginSchema,
+  type VaultPairingEnvelopeV1,
   type VaultPsbtApprovalEnvelopeV1,
   type VaultSignerOriginV1,
 } from '@drey/core/domain/vault/multisig-contracts';
@@ -440,6 +442,12 @@ export interface VaultCoordinatorPolicyRecordV1 {
     transcriptHashHex: string;
     highestInboundCounter: string;
     nextOutboundCounter: string;
+    /** Last authenticated policy handoff to Mobile B. Public and restart-safe;
+     * it may be reissued with a fresh expiry after password confirmation. */
+    pendingPairingPolicyEnvelope?: VaultPairingEnvelopeV1 | null;
+    /** User confirmed that the same Mobile B showed the committed policy as ready.
+     * Presentation progress only; transaction authority never depends on it. */
+    mobilePairingConfirmedAt?: number | null;
     /** Exact last Desktop response to a Mobile-coordinated request. Keeping
      * both authenticated envelopes and the signed PSBT makes QR delivery
      * restart-safe without advancing either anti-replay counter twice. */
@@ -470,6 +478,8 @@ export const vaultCoordinatorPolicyRecordSchema: z.ZodType<
       transcriptHashHex: hexOf(32),
       highestInboundCounter: z.string().regex(/^(?:0|[1-9][0-9]*)$/u),
       nextOutboundCounter: z.string().regex(/^(?:0|[1-9][0-9]*)$/u),
+      pendingPairingPolicyEnvelope: vaultPairingEnvelopeSchema.nullable().optional(),
+      mobilePairingConfirmedAt: z.number().int().nonnegative().nullable().optional(),
       pendingMobileResponse: z.object({
         requestEnvelope: vaultPsbtApprovalEnvelopeSchema,
         requestPsbtHex: z.string().regex(/^(?:[0-9a-f]{2})+$/u).max(200_000),
@@ -500,7 +510,16 @@ export const vaultCoordinatorPolicyRecordSchema: z.ZodType<
     nextChangeIndex: stored.nextChangeIndex ?? 0,
     transport: stored.transport === undefined || stored.transport === null
       ? null
-      : { ...stored.transport, pendingMobileResponse: stored.transport.pendingMobileResponse ?? null },
+      : {
+          ...stored.transport,
+          pendingPairingPolicyEnvelope: stored.transport.pendingPairingPolicyEnvelope ?? null,
+          // Policies created before the resumable final-handoff fields already
+          // displayed their one-shot QR. Treat those as complete instead of
+          // trapping upgraded users on a step whose old transcript was never stored.
+          mobilePairingConfirmedAt: stored.transport.mobilePairingConfirmedAt ??
+            (stored.transport.pendingPairingPolicyEnvelope === undefined ? stored.createdAt : null),
+          pendingMobileResponse: stored.transport.pendingMobileResponse ?? null,
+        },
   }));
 
 /** What is stored today, without deciding whether it is usable. */

@@ -86,13 +86,26 @@ export const VAULT_STANDALONE_TOOL_DIGEST_UNPUBLISHED = '00'.repeat(32);
  * hardens the same batch policy. v0.8.0 adds shared native batching, deliberate
  * postage management, and recovery metadata. v0.8.1 adds bounded scan history
  * coverage. v0.8.2 corrects the development lockfile without changing the
- * recovery program. The source digest still moves because it binds the exact
- * reviewed core revision. Both values below are bound to the exact tag.
+ * recovery program. v0.8.3 bounds untrusted recovery inputs and wallet request
+ * structures before expensive processing, changing both the reviewed source
+ * and recovery artifact. v0.9.0 adds exact-origin OMB Wiki buyer marketplace
+ * policy. v0.9.1 adds device-compatible Vault PSBT QR transport. v0.9.2
+ * corrects the recovery-kit loss guidance. v0.10.0 adds Spending-account gap
+ * policy. v0.10.1 adds the AVIF preview descriptor contract. v0.11.0 limits
+ * routine Spending-account refresh planning to the selected account. v0.12.0
+ * adds the separately versioned Community Vault policy; the standalone
+ * personal Vault recovery artifact remains byte-identical while the reviewed
+ * source digest binds the new tag. v0.14.0 adds Community Vault acquisition
+ * and exact sale signing. v0.14.1 records its recovery release and stabilizes
+ * slow cryptographic drills. v0.14.2 reissues the release under the required
+ * annotated private tag and stabilizes the remaining long acquisition drill.
+ * v0.14.4 adds the buyer offer provider handshake; none of these patches change
+ * the standalone personal Vault recovery artifact.
  */
 export const VAULT_STANDALONE_TOOL_RELEASE = Object.freeze({
-  coreTag: 'v0.8.2',
-  sourceDigest: 'f5e10ab5d3900fac7b0aaa01e6702adcfd1ee3565b24a0f541401a3296635723',
-  artifactDigest: '9eba8ce9a9b7d662b96e4808d6d49fdaf8957c988c6f81a99602e1dd4cead271',
+  coreTag: 'v0.14.4',
+  sourceDigest: '2983f204dea066f1a37f82265b5ac7d7bdeabcded94dc4665a6de6bd8a4359a3',
+  artifactDigest: 'e9b46a159b22b7d1498ecc421cc621f4e0f5b20b76ec94d0272f1b4f2f82faaa',
 });
 
 /**

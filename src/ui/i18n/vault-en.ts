@@ -13,7 +13,7 @@
  * and Desktop A recovery. Those statements are not portable role vocabulary.
  */
 export const vaultEn = {
-  'vault.import.challengeQrCreate': 'Create Mobile B challenge QR',
+  'vault.import.challengeQrCreate': 'Create pairing QR',
   'vault.import.challengeQrAlt': 'Mobile B challenge QR, frame {index} of {count}',
   'vault.import.challengeQrPart': 'Challenge frame {index} of {count}',
   'vault.import.challengeQrPrevious': 'Previous frame',
@@ -27,14 +27,53 @@ export const vaultEn = {
     '2-of-3 multisignature custody. Two independent roles are required for every transaction; Recovery C stays offline for emergencies.',
   'vault.scope':
     'Create Desktop A, pair independent Mobile B, establish offline Recovery C, verify every backup, then deposit, scan, review, sign, and broadcast with authenticated QR transport.',
+  'vault.create.after':
+    'Next, you’ll connect your phone and set up an offline recovery role. You won’t deposit bitcoin until all three roles and their backups are verified.',
+  'vault.setup.desktopReady': 'Step 1 complete',
+  'vault.setup.connectTitle': 'Next: connect your other two roles',
+  'vault.setup.connectBody':
+    'Have your phone and offline recovery device ready. Drey will guide you through Mobile B first, then Recovery C.',
+  'vault.setup.mobileReady': 'Step 2 complete',
+  'vault.setup.recoveryTitle': 'Next: create Recovery C offline',
+  'vault.setup.recoveryBody':
+    'Prepare an offline computer, paper, and a removable drive. Drey will guide you through creating and checking the recovery role without exposing its words online.',
+  'vault.setup.rolesReady': 'All three roles are ready',
+  'vault.setup.createTitle': 'Next: create the Vault',
+  'vault.setup.createBody':
+    'Bind the three roles into one 2-of-3 Vault. You still won’t deposit bitcoin until the recovery checks are complete.',
+  'vault.import.mobileStep': 'Step 2 of 4',
+  'vault.import.mobileTitle': 'Connect Mobile B',
+  'vault.import.mobileIntro':
+    'On the phone you’ll use as Mobile B, open Drey Vault and show its Mobile B identity QR.',
+  'vault.import.scanIdentityHelp': 'First, scan the identity QR shown on your phone.',
+  'vault.import.identityScanned': 'Mobile B identity scanned.',
+  'vault.import.passwordHint':
+    'This confirms Desktop A before Drey creates a QR that only this phone can answer.',
+  'vault.import.scanChallengeHelp':
+    'Scan this pairing QR with Mobile B. The phone will show two responses; return here and scan Response 1, then Response 2.',
+  'vault.import.responseOneScanned': 'Response 1 of 2 scanned. Now scan Response 2.',
+  'vault.import.responseScanned': 'Both responses scanned. Finish connecting Mobile B below.',
+  'vault.import.technical': 'Technical details and manual entry',
+  'vault.import.recoveryStep': 'Step 3 of 4',
+  'vault.import.continue': 'Continue setup',
+  'vault.import.backToOverview': 'Back to setup overview',
 
   'vault.role.defaultLabel': 'Desktop A',
   'vault.policy.defaultLabel': 'Drey Vault',
+  'vault.policy.placeholder': 'e.g., Family Vault',
+  'vault.policy.hint':
+    'Choose any name that helps you recognize this Vault. Leave blank to use “Drey Vault”.',
   'vault.policy.qrHeading': 'Finish pairing on Mobile B',
   'vault.policy.qrBody':
     'Scan this authenticated policy QR on the same phone before leaving this page. It commits the exact signers and descriptors to Mobile B.',
   'vault.policy.qrAlt': 'Vault policy QR part {index} of {count}',
   'vault.policy.qrPart': 'Policy QR part {index} of {count}',
+  'vault.policy.mobileStep': 'Step 4 of 4',
+  'vault.policy.qrCompleteAction': 'Mobile B shows “Vault ready”',
+  'vault.policy.qrComplete': 'Mobile B pairing complete. Your Vault setup is saved.',
+  'vault.policy.qrMissing':
+    'The final QR expired or was closed. Enter your app password to create a fresh one; your Vault and completed setup steps are safe.',
+  'vault.policy.qrRefresh': 'Create fresh final QR',
 
   'vault.next':
     'Keep the recovery kit and Recovery C phrase offline and separate from Desktop A and Mobile B.',
@@ -185,7 +224,8 @@ export const vaultEn = {
   'vault.recoveryC.stepSetupDone': '1. Recovery C public signer verified.',
   'vault.recoveryC.stepKit': '2. Save the public recovery kit separately from the words.',
   'vault.recoveryC.stepKitDone': '2. Public recovery kit saved.',
-  'vault.recoveryC.stepBackup': '3. Re-enter the paper words offline and return the signed check.',
+  'vault.recoveryC.stepBackup':
+    '3. Move the saved Recovery Kit and paper-check challenge to the offline computer, re-enter the paper words, and return the signed check.',
   'vault.recoveryC.stepBackupDone': '3. Paper-backup check passed.',
   'vault.recoveryC.kitRequired':
     'Show the recovery kit below and download its file. This public file reveals every Vault address, so protect its privacy and keep it away from the Recovery C words.',
@@ -196,7 +236,7 @@ export const vaultEn = {
   'vault.recoveryC.backupStart': 'Download paper-check challenge',
   'vault.recoveryC.backupReplace': 'Replace paper-check challenge',
   'vault.recoveryC.backupDownloaded':
-    'Paper-check challenge downloaded. On the offline computer, re-enter all 12 words from paper and return only the public response file.',
+    'Paper-check challenge downloaded. Move it and the saved Recovery Kit to the offline computer, re-enter all 12 words from paper there, and return only the public response file.',
   'vault.recoveryC.backupWaiting':
     'Waiting for the public paper-check response. Challenge fingerprint: {fingerprint}.',
   'vault.recoveryC.fundingBlocked':
@@ -221,6 +261,8 @@ export const vaultEn = {
   // Production authenticated Vault context and standards-valid PSBT optical transport.
   'vault.transportScanner.open': 'Open Vault QR scanner',
   'vault.transportScanner.scanOrigin': 'Scan Mobile B identity QR',
+  'vault.transportScanner.scanResponseOne': 'Scan Mobile B response 1 of 2',
+  'vault.transportScanner.scanResponseTwo': 'Scan Mobile B response 2 of 2',
   'vault.transportScanner.title': 'Vault QR scanner',
   'vault.transportScanner.body':
     'Partial scans are discarded on background or cancellation. Drey imports only a complete verified Vault context or standards-valid PSBT.',

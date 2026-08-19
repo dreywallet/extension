@@ -181,7 +181,7 @@ export function Settings(props: { session: SessionView }): ReactNode {
   }
 
   return (
-    <>
+    <div className={styles['settingsPage']}>
       <h1 className={styles['title']}>{t('settings.title')}</h1>
 
       <section className={`${styles['section']} ${styles['walletAccountsEntry']}`}>
@@ -269,6 +269,16 @@ export function Settings(props: { session: SessionView }): ReactNode {
         </section>
       ) : null}
 
+      <section className={`${styles['section']} ${styles['recoverySettingsCard']}`}>
+        <div>
+          <h2 className={styles['sectionTitle']}>{t('communityVault.title')}</h2>
+          <p className={styles['rowLabel']}>{t('communityVault.entry.summary')}</p>
+        </div>
+        <Button onClick={() => (window.location.hash = FULLPAGE_HASH.communityVault)}>
+          {t('communityVault.entry.open')}
+        </Button>
+      </section>
+
       <section className={styles['section']}>
         <h2 className={styles['sectionTitle']}>{t('settings.contacts')}</h2>
         <div className={styles['row']}>
@@ -285,7 +295,11 @@ export function Settings(props: { session: SessionView }): ReactNode {
         <h2 className={styles['sectionTitle']}>{t('settings.connectedSites')}</h2>
         <p><a href={FULLPAGE_HASH.siteBlocked}>{t('settings.connectedSites.blockedHelp')}</a></p>
         {connectedSites.length === 0
-          ? <p className={styles['rowLabel']}>{t('settings.connectedSites.empty')}</p>
+          ? (
+              <div className={styles['emptyState']} role="status">
+                <p className={styles['rowLabel']}>{t('settings.connectedSites.empty')}</p>
+              </div>
+            )
           : null}
         {connectedSites.map((site) => (
           <div key={site.resourceId} className={styles['vaultRow']}>
@@ -523,6 +537,6 @@ export function Settings(props: { session: SessionView }): ReactNode {
           <p className={styles['rowLabel']}>{t('privacy.gateway.correlation')}</p>
         </div>
       </details>
-    </>
+    </div>
   );
 }

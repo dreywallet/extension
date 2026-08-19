@@ -29,6 +29,11 @@ import {
   VAULT_COORDINATOR_OP_SCHEMAS,
   type VaultCoordinatorErrorCode,
 } from './vault-coordinator-ops';
+import {
+  COMMUNITY_VAULT_ERROR_CODES,
+  COMMUNITY_VAULT_OP_SCHEMAS,
+  type CommunityVaultErrorCode,
+} from './community-vault-ops';
 
 const EXTENSION_ERROR_CODES = [
   'ERR_INVALID_ADDRESS',
@@ -83,6 +88,7 @@ export const EXTENSION_OP_SCHEMAS = {
   ...extensionLocalOpSchemas,
   ...PASSKEY_OP_SCHEMAS,
   ...VAULT_COORDINATOR_OP_SCHEMAS,
+  ...COMMUNITY_VAULT_OP_SCHEMAS,
 };
 
 export type ExtensionLocalOp = keyof typeof extensionLocalOpSchemas;
@@ -90,7 +96,8 @@ export type ExtensionLocalOp = keyof typeof extensionLocalOpSchemas;
 export type ExtensionWireErrorCode =
   | typeof EXTENSION_ERROR_CODES[number]
   | PasskeyErrorCode
-  | VaultCoordinatorErrorCode;
+  | VaultCoordinatorErrorCode
+  | CommunityVaultErrorCode;
 
 export type WireErrorCode = ErrorCode | ExtensionWireErrorCode;
 
@@ -99,4 +106,5 @@ export const WireErrorCode: z.ZodType<WireErrorCode> = z.union([
   z.enum(EXTENSION_ERROR_CODES),
   z.enum(PASSKEY_ERROR_CODES),
   z.enum(VAULT_COORDINATOR_ERROR_CODES),
+  z.enum(COMMUNITY_VAULT_ERROR_CODES),
 ]);

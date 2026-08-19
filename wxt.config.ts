@@ -156,11 +156,18 @@ export default defineConfig({
             : treeDigest(
                 workspaceRoot,
                 // The sibling repositories bound by their own revision/digest pairs
-                // (extension, gateway) are excluded, as is the mobile repository:
-                // it never contributes to extension artifacts, and its untracked
-                // CocoaPods install contains framework directory symlinks that are
-                // machine-specific and unreadable by the digest walk.
-                new Set([...ignoredDigestNames, 'extension', 'gateway', 'mobile']),
+                // (core, extension, gateway, hardware, mobile) are excluded. Their
+                // source is independently pinned or does not contribute to this
+                // artifact, and generated native trees may contain machine-local
+                // symlinks that the digest walk cannot safely read.
+                new Set([
+                  ...ignoredDigestNames,
+                  'core',
+                  'extension',
+                  'gateway',
+                  'hardware',
+                  'mobile',
+                ]),
               ),
           extensionRevision: revision(extensionRoot),
           extensionContentDigest: treeDigest(extensionRoot),

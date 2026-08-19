@@ -108,7 +108,7 @@ export function ManageUtxos(props: ManageUtxosProps): React.ReactElement {
 
   if (loading) {
     return (
-      <section className={styles['section']}>
+      <section className={`${styles['section']} ${styles['coinManager']}`}>
         <h1 className={styles['title']}>{t('utxos.title')}</h1>
         <p className={styles['rowLabel']}>{t('utxos.body')}</p>
         <div className={styles['loadingState']} role="status">
@@ -119,7 +119,7 @@ export function ManageUtxos(props: ManageUtxosProps): React.ReactElement {
   }
 
   return (
-    <section className={styles['section']}>
+    <section className={`${styles['section']} ${styles['coinManager']}`}>
       <h1 className={styles['title']}>{t('utxos.title')}</h1>
       <p className={styles['rowLabel']}>{t('utxos.body')}</p>
 
@@ -147,7 +147,11 @@ export function ManageUtxos(props: ManageUtxosProps): React.ReactElement {
       ) : null}
 
       {rows.length === 0
-        ? <p className={styles['rowLabel']}>{t('utxos.empty')}</p>
+        ? (
+            <div className={styles['emptyState']} role="status">
+              <p className={styles['rowLabel']}>{t('utxos.empty')}</p>
+            </div>
+          )
         : null}
 
       {groups.map((group) => (

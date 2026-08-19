@@ -195,6 +195,7 @@ export function VaultCoordinator(props: {
   const [challengeQrIndex, setChallengeQrIndex] = useState(0);
   const [policyQrFrames, setPolicyQrFrames] = useState<readonly string[]>([]);
   const [policyQrIndex, setPolicyQrIndex] = useState(0);
+  const [mobilePairingComplete, setMobilePairingComplete] = useState(false);
   const generation = useRef(0);
   const statusRef = useRef<HTMLParagraphElement>(null);
   const recoveryCAction = useRef(false);
@@ -215,6 +216,8 @@ export function VaultCoordinator(props: {
         setRole(null);
         setPolicy(null);
         setRecoveryC(null);
+        setPolicyQrFrames([]);
+        setMobilePairingComplete(false);
         return;
       }
       const origin = await rpc('vaultCoordinator.roleOrigin', { ...props.expectation });
@@ -233,6 +236,8 @@ export function VaultCoordinator(props: {
       setRecoveryC(readiness.result);
       if (status.result.policy !== 'present') {
         setPolicy(null);
+        setPolicyQrFrames([]);
+        setMobilePairingComplete(false);
         return;
       }
       const stored = await rpc('vaultCoordinator.policy', { ...props.expectation });
@@ -242,6 +247,9 @@ export function VaultCoordinator(props: {
         return;
       }
       setPolicy(stored.result.policy);
+      setPolicyQrFrames(stored.result.policyQrFrames ?? []);
+      setPolicyQrIndex(0);
+      setMobilePairingComplete(stored.result.mobilePairingComplete);
     });
   }, [rpc, props.expectation, t]);
 
@@ -548,6 +556,47 @@ export function VaultCoordinator(props: {
     }
   }
 
+  async function refreshPolicyPairingQr(): Promise<void> {
+    setError(null);
+    setBusy(true);
+    try {
+      const result = await rpc('vaultCoordinator.policyPairingQr', {
+        password,
+        ...props.expectation,
+      });
+      if (!result.ok) {
+        setError(t(errorMessageKey(result.code)));
+        return;
+      }
+      setPolicyQrFrames(result.result.policyQrFrames);
+      setPolicyQrIndex(0);
+      setPassword('');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function acknowledgePolicyPairing(): Promise<void> {
+    if (policy === null) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const result = await rpc('vaultCoordinator.acknowledgePolicyPairing', {
+        policyId: policy.policyId,
+        ...props.expectation,
+      });
+      if (!result.ok) {
+        setError(t(errorMessageKey(result.code)));
+        return;
+      }
+      setMobilePairingComplete(true);
+      setPolicyQrFrames([]);
+      setNotice(t('vault.policy.qrComplete'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function submit(): Promise<void> {
     setError(null);
     setNotice(null);
@@ -645,6 +694,7 @@ export function VaultCoordinator(props: {
         setPolicyQrFrames(created.result.policyQrFrames);
         setPolicyQrIndex(0);
         setPolicyState('present');
+        setMobilePairingComplete(false);
         setChallenge(null);
         setPending([]);
         enterMode({ kind: 'view' });
@@ -668,6 +718,7 @@ export function VaultCoordinator(props: {
         setKit(null);
         setKitDownloadStarted(false);
         setRecoveryC(null);
+        setMobilePairingComplete(false);
         setBackupChallenge(null);
         enterMode({ kind: 'view' });
         setNotice(t('vault.policy.remove.done'));
@@ -745,8 +796,12 @@ export function VaultCoordinator(props: {
               ? t('vault.production.banner')
               : t('vault.banner')}
         </p>
-        <p className={styles['rowLabel']}>{t('vault.intro')}</p>
-        <p className={styles['rowLabel']}>{t('vault.scope')}</p>
+        {mode.kind === 'view' && roleState === 'absent' ? (
+          <>
+            <p className={styles['rowLabel']}>{t('vault.intro')}</p>
+            <p className={styles['rowLabel']}>{t('vault.scope')}</p>
+          </>
+        ) : null}
         <div className={styles['vaultFeedback']}>
           {notice !== null ? (
             <p ref={statusRef} tabIndex={-1} role="status">
@@ -763,17 +818,127 @@ export function VaultCoordinator(props: {
             {roleState === 'absent' ? (
               <p className={styles['rowLabel']}>{t('vault.role.none')}</p>
             ) : null}
+            {role !== null && policyState === 'absent' ? (
+              <section className={styles['vaultNextStep']} aria-labelledby="vault-next-step-heading">
+                <p className={styles['vaultStepLabel']}>
+                  {pending.length === 0 && recoveryC?.setupComplete === true
+                    ? t('vault.setup.rolesReady')
+                    : !pending.includes('mobile-b') && pending.includes('recovery-c')
+                      ? t('vault.setup.mobileReady')
+                      : t('vault.setup.desktopReady')}
+                </p>
+                <h2 id="vault-next-step-heading" className={styles['sectionTitle']}>
+                  {pending.length === 0 && recoveryC?.setupComplete === true
+                    ? t('vault.setup.createTitle')
+                    : !pending.includes('mobile-b') && pending.includes('recovery-c')
+                      ? t('vault.setup.recoveryTitle')
+                      : t('vault.setup.connectTitle')}
+                </h2>
+                <p className={styles['rowLabel']}>
+                  {pending.length === 0 && recoveryC?.setupComplete === true
+                    ? t('vault.setup.createBody')
+                    : !pending.includes('mobile-b') && pending.includes('recovery-c')
+                      ? t('vault.setup.recoveryBody')
+                      : t('vault.setup.connectBody')}
+                </p>
+                {pending.length === 0 && recoveryC?.setupComplete === true ? (
+                  <Button onClick={() => enterMode({ kind: 'createPolicy' })}>
+                    {t('vault.policy.create.submit')}
+                  </Button>
+                ) : (
+                  <Button disabled={busy} onClick={() => void beginImport()}>
+                    {challenge !== null || recoveryC?.state === 'setup_open'
+                      ? t('vault.import.restart')
+                      : pending.length > 0
+                        ? t('vault.import.continue')
+                        : t('vault.import.begin')}
+                  </Button>
+                )}
+              </section>
+            ) : null}
+            {policy !== null && !mobilePairingComplete ? (
+              <section
+                className={styles['vaultNextStep']}
+                aria-labelledby="vault-policy-qr-heading"
+              >
+                <p className={styles['vaultStepLabel']}>{t('vault.policy.mobileStep')}</p>
+                <h2 id="vault-policy-qr-heading" className={styles['sectionTitle']}>
+                  {t('vault.policy.qrHeading')}
+                </h2>
+                <p className={styles['rowLabel']}>{t('vault.policy.qrBody')}</p>
+                {policyQrFrames.length > 0 ? (
+                  <>
+                    <QrCode
+                      value={policyQrFrames[policyQrIndex]!}
+                      alt={t('vault.policy.qrAlt', {
+                        index: policyQrIndex + 1,
+                        count: policyQrFrames.length,
+                      })}
+                      size={260}
+                    />
+                    <p>{t('vault.policy.qrPart', {
+                      index: policyQrIndex + 1,
+                      count: policyQrFrames.length,
+                    })}</p>
+                    {policyQrFrames.length > 1 ? (
+                      <div className={styles['row']}>
+                        <Button
+                          variant="secondary"
+                          disabled={policyQrIndex === 0}
+                          onClick={() => setPolicyQrIndex((index) => Math.max(0, index - 1))}
+                        >
+                          {t('vault.import.challengeQrPrevious')}
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          disabled={policyQrIndex >= policyQrFrames.length - 1}
+                          onClick={() => setPolicyQrIndex((index) =>
+                            Math.min(policyQrFrames.length - 1, index + 1))}
+                        >
+                          {t('vault.import.challengeQrNext')}
+                        </Button>
+                      </div>
+                    ) : null}
+                    <Button disabled={busy} onClick={() => void acknowledgePolicyPairing()}>
+                      {t('vault.policy.qrCompleteAction')}
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <p className={styles['advisory']}>{t('vault.policy.qrMissing')}</p>
+                    <Field
+                      label={t('unlock.password')}
+                      type="password"
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
+                      autoComplete="current-password"
+                    />
+                    <Button
+                      disabled={busy || password.length === 0}
+                      onClick={() => void refreshPolicyPairingQr()}
+                    >
+                      {t('vault.policy.qrRefresh')}
+                    </Button>
+                  </>
+                )}
+              </section>
+            ) : null}
             {role !== null ? (
               <>
-                <h2 className={styles['sectionTitle']}>{t('vault.role.heading')}</h2>
-                <dl className={styles['details']}>
-                  {detail(t('vault.role.label'), role.label)}
-                  {detail(t('vault.role.fingerprint'), role.origin.masterFingerprintHex, true)}
-                  {detail(t('vault.role.origin'), role.origin.originPath, true)}
-                  {detail(t('vault.role.xpub'), role.origin.accountXpub, true)}
-                  {detail(t('vault.role.created'), formatDate(role.createdAt))}
-                </dl>
-                <VaultRoleARecoveryExport expectation={props.expectation} />
+                <details className={styles['inlineDetails']}>
+                  <summary>{t('vault.role.details')}</summary>
+                  <dl className={styles['details']}>
+                    {detail(t('vault.role.label'), role.label)}
+                    {detail(t('vault.role.fingerprint'), role.origin.masterFingerprintHex, true)}
+                    {detail(t('vault.role.origin'), role.origin.originPath, true)}
+                    {detail(t('vault.role.xpub'), role.origin.accountXpub, true)}
+                    {detail(t('vault.role.created'), formatDate(role.createdAt))}
+                  </dl>
+                </details>
+                <details className={styles['inlineDetails']}>
+                  <summary>{t('vault.role.recoveryTools')}</summary>
+                  <VaultRoleARecoveryExport expectation={props.expectation} />
+                </details>
               </>
             ) : null}
 
@@ -782,7 +947,6 @@ export function VaultCoordinator(props: {
             ) : null}
             {role !== null && policyState === 'absent' ? (
               <>
-                <p className={styles['rowLabel']}>{t('vault.policy.none')}</p>
                 {recoveryC?.state === 'setup_open' ? (
                   <p className={styles['advisory']}>{t('vault.recoveryC.setupInterrupted')}</p>
                 ) : null}
@@ -1015,7 +1179,9 @@ export function VaultCoordinator(props: {
                 </p>
               ) : null}
             </div>
-            <p className={styles['rowLabel']}>{t('vault.next')}</p>
+            {policyState === 'present' ? (
+              <p className={styles['rowLabel']}>{t('vault.next')}</p>
+            ) : null}
             <div className={styles['row']}>
               <Button variant="secondary" onClick={props.onBack}>
                 {t('common.back')}
@@ -1030,58 +1196,8 @@ export function VaultCoordinator(props: {
                   </Button>
                 </>
               ) : null}
-              {roleState === 'present' && policyState === 'absent' ? (
-                <>
-                  <Button disabled={busy} onClick={() => void beginImport()}>
-                    {challenge !== null || recoveryC?.state === 'setup_open' || pending.length > 0
-                      ? t('vault.import.restart')
-                      : t('vault.import.begin')}
-                  </Button>
-                  {pending.length === 0 && recoveryC?.setupComplete === true ? (
-                    <Button onClick={() => enterMode({ kind: 'createPolicy' })}>
-                      {t('vault.policy.create.submit')}
-                    </Button>
-                  ) : null}
-                </>
-              ) : null}
               {policyState === 'present' ? (
                 <>
-                  {policyQrFrames.length > 0 ? (
-                    <section aria-labelledby="vault-policy-qr-heading">
-                      <h3 id="vault-policy-qr-heading" className={styles['sectionTitle']}>
-                        {t('vault.policy.qrHeading')}
-                      </h3>
-                      <p className={styles['rowLabel']}>{t('vault.policy.qrBody')}</p>
-                      <QrCode
-                        value={policyQrFrames[policyQrIndex]!}
-                        alt={t('vault.policy.qrAlt', {
-                          index: policyQrIndex + 1,
-                          count: policyQrFrames.length,
-                        })}
-                      />
-                      <p>{t('vault.policy.qrPart', {
-                        index: policyQrIndex + 1,
-                        count: policyQrFrames.length,
-                      })}</p>
-                      <div className={styles['row']}>
-                        <Button
-                          variant="secondary"
-                          disabled={policyQrIndex === 0}
-                          onClick={() => setPolicyQrIndex((index) => Math.max(0, index - 1))}
-                        >
-                          {t('vault.import.challengeQrPrevious')}
-                        </Button>
-                        <Button
-                          variant="secondary"
-                          disabled={policyQrIndex >= policyQrFrames.length - 1}
-                          onClick={() => setPolicyQrIndex((index) =>
-                            Math.min(policyQrFrames.length - 1, index + 1))}
-                        >
-                          {t('vault.import.challengeQrNext')}
-                        </Button>
-                      </div>
-                    </section>
-                  ) : null}
                   <Button disabled={busy} onClick={() => void refreshScan()}>
                     {t('vault.balance.refresh')}
                   </Button>
@@ -1135,9 +1251,26 @@ export function VaultCoordinator(props: {
           >
             <h2 className={styles['sectionTitle']}>{t(spec!.title)}</h2>
             <p className={styles['rowLabel']}>{t(spec!.body)}</p>
+            {mode.kind === 'create' ? (
+              <p className={styles['vaultFormNext']}>{t('vault.create.after')}</p>
+            ) : null}
             {spec!.needsLabel ? (
               <Field
-                label={mode.kind === 'createPolicy' ? t('vault.policy.label') : t('vault.role.label')}
+                label={
+                  mode.kind === 'createPolicy'
+                    ? t('vault.policy.label')
+                    : t('vault.role.inputLabel')
+                }
+                hint={
+                  mode.kind === 'createPolicy'
+                    ? t('vault.policy.hint')
+                    : t('vault.role.hint')
+                }
+                placeholder={
+                  mode.kind === 'createPolicy'
+                    ? t('vault.policy.placeholder')
+                    : t('vault.role.placeholder')
+                }
                 value={label}
                 onChange={(e) => setLabel(e.target.value)}
                 maxLength={64}
@@ -1146,95 +1279,126 @@ export function VaultCoordinator(props: {
             {mode.kind === 'import' && challenge !== null ? (
               <>
                 {pending.includes('mobile-b') ? (
-                  <section aria-labelledby="vault-mobile-b-import-heading">
+                  <section
+                    className={styles['vaultSetupStep']}
+                    aria-labelledby="vault-mobile-b-import-heading"
+                  >
+                    <p className={styles['vaultStepLabel']}>{t('vault.import.mobileStep')}</p>
                     <h3 id="vault-mobile-b-import-heading" className={styles['sectionTitle']}>
-                      {t('vault.role.mobileB')}
+                      {t('vault.import.mobileTitle')}
                     </h3>
-                    <p className={styles['rowLabel']}>{t('vault.import.challenge')}</p>
-                    <p className={styles['code']} data-testid="vault-import-challenge">
-                      {`${challenge.sessionIdHex}:${challenge.challengeNonceHex}:${challenge.transcriptHashHex}:${challenge.expiresAtMs}`}
-                    </p>
-                    <Field
-                      label={t('vault.import.origin')}
-                      value={originHex}
-                      onChange={() => undefined}
-                      readOnly
-                      maxLength={4096}
-                    />
-                    <Field
-                      label={t('unlock.password')}
-                      type="password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      autoComplete="current-password"
-                    />
-                    <Button
-                      variant="secondary"
-                      disabled={busy || originHex.length === 0 || password.length === 0}
-                      onClick={() => void createMobileChallengeQr()}
-                    >
-                      {t('vault.import.challengeQrCreate')}
-                    </Button>
-                    {challenge.challengeQrFrames !== null &&
-                    challenge.challengeQrFrames !== undefined &&
-                    challenge.challengeQrFrames.length > 0 ? (
-                      <div className={styles['form']}>
-                        <QrCode
-                          value={challenge.challengeQrFrames[challengeQrIndex]!}
-                          alt={t('vault.import.challengeQrAlt', {
-                            index: challengeQrIndex + 1,
-                            count: challenge.challengeQrFrames.length,
-                          })}
-                          size={260}
-                        />
-                        <p>{t('vault.import.challengeQrPart', {
-                          index: challengeQrIndex + 1,
-                          count: challenge.challengeQrFrames.length,
-                        })}</p>
-                        <div className={styles['row']}>
+                    <p className={styles['rowLabel']}>{t('vault.import.mobileIntro')}</p>
+                    {originHex === '' ? (
+                      <>
+                        <p className={styles['vaultFormNext']}>
+                          {t('vault.import.scanIdentityHelp')}
+                        </p>
+                        {VaultTransportScanner !== null ? (
                           <Button
-                            variant="secondary"
-                            disabled={challengeQrIndex === 0}
-                            onClick={() => setChallengeQrIndex((index) => Math.max(0, index - 1))}
+                            onClick={() => setTransportScannerKind('origin')}
+                            data-testid="vault-origin-scanner-toggle"
                           >
-                            {t('vault.import.challengeQrPrevious')}
+                            {t('vault.transportScanner.scanOrigin')}
                           </Button>
-                          <Button
-                            variant="secondary"
-                            disabled={challengeQrIndex >= challenge.challengeQrFrames.length - 1}
-                            onClick={() => setChallengeQrIndex((index) =>
-                              Math.min(challenge.challengeQrFrames!.length - 1, index + 1))}
-                          >
-                            {t('vault.import.challengeQrNext')}
-                          </Button>
-                        </div>
-                      </div>
-                    ) : null}
-                    <Field
-                      label={t('vault.import.proof')}
-                      value={proofHex}
-                      onChange={(e) => setProofHex(e.target.value)}
-                      maxLength={4096}
-                    />
-                  </section>
-                ) : null}
-                {VaultTransportScanner !== null ? (
-                  <>
-                    <Button
-                      variant="secondary"
-                      onClick={() => setTransportScannerKind('origin')}
-                      data-testid="vault-origin-scanner-toggle"
-                    >
-                      {t('vault.transportScanner.scanOrigin')}
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      onClick={() => setTransportScannerKind('context')}
-                      data-testid="vault-transport-scanner-toggle"
-                    >
-                      {t('vault.transportScanner.open')}
-                    </Button>
-                    {transportScannerKind !== null ? (
+                        ) : null}
+                      </>
+                    ) : (
+                      <>
+                        <p role="status" className={styles['success']}>
+                          {t('vault.import.identityScanned')}
+                        </p>
+                        {challenge.challengeQrFrames === null ||
+                        challenge.challengeQrFrames === undefined ||
+                        challenge.challengeQrFrames.length === 0 ? (
+                          <>
+                            <Field
+                              label={t('unlock.password')}
+                              hint={t('vault.import.passwordHint')}
+                              type="password"
+                              value={password}
+                              onChange={(e) => setPassword(e.target.value)}
+                              autoComplete="current-password"
+                            />
+                            <Button
+                              disabled={busy || password.length === 0}
+                              onClick={() => void createMobileChallengeQr()}
+                            >
+                              {t('vault.import.challengeQrCreate')}
+                            </Button>
+                          </>
+                        ) : (
+                          <div className={styles['vaultQrStage']}>
+                            <p className={styles['vaultFormNext']}>
+                              {t('vault.import.scanChallengeHelp')}
+                            </p>
+                            <QrCode
+                              value={challenge.challengeQrFrames[challengeQrIndex]!}
+                              alt={t('vault.import.challengeQrAlt', {
+                                index: challengeQrIndex + 1,
+                                count: challenge.challengeQrFrames.length,
+                              })}
+                              size={260}
+                            />
+                            <p>
+                              {t('vault.import.challengeQrPart', {
+                                index: challengeQrIndex + 1,
+                                count: challenge.challengeQrFrames.length,
+                              })}
+                            </p>
+                            <div className={styles['row']}>
+                              <Button
+                                variant="secondary"
+                                disabled={challengeQrIndex === 0}
+                                onClick={() =>
+                                  setChallengeQrIndex((index) => Math.max(0, index - 1))
+                                }
+                              >
+                                {t('vault.import.challengeQrPrevious')}
+                              </Button>
+                              <Button
+                                variant="secondary"
+                                disabled={
+                                  challengeQrIndex >= challenge.challengeQrFrames.length - 1
+                                }
+                                onClick={() =>
+                                  setChallengeQrIndex((index) =>
+                                    Math.min(
+                                      challenge.challengeQrFrames!.length - 1,
+                                      index + 1,
+                                    ))
+                                }
+                              >
+                                {t('vault.import.challengeQrNext')}
+                              </Button>
+                            </div>
+                            {proofHex === '' ? (
+                              VaultTransportScanner !== null ? (
+                                <>
+                                  {originEnvelope !== null ? (
+                                    <p role="status" className={styles['success']}>
+                                      {t('vault.import.responseOneScanned')}
+                                    </p>
+                                  ) : null}
+                                  <Button
+                                    onClick={() => setTransportScannerKind('context')}
+                                    data-testid="vault-transport-scanner-toggle"
+                                  >
+                                    {originEnvelope === null
+                                      ? t('vault.transportScanner.scanResponseOne')
+                                      : t('vault.transportScanner.scanResponseTwo')}
+                                  </Button>
+                                </>
+                              ) : null
+                            ) : (
+                              <p role="status" className={styles['success']}>
+                                {t('vault.import.responseScanned')}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </>
+                    )}
+                    {VaultTransportScanner !== null && transportScannerKind !== null ? (
                       <Suspense fallback={<p>{t('common.loading')}</p>}>
                         <VaultTransportScanner
                           kind={transportScannerKind}
@@ -1243,17 +1407,36 @@ export function VaultCoordinator(props: {
                         />
                       </Suspense>
                     ) : null}
-                  </>
+                    <details className={styles['inlineDetails']}>
+                      <summary>{t('vault.import.technical')}</summary>
+                      <p className={styles['rowLabel']}>{t('vault.import.challenge')}</p>
+                      <p className={styles['code']} data-testid="vault-import-challenge">
+                        {`${challenge.sessionIdHex}:${challenge.challengeNonceHex}:${challenge.transcriptHashHex}:${challenge.expiresAtMs}`}
+                      </p>
+                      <Field
+                        label={t('vault.import.origin')}
+                        value={originHex}
+                        onChange={(event) => setOriginHex(event.target.value)}
+                        maxLength={4096}
+                      />
+                      <Field
+                        label={t('vault.import.proof')}
+                        value={proofHex}
+                        onChange={(event) => setProofHex(event.target.value)}
+                        maxLength={4096}
+                      />
+                    </details>
+                  </section>
                 ) : null}
-                {pending.length > 0 ? (
-                  <p className={styles['rowLabel']}>
-                    {t('vault.import.pending', { roles: pending.map(roleName).join(', ') })}
-                  </p>
-                ) : (
+                {pending.length === 0 ? (
                   <p className={styles['rowLabel']}>{t('vault.import.done')}</p>
-                )}
-                {pending.includes('recovery-c') ? (
-                  <section aria-labelledby="vault-recovery-c-setup-heading">
+                ) : null}
+                {!pending.includes('mobile-b') && pending.includes('recovery-c') ? (
+                  <section
+                    className={styles['vaultSetupStep']}
+                    aria-labelledby="vault-recovery-c-setup-heading"
+                  >
+                    <p className={styles['vaultStepLabel']}>{t('vault.import.recoveryStep')}</p>
                     <h3 id="vault-recovery-c-setup-heading" className={styles['sectionTitle']}>
                       {t('vault.recoveryC.setupHeading')}
                     </h3>
@@ -1361,7 +1544,9 @@ export function VaultCoordinator(props: {
                 }}
               >
                 {!wordsVisible
-                  ? t('common.cancel')
+                  ? mode.kind === 'import' && !pending.includes('mobile-b')
+                    ? t('vault.import.backToOverview')
+                    : t('common.cancel')
                   : t('vault.reveal.hide')}
               </Button>
               {!wordsVisible && (mode.kind !== 'import' || pending.includes('mobile-b')) ? (

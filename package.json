@@ -2,7 +2,7 @@
   "name": "drey-extension",
   "description": "Drey — non-custodial Bitcoin L1 and Ordinals browser extension",
   "private": true,
-  "version": "0.10.8",
+  "version": "0.12.0",
   "license": "AGPL-3.0-only",
   "author": "Squirrel Systems LLC",
   "repository": {
@@ -21,11 +21,13 @@
   },
   "scripts": {
     "dev": "wxt",
-    "build": "DREY_BUILD_OUTPUT_ROOT=.output/production wxt build",
-    "build:next": "DREY_BUILD_OUTPUT_ROOT=.output/next wxt build --mode production",
-    "build:pilot": "DREY_BUILD_OUTPUT_ROOT=.output wxt build --mode pilot",
+    "build": "DREY_BUILD_OUTPUT_ROOT=.output/production wxt build && node scripts/check-approval-gallery-isolation.mjs .output/production/chrome-mv3",
+    "build:next": "DREY_BUILD_OUTPUT_ROOT=.output/next wxt build --mode production && node scripts/check-approval-gallery-isolation.mjs .output/next/chrome-mv3",
+    "build:approval-gallery": "vite build --config vite.approval-gallery.config.ts",
+    "approval:gallery": "pnpm build:approval-gallery && vite preview --config vite.approval-gallery.config.ts --host 127.0.0.1 --strictPort",
+    "build:pilot": "DREY_BUILD_OUTPUT_ROOT=.output wxt build --mode pilot && node scripts/check-approval-gallery-isolation.mjs .output/chrome-mv3",
     "build:test": "DREY_BUILD_OUTPUT_ROOT=.output/test wxt build --mode test",
-    "build:preview": "DREY_BUILD_OUTPUT_ROOT=.output/preview wxt build --mode preview",
+    "build:preview": "DREY_BUILD_OUTPUT_ROOT=.output/preview wxt build --mode preview && node scripts/check-approval-gallery-isolation.mjs .output/preview/chrome-mv3",
     "zip": "DREY_BUILD_OUTPUT_ROOT=.output/production node scripts/package-production.mjs",
     "zip:preview": "DREY_BUILD_OUTPUT_ROOT=.output/preview node scripts/package-preview.mjs",
     "store:identity-bootstrap": "node scripts/create-store-identity-bootstrap.mjs",
@@ -58,7 +60,7 @@
     "ci:m9x": "node scripts/ci-m9x.mjs"
   },
   "dependencies": {
-    "@drey/core": "git+https://github.com/dreywallet/core.git#v0.8.2",
+    "@drey/core": "git+https://github.com/dreywallet/core.git#v0.14.4",
     "@ngraveio/bc-ur": "1.1.13",
     "@noble/curves": "1.9.7",
     "@scure/bip32": "^1.7.0",
@@ -92,6 +94,7 @@
     "tsx": "^4.23.5",
     "typescript": "^5.8.0",
     "typescript-eslint": "^8.35.0",
+    "vite": "8.1.5",
     "vitest": "^3.2.0",
     "wxt": "^0.20.0"
   }

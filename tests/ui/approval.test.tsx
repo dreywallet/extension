@@ -135,7 +135,8 @@ describe('provider approval window', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Punycode web address');
     expect(screen.getByRole('alert')).toHaveTextContent('characters that can imitate another address');
     expect(screen.getByRole('alert')).not.toHaveTextContent('punycode');
-    expect(screen.getByRole('alert')).toHaveTextContent('independently verified every input');
+    expect(screen.getByRole('alert')).toHaveTextContent('trust the site and have checked every transaction detail');
+    expect(screen.queryByText('All outputs are fixed')).toBeNull();
     expect(screen.getByText(/70736274ff/u)).toBeInTheDocument();
     const approve = screen.getByRole('button', { name: 'Sign transaction' });
     expect(approve).toBeDisabled();
@@ -147,6 +148,96 @@ describe('provider approval window', () => {
       command: 'resolve', approved: true, confirmation: 'SIGN PSBT',
       password: 'correct horse battery staple',
     });
+  });
+
+  it('shows one simple password approval for an exact Community Vault sale', async () => {
+    const posted: unknown[] = [];
+    let listener: ((message: unknown) => void) | null = null;
+    const port = {
+      postMessage: (message: unknown) => posted.push(message), disconnect: vi.fn(),
+      onMessage: {
+        addListener: (next: (message: unknown) => void) => { listener = next; },
+        removeListener: vi.fn(),
+      },
+      onDisconnect: { addListener: vi.fn(), removeListener: vi.fn() },
+    };
+    (globalThis as { chrome?: unknown }).chrome = { runtime: { connect: () => port } };
+    renderApproval();
+    (listener as unknown as (message: unknown) => void)({
+      type: 'drey:approval:snapshot', protocolVersion: 1,
+      request: {
+        requestNonce: '123e4567-e89b-42d3-a456-426614174132', method: 'signPsbt',
+        origin: 'https://ordinalmaxibiz.wiki', unicodeOrigin: 'https://ordinalmaxibiz.wiki',
+        warnings: [], createdAt: 1, expiresAt: 300_001, approveAfter: 1,
+        review: transactionReview({
+          network: 'mainnet', feeSats: '2000', walletInputSats: '0', walletOutputSats: '0',
+          externalOutputSats: '112000', netWalletDebitSats: '0',
+          economicClaims: [{ kind: 'guaranteed_proceeds', valueSats: '20000' }],
+        }),
+        details: {
+          security: { requiresAdvanced: false, protectedValueExposedToFees: '0' },
+          inputs: [], outputs: [],
+          communityVaultSale: {
+            campaignId: 'campaign-1', ownerId: 'owner-1', units: Array.from({ length: 20 }, (_, i) => i),
+            ownerPayoutSats: '20000', grossOfferSats: '100000', settlementFeeSats: '2000',
+          },
+        },
+        requiresPassword: true, confirmationPhrase: null, approvalError: null,
+      },
+    });
+    expect(await screen.findByRole('heading', { name: 'Approve this OMB sale?' })).toBeInTheDocument();
+    expect(screen.getByText(/signs all your units once/iu)).toBeInTheDocument();
+    expect(screen.getByText('20,000 sats')).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Type SIGN PSBT/u)).toBeNull();
+    const approve = screen.getByRole('button', { name: 'Sign transaction' });
+    expect(approve).toBeDisabled();
+    await userEvent.type(screen.getByLabelText('App password'), 'owner password');
+    expect(approve).toBeEnabled();
+    await userEvent.click(approve);
+    expect(posted.at(-1)).toMatchObject({
+      command: 'resolve', approved: true, password: 'owner password',
+    });
+  });
+
+  it('shows one simple approval for exact buyer funding and never offers broadcast', async () => {
+    let listener: ((message: unknown) => void) | null = null;
+    const port = {
+      postMessage: vi.fn(), disconnect: vi.fn(),
+      onMessage: {
+        addListener: (next: (message: unknown) => void) => { listener = next; },
+        removeListener: vi.fn(),
+      },
+      onDisconnect: { addListener: vi.fn(), removeListener: vi.fn() },
+    };
+    (globalThis as { chrome?: unknown }).chrome = { runtime: { connect: () => port } };
+    renderApproval();
+    (listener as unknown as (message: unknown) => void)({
+      type: 'drey:approval:snapshot', protocolVersion: 1,
+      request: {
+        requestNonce: '123e4567-e89b-42d3-a456-426614174133', method: 'signPsbt',
+        origin: 'https://ordinalmaxibiz.wiki', unicodeOrigin: 'https://ordinalmaxibiz.wiki',
+        warnings: [], createdAt: 1, expiresAt: 300_001, approveAfter: 1,
+        review: transactionReview({
+          network: 'mainnet', feeSats: '2000', walletInputSats: '103000', walletOutputSats: '1000',
+          externalOutputSats: '112000', netWalletDebitSats: '102000',
+          economicClaims: [{ kind: 'buyer_total', valueSats: '102000' }],
+        }),
+        details: {
+          security: { requiresAdvanced: false, protectedValueExposedToFees: '0' },
+          inputs: [], outputs: [],
+          communityVaultSaleBuyer: {
+            campaignId: 'campaign-1', buyerId: 'buyer-1', grossOfferSats: '100000',
+            buyerTotalSats: '102000', settlementFeeSats: '2000',
+          },
+        },
+        requiresPassword: false, confirmationPhrase: null, approvalError: null,
+      },
+    });
+    expect(await screen.findByRole('heading', { name: 'Fund this OMB offer?' })).toBeInTheDocument();
+    expect(screen.getByText(/authorizes only the clean BTC inputs/iu)).toBeInTheDocument();
+    expect(screen.getByText('102,000 sats')).toBeInTheDocument();
+    expect(screen.queryByLabelText('App password')).toBeNull();
+    expect(screen.queryByText(/broadcast transaction/iu)).toBeNull();
   });
 
   it('reprices a transfer without executing it from a React effect', async () => {
@@ -178,8 +269,9 @@ describe('provider approval window', () => {
       },
     });
     expect(await screen.findByRole('heading', { name: 'Send bitcoin?' })).toBeInTheDocument();
-    expect(screen.getByRole('alert')).toHaveTextContent('more than 10%');
+    expect(screen.getByRole('alert')).toHaveTextContent('high compared with the payment');
     expect(screen.getByRole('alert')).not.toHaveTextContent('high_relative_fee');
+    expect(screen.queryByText('All outputs are fixed')).toBeNull();
     expect(screen.queryByLabelText('Fee rate (sat/vB)')).not.toBeVisible();
     await userEvent.click(screen.getByText('Adjust network fee'));
     const field = await screen.findByLabelText('Fee rate (sat/vB)');
@@ -245,15 +337,23 @@ describe('provider approval window', () => {
         requiresPassword: true, confirmationPhrase: 'SIGN PSBT', approvalError: null,
       },
     });
-    expect(await screen.findByRole('heading', { name: 'ord.net: list' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'List inscription?' })).toBeInTheDocument();
     expect(screen.getByText(/Step 2 of 3/u)).toBeInTheDocument();
-    expect(screen.getByText('25,000 sats')).toBeInTheDocument();
-    expect(screen.getByText('500 sats')).toBeInTheDocument();
-    expect(screen.getByText('250 sats')).toBeInTheDocument();
-    expect(screen.getByText('100 sats')).toBeInTheDocument();
+    const transactionSummary = screen.getByRole('region', { name: 'Transaction summary' });
+    expect(within(transactionSummary).getByText('Guaranteed proceeds')).toBeInTheDocument();
+    expect(within(transactionSummary).getByText('25,000 sats')).toBeInTheDocument();
+    expect(within(transactionSummary).getByText('Fee verified now')).toBeInTheDocument();
+    expect(within(transactionSummary).getByText('0 sats')).toBeInTheDocument();
+    expect(within(transactionSummary).getByText(/final fee may change/iu)).toBeInTheDocument();
+    expect(within(transactionSummary).queryByText('Marketplace fee')).toBeNull();
+    expect(within(transactionSummary).queryByText('Creator royalty')).toBeNull();
+    expect(within(transactionSummary).queryByText('Miner fee')).toBeNull();
     const warnings = screen.getAllByRole('alert').map((element) => element.textContent).join(' ');
-    expect(warnings).toContain('external funding inputs');
-    expect(warnings).toContain('cannot be revoked');
+    expect(warnings).toContain('may add funding');
+    expect(warnings).toContain('cannot take back the signature');
+    expect(warnings).toContain('Some outputs can change');
+    expect(screen.getByText('Can change')).toBeInTheDocument();
+    expect(screen.queryByText('All outputs are fixed')).toBeNull();
   });
 
   it('shows every co-located inscription with its full ID and requires the signed-placeholder acknowledgement', async () => {
@@ -459,8 +559,65 @@ describe('provider approval window', () => {
     const destination = (await screen.findByText('Destination')).parentElement;
     expect(destination).not.toBeNull();
     expect(within(destination!).getByText(/tb1qout/u)).toBeInTheDocument();
+    const transactionSummary = screen.getByRole('region', { name: 'Transaction summary' });
+    expect(within(transactionSummary).getByText('Leaving your wallet')).toBeInTheDocument();
+    expect(within(transactionSummary).getByText('120,000 sats')).toBeInTheDocument();
+    expect(within(transactionSummary).getByText('Network fee')).toBeInTheDocument();
+    expect(within(transactionSummary).getByText('411 sats')).toBeInTheDocument();
+    expect(screen.getByText('Requested by')).toBeInTheDocument();
+    expect(screen.queryByText('All outputs are fixed')).toBeNull();
+    expect(within(transactionSummary).getByText(/exact fee for this transaction/iu)).toBeInTheDocument();
+    expect(screen.queryByText('Fixed')).toBeNull();
+    expect(screen.getByText(/Reject this request only/iu)).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Sat flow' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Sign and send' })).toBeEnabled();
+  });
+
+  it('blocks approval and explains when protected value would become a miner fee', async () => {
+    const posted: unknown[] = [];
+    let listener: ((message: unknown) => void) | null = null;
+    const port = {
+      postMessage: (message: unknown) => posted.push(message), disconnect: vi.fn(),
+      onMessage: {
+        addListener: (next: (message: unknown) => void) => { listener = next; },
+        removeListener: vi.fn(),
+      },
+      onDisconnect: { addListener: vi.fn(), removeListener: vi.fn() },
+    };
+    (globalThis as { chrome?: unknown }).chrome = { runtime: { connect: () => port } };
+    renderApproval();
+    (listener as unknown as (message: unknown) => void)({
+      type: 'drey:approval:snapshot', protocolVersion: 1,
+      request: {
+        requestNonce: '123e4567-e89b-42d3-a456-426614174010', method: 'sendTransfer',
+        origin: 'https://app.example', unicodeOrigin: 'https://app.example', warnings: [],
+        createdAt: 1, expiresAt: 300_001, approveAfter: 1,
+        review: transactionReview({
+          feeSats: '6500', walletInputSats: '56500', walletOutputSats: '0',
+          externalOutputSats: '50000', netWalletDebitSats: '56500',
+        }),
+        details: {
+          feeSats: '6500', feeRateSatPerVb: '5',
+          security: { protectedValueExposedToFees: '6000' },
+          inputs: [{ index: 0, valueSats: '56500', ownership: 'wallet' }],
+          outputs: [{
+            index: 0, address: 'tb1qrecipient', valueSats: '50000', ownership: 'external',
+            role: 'recipient', committed: true,
+          }],
+        },
+        requiresPassword: false, confirmationPhrase: null, approvalError: null,
+      },
+    });
+
+    expect(await screen.findByText('Signing blocked'))
+      .toBeInTheDocument();
+    expect(screen.getByText(/6,000 protected sats would pay the fee/iu)).toBeInTheDocument();
+    expect(screen.getByText(/using clean Bitcoin for fees/iu)).toBeInTheDocument();
+    const approve = screen.getByRole('button', { name: 'Sign and send' });
+    expect(approve).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeEnabled();
+    await userEvent.click(approve);
+    expect(posted.some((message) => (message as { command?: string }).command === 'resolve')).toBe(false);
   });
 
   it('shows wallet identity and plain-language access without adding an approval step', async () => {

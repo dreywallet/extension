@@ -521,6 +521,8 @@ export function Gallery(props: {
     }
     setNotice(null);
     applyItemState(item.inscriptionId, state);
+    setSelectedGroupKey(null);
+    requestAnimationFrame(() => firstGalleryTabRef.current?.focus());
   };
 
   const openMedia = async (item: GalleryItem) => {

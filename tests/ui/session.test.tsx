@@ -1,7 +1,7 @@
 import '@testing-library/jest-dom/vitest';
 import { afterEach, describe, expect, it } from 'vitest';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { ACTIVE_VAULT_KEY } from '../../src/adapters/storage/keys';
 import { useSession } from '../../src/ui/hooks/use-session';
 import { emitRuntimeMessage, installFakeChrome, Providers } from './fake-rpc';
@@ -25,8 +25,7 @@ const READY = {
     name: 'Account 1',
     signingSource: 'software',
   }],
-  canAddAccount: false,
-  accountAddRequirement: null,
+  accountAddState: null,
   activeRecoveredAddressCount: 0,
   backupVerified: true,
   capabilities: {
@@ -245,5 +244,32 @@ describe('useSession', () => {
     act(() => emitRuntimeMessage({ type: 'squirrel:wallet-data-changed', reason: 'transaction' }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(calls).toBe(2);
+  });
+
+  it('preserves the expectation object when a refresh stays in the same session', async () => {
+    let calls = 0;
+    let expectationChanges = 0;
+    installFakeChrome({
+      'session.snapshot': () => {
+        calls += 1;
+        return { ok: true, result: { ...READY, activeAccount: calls - 1 } };
+      },
+    });
+    function ExpectationProbe(): ReactNode {
+      const session = useSession();
+      const expectation = session.expectation;
+      useEffect(() => {
+        if (expectation !== null) expectationChanges += 1;
+      }, [expectation]);
+      return <span>{session.activeAccount}</span>;
+    }
+    render(<Providers><ExpectationProbe /></Providers>);
+    expect(await screen.findByText('0')).toBeInTheDocument();
+    await waitFor(() => expect(expectationChanges).toBe(1));
+
+    act(() => emitRuntimeMessage({ type: 'squirrel:wallet-data-changed', reason: 'account' }));
+    expect(await screen.findByText('1')).toBeInTheDocument();
+    expect(calls).toBe(2);
+    expect(expectationChanges).toBe(1);
   });
 });

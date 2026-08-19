@@ -311,7 +311,10 @@ describe('WalletService state machine', () => {
       backupVerified: true,
       quarantinedVaultCount: 0,
       selectableAccounts: [0],
-      canAddAccount: false,
+      accountAddState: {
+        kind: 'available', nextAccount: 1, trailingEmptyAccounts: 1,
+        limit: 5, requiresAcknowledgement: true,
+      },
       vaults: [{ vaultId, name: 'Restored' }],
     });
   });

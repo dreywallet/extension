@@ -87,13 +87,63 @@ function baseHandlers(policyState: 'absent' | 'present', pending: string[]) {
   };
 }
 
+function recoveryCenterEvidence(policyState: 'absent' | 'usable') {
+  return {
+    localRole: 'usable' as const,
+    policyState,
+    phoneSignerPaired: policyState === 'usable',
+    standaloneRecoveryPackageAvailable: true,
+  };
+}
+
 describe('<VaultCoordinator /> Recovery C states', () => {
+  it('makes the final Mobile B handoff an explicit resumable fourth step', async () => {
+    const acknowledge = vi.fn(() => ({
+      ok: true,
+      result: { policyId: policy.policyId, mobilePairingComplete: true },
+    }));
+    installFakeChrome({
+      ...baseHandlers('present', []),
+      'vaultCoordinator.recoveryCReadiness': () => ({
+        ok: true,
+        result: {
+          ...recoveryCenterEvidence('usable'),
+          state: 'kit_required',
+          policyId: policy.policyId,
+          setupComplete: true,
+          kitExported: false,
+          backupCheckComplete: false,
+          ready: false,
+        },
+      }),
+      'vaultCoordinator.policy': () => ({
+        ok: true,
+        result: {
+          state: 'present',
+          policy,
+          policyQrFrames: ['ur:x-drey-vault/test'],
+          mobilePairingComplete: false,
+        },
+      }),
+      'vaultCoordinator.acknowledgePolicyPairing': acknowledge,
+    });
+    renderCoordinator();
+
+    expect(await screen.findByText('Step 4 of 4')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Finish pairing on Mobile B' }))
+      .toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Mobile B shows “Vault ready”' }));
+    await waitFor(() => expect(acknowledge).toHaveBeenCalledOnce());
+    expect(await screen.findByText(/Mobile B pairing complete/u)).toBeInTheDocument();
+  });
+
   it('offers the safe next step after a page or worker restart', async () => {
     installFakeChrome({
       ...baseHandlers('absent', []),
       'vaultCoordinator.recoveryCReadiness': () => ({
         ok: true,
         result: {
+          ...recoveryCenterEvidence('absent'),
           state: 'setup_complete',
           policyId: null,
           setupComplete: true,
@@ -113,6 +163,7 @@ describe('<VaultCoordinator /> Recovery C states', () => {
       'vaultCoordinator.recoveryCReadiness': () => ({
         ok: true,
         result: {
+          ...recoveryCenterEvidence('absent'),
           state: 'setup_open',
           policyId: null,
           setupComplete: false,
@@ -134,6 +185,7 @@ describe('<VaultCoordinator /> Recovery C states', () => {
       'vaultCoordinator.recoveryCReadiness': () => ({
         ok: true,
         result: {
+          ...recoveryCenterEvidence('usable'),
           state: 'kit_required',
           policyId: policy.policyId,
           setupComplete: true,
@@ -142,7 +194,12 @@ describe('<VaultCoordinator /> Recovery C states', () => {
           ready: false,
         },
       }),
-      'vaultCoordinator.policy': () => ({ ok: true, result: { state: 'present', policy } }),
+      'vaultCoordinator.policy': () => ({
+        ok: true,
+        result: {
+          state: 'present', policy, policyQrFrames: null, mobilePairingComplete: true,
+        },
+      }),
     });
     renderCoordinator();
     expect(await screen.findByRole('heading', { name: 'Offline Recovery C readiness' }))
@@ -160,6 +217,7 @@ describe('<VaultCoordinator /> Recovery C states', () => {
       'vaultCoordinator.recoveryCReadiness': () => ({
         ok: true,
         result: {
+          ...recoveryCenterEvidence('usable'),
           state: 'ready',
           policyId: policy.policyId,
           setupComplete: true,
@@ -170,7 +228,9 @@ describe('<VaultCoordinator /> Recovery C states', () => {
       }),
       'vaultCoordinator.policy': () => ({
         ok: true,
-        result: { state: 'present', policy: readyPolicy },
+        result: {
+          state: 'present', policy: readyPolicy, policyQrFrames: null, mobilePairingComplete: true,
+        },
       }),
       'vaultCoordinator.plan': () => ({
         ok: true,
@@ -201,6 +261,7 @@ describe('<VaultCoordinator /> Recovery C states', () => {
       'vaultCoordinator.recoveryCReadiness': () => ({
         ok: true,
         result: {
+          ...recoveryCenterEvidence('usable'),
           state: kitExported ? 'backup_required' : 'kit_required',
           policyId: policy.policyId,
           setupComplete: true,
@@ -209,7 +270,12 @@ describe('<VaultCoordinator /> Recovery C states', () => {
           ready: false,
         },
       }),
-      'vaultCoordinator.policy': () => ({ ok: true, result: { state: 'present', policy } }),
+      'vaultCoordinator.policy': () => ({
+        ok: true,
+        result: {
+          state: 'present', policy, policyQrFrames: null, mobilePairingComplete: true,
+        },
+      }),
       'vaultCoordinator.recoveryKit': () => ({
         ok: true,
         result: {
@@ -251,7 +317,7 @@ describe('<VaultCoordinator /> Recovery C states', () => {
       'vaultCoordinator.acknowledgeRecoveryKitExport': acknowledge,
     });
     renderCoordinator();
-    fireEvent.click(await screen.findByRole('button', { name: 'Show recovery kit' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Show Recovery Kit' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Download kit file' }));
     expect(download).toHaveBeenCalledTimes(1);
     expect(acknowledge).not.toHaveBeenCalled();
@@ -289,6 +355,7 @@ describe('<VaultCoordinator /> Recovery C states', () => {
       'vaultCoordinator.recoveryCReadiness': () => ({
         ok: true,
         result: {
+          ...recoveryCenterEvidence('absent'),
           state,
           policyId: null,
           setupComplete: state === 'setup_complete',
@@ -325,7 +392,7 @@ describe('<VaultCoordinator /> Recovery C states', () => {
       },
     });
     renderCoordinator();
-    fireEvent.click(await screen.findByRole('button', { name: 'Start over with a new challenge' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue setup' }));
     const setupButton = await screen.findByRole('button', { name: 'Download setup challenge' });
     fireEvent.click(setupButton);
     fireEvent.click(setupButton);

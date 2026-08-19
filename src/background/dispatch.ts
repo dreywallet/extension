@@ -35,6 +35,8 @@ import {
   type VaultCoordinatorImportRecoveryCSetupResponseRequest,
   type VaultCoordinatorOp,
   type VaultCoordinatorPolicyRequest,
+  type VaultCoordinatorPolicyPairingQrRequest,
+  type VaultCoordinatorAcknowledgePolicyPairingRequest,
   type VaultCoordinatorProveRoleRequest,
   type VaultCoordinatorRecoveryKitRequest,
   type VaultCoordinatorRecoveryCReadinessRequest,
@@ -59,7 +61,18 @@ import {
   type VaultCoordinatorStatusRequest,
 } from '../messaging/vault-coordinator-ops';
 import {
+  type CommunityVaultAcceptPolicyRequest,
+  type CommunityVaultConfirmRecoveryRequest,
+  type CommunityVaultCreateRequest,
+  type CommunityVaultOp,
+  type CommunityVaultPasswordCampaignRequest,
+  type CommunityVaultRestoreRequest,
+  type CommunityVaultSignRequest,
+  type CommunityVaultStatusRequest,
+} from '../messaging/community-vault-ops';
+import {
   type AccountVisibilitySetRequest,
+  type AccountAddRequest,
   type ActiveSessionRequest,
   type ActivityInscriptionPreviewBatchRequest,
   type ActivityInscriptionPreviewRequest,
@@ -155,11 +168,25 @@ function errorToCode(err: unknown): WireErrorCode {
 async function handle(op: string, payload: unknown, service: WalletService): Promise<unknown> {
   // op has already been confirmed present in the registry; the known ops route
   // to typed methods, any custom (test-injected) op falls through to internal.
-  switch (op as Op | ExtensionLocalOp | PasskeyOp | VaultCoordinatorOp) {
+  switch (op as Op | ExtensionLocalOp | PasskeyOp | VaultCoordinatorOp | CommunityVaultOp) {
     case 'wallet.home.snapshot':
       return service.homeSnapshot(payload as ActiveSessionRequest & { accountId: string });
     case 'gallery.home.cached':
       return service.galleryHomeCached(payload as GalleryCachedRequest);
+    case 'communityVault.status':
+      return service.communityVaultStatus(payload as CommunityVaultStatusRequest);
+    case 'communityVault.create':
+      return service.communityVaultCreate(payload as CommunityVaultCreateRequest);
+    case 'communityVault.restore':
+      return service.communityVaultRestore(payload as CommunityVaultRestoreRequest);
+    case 'communityVault.revealRecovery':
+      return service.communityVaultRevealRecovery(payload as CommunityVaultPasswordCampaignRequest);
+    case 'communityVault.confirmRecovery':
+      return service.communityVaultConfirmRecovery(payload as CommunityVaultConfirmRecoveryRequest);
+    case 'communityVault.acceptPolicy':
+      return service.communityVaultAcceptPolicy(payload as CommunityVaultAcceptPolicyRequest);
+    case 'communityVault.sign':
+      return service.communityVaultSign(payload as CommunityVaultSignRequest);
     case 'vaultCoordinator.status':
       return service.vaultCoordinatorStatus(payload as VaultCoordinatorStatusRequest);
     case 'vaultCoordinator.createRole':
@@ -202,6 +229,14 @@ async function handle(op: string, payload: unknown, service: WalletService): Pro
       return service.vaultCoordinatorCreatePolicy(payload as VaultCoordinatorCreatePolicyRequest);
     case 'vaultCoordinator.policy':
       return service.vaultCoordinatorPolicy(payload as VaultCoordinatorPolicyRequest);
+    case 'vaultCoordinator.policyPairingQr':
+      return service.vaultCoordinatorPolicyPairingQr(
+        payload as VaultCoordinatorPolicyPairingQrRequest,
+      );
+    case 'vaultCoordinator.acknowledgePolicyPairing':
+      return service.vaultCoordinatorAcknowledgePolicyPairing(
+        payload as VaultCoordinatorAcknowledgePolicyPairingRequest,
+      );
     case 'vaultCoordinator.recoveryKit':
       return service.vaultCoordinatorRecoveryKit(payload as VaultCoordinatorRecoveryKitRequest);
     case 'vaultCoordinator.acknowledgeRecoveryKitExport':
@@ -332,7 +367,7 @@ async function handle(op: string, payload: unknown, service: WalletService): Pro
     case 'account.active.set':
       return service.setActiveAccount(payload as ActiveAccountSetRequest);
     case 'account.add':
-      return service.addAccount(payload as ActiveSessionRequest);
+      return service.addAccount(payload as AccountAddRequest);
     case 'account.list':
       return service.listAccounts(payload as ActiveSessionRequest);
     case 'account.visibility.set':

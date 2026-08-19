@@ -101,8 +101,7 @@ describe('placement: marks disambiguate, never decorate', () => {
     activeAccount: 0,
     selectableAccounts: accountSummaries.map((account) => account.account),
     accountSummaries,
-    canAddAccount: false,
-    accountAddRequirement: null,
+    accountAddState: null,
     activeRecoveredAddressCount: 0,
     capabilities: {
       signMethod: 'software', canView: true, canDeriveAddresses: true,
@@ -175,8 +174,7 @@ describe('locked privacy (§7.5)', () => {
             { accountId: ACCOUNT_A, account: 0, name: 'Main', signingSource: 'software' },
             { accountId: ACCOUNT_B, account: 1, name: 'Second', signingSource: 'software' },
           ],
-          canAddAccount: false,
-          accountAddRequirement: null,
+          accountAddState: null,
           activeRecoveredAddressCount: 0,
           capabilities: {
             canView: false, canDeriveAddresses: false, canPlanTransactions: false,

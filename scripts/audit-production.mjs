@@ -239,7 +239,7 @@ const registry = readFileSync(
 const registryBody = registry.match(/export const PROVIDER_OPERATIONS = \{([\s\S]*?)\n\} satisfies/u)?.[1] ?? '';
 const methods = [...registryBody.matchAll(/^ {2}([A-Za-z_][A-Za-z0-9_]*): op\(/gmu)].map((match) => match[1]);
 const expectedMethods = [
-  'getInfo', 'wallet_connect', 'wallet_disconnect', 'wallet_renouncePermissions',
+  'getInfo', 'drey_openCommunityVault', 'wallet_connect', 'wallet_disconnect', 'wallet_renouncePermissions',
   'wallet_getCurrentPermissions', 'wallet_requestPermissions', 'wallet_getAccount',
   'wallet_getNetwork', 'getAddresses', 'getAccounts', 'getBalance', 'signMessage',
   'signPsbt', 'sendTransfer', 'ord_getInscriptions', 'ord_sendInscriptions',

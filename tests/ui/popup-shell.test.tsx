@@ -80,8 +80,7 @@ function session(refresh: () => void): SessionView {
       name: 'Main',
       signingSource: 'software',
     }],
-    canAddAccount: false,
-    accountAddRequirement: { fundAccount: 0, nextAccount: 1 },
+    accountAddState: null,
     activeRecoveredAddressCount: 0,
     refresh,
     capabilities: {
@@ -233,7 +232,7 @@ describe('popup shell navigation', () => {
     );
 
     await userEvent.click(await screen.findByRole('button', {
-      name: 'Protected and reserved bitcoin, 293 sats',
+      name: 'Bitcoin set aside from regular sends, 293 sats',
     }));
     await userEvent.click(screen.getByRole('button', { name: 'Review protected sats' }));
     expect(createTab).toHaveBeenCalledWith({
@@ -265,7 +264,7 @@ describe('popup shell navigation', () => {
       </Providers>,
     );
 
-    const balanceCard = (await screen.findByText('Bitcoin balance')).parentElement;
+    const balanceCard = (await screen.findByText('Available to send')).parentElement;
     expect(balanceCard).toHaveTextContent('0 sats');
     const settings = screen.getByRole('button', { name: 'Settings' });
     const lock = screen.getByRole('button', { name: 'Lock' });
@@ -495,7 +494,6 @@ describe('popup shell navigation', () => {
     expect(within(unopenable).getByText(`${'d'.repeat(64)}:1:0`)).toBeInTheDocument();
     expect(within(unopenable).getByText(`${'d'.repeat(64)}:1`)).toBeInTheDocument();
     await userEvent.click(screen.getAllByRole('button', { name: 'Unhide' })[0]!);
-    await userEvent.click(screen.getByRole('button', { name: 'Back' }));
     await waitFor(() => expect(screen.getByRole('tab', { name: 'Hidden (1)' })).toBeInTheDocument());
     expect(screen.getByRole('tab', { name: 'All (1)' })).toBeInTheDocument();
     expect(updates[1]).toMatchObject({ inscriptionId: visibleId, state: 'visible' });

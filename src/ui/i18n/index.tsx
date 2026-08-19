@@ -4,6 +4,8 @@
  * tolerate ≥35% text expansion — enforced by design review, not code.
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { approvalUiEn, type ApprovalUiMessageKey } from './approval-ui-en';
+import { approvalUiEs } from './approval-ui-es';
 import { en, type MessageKey as PortableMessageKey } from './en';
 import { es } from './es';
 import { passkeyEn, type PasskeyMessageKey } from './passkey-en';
@@ -18,14 +20,15 @@ import { recoveryEs } from './recovery-es';
 export type Language = 'en' | 'es';
 /**
  * Portable keys (en.ts/es.ts, mirrored byte-for-byte by mobile) plus the
- * extension-only catalogs: passkey unlock, the browser-first public-account
- * transfer ceremony, and the signet Vault coordinator.
+ * extension-only catalogs: approval-window hierarchy, passkey unlock, the
+ * browser-first public-account transfer ceremony, and the signet Vault
+ * coordinator.
  */
-export type MessageKey = PortableMessageKey | PasskeyMessageKey | VaultMessageKey | WatchAccountMessageKey | RecoveryMessageKey;
+export type MessageKey = PortableMessageKey | ApprovalUiMessageKey | PasskeyMessageKey | VaultMessageKey | WatchAccountMessageKey | RecoveryMessageKey;
 
 export const CATALOGS: Record<Language, Record<MessageKey, string>> = {
-  en: { ...en, ...passkeyEn, ...vaultEn, ...watchAccountEn, ...recoveryEn },
-  es: { ...es, ...passkeyEs, ...vaultEs, ...watchAccountEs, ...recoveryEs },
+  en: { ...en, ...approvalUiEn, ...passkeyEn, ...vaultEn, ...watchAccountEn, ...recoveryEn },
+  es: { ...es, ...approvalUiEs, ...passkeyEs, ...vaultEs, ...watchAccountEs, ...recoveryEs },
 };
 
 export function format(template: string, params?: Record<string, string | number>): string {

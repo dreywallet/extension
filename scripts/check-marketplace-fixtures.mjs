@@ -20,7 +20,7 @@ if (manifest.schemaVersion !== 1 || manifest.generatorVersion !== 'drey-marketpl
 const ids = new Set();
 const paths = new Set();
 for (const entry of manifest.entries ?? []) {
-  if (!entry || typeof entry !== 'object' || !['satflow', 'ordnet'].includes(entry.marketplace) ||
+  if (!entry || typeof entry !== 'object' || !['satflow', 'ordnet', 'omb-wiki'].includes(entry.marketplace) ||
       !/^https:\/\//u.test(entry.sourceUrl) || !/^2026-[0-9]{2}-[0-9]{2}$/u.test(entry.accessedAt) ||
       !/^[0-9a-f]{64}$/u.test(entry.sha256) || typeof entry.transformation !== 'string') {
     failures.push(`invalid manifest entry ${entry?.id ?? '<unknown>'}`);
@@ -36,7 +36,10 @@ for (const entry of manifest.entries ?? []) {
   const digest = createHash('sha256').update(bytes).digest('hex');
   if (digest !== entry.sha256) failures.push(`${entry.path} digest changed: ${digest}`);
   const value = JSON.parse(bytes.toString('utf8'));
-  if (value.schemaVersion !== 1 || value.marketplace !== entry.marketplace || value.network !== 'mainnet') {
+  const canonicalHeader = entry.marketplace === 'omb-wiki'
+    ? value.origin === 'https://ordinalmaxibiz.wiki' && value.network === 'mainnet' && value.sanitized === true
+    : value.marketplace === entry.marketplace && value.network === 'mainnet';
+  if (value.schemaVersion !== 1 || !canonicalHeader) {
     failures.push(`${entry.path} canonical contract header is invalid`);
   }
 }

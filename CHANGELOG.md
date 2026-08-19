@@ -3,6 +3,101 @@
 Notable user-facing changes to Drey are recorded here. For earlier releases,
 see the production release tags in the repository.
 
+## 0.12.0
+
+### Added
+
+- Add Community Vault setup for OMB Group Buys. Every owner creates and verifies
+  a separate campaign recovery key; Drey and the gallery receive no spending or
+  recovery key.
+- Let one clear Drey approval produce the signatures for every numbered unit an
+  owner holds, while independently validating the frozen 69-of-100 policy,
+  cap table, exact transaction, and Ordinal route.
+- Add exact listed and creator-fronted acquisition approvals plus exact-funded
+  sale-offer approvals with direct owner payouts.
+- Expose versioned Community Vault capabilities to the connected OMB Gallery and
+  report only confirmed clean spendable balance for its funding checks.
+
+### Changed
+
+- Simplify the guided Group Buy handoff so campaign and owner details open in
+  Drey automatically, while retaining a manual public-package fallback.
+- Consume `@drey/core` v0.14.4.
+
+## 0.11.2
+
+### Changed
+
+- Keep routine balance refreshes focused on the account currently being viewed,
+  avoiding hidden-account gateway work while preserving the last verified
+  balances for quick account switching.
+- Continue to scan the broader wallet only during restore, manual rescan,
+  Extended scan, and exact conflict recovery.
+- Consume `@drey/core` v0.11.0.
+
+## 0.11.1
+
+### Added
+
+- Show safe static previews for AVIF inscriptions, including BTC Slugs, in the
+  gallery and transaction review. The gateway converts source media and the
+  extension accepts only the signed, verified PNG result.
+
+### Changed
+
+- Permit five consecutive explicitly created standard accounts without
+  confirmed history, and use the same five-account buffer during recovery and
+  manual rescans.
+- Clarify Recovery Kit backup guidance.
+- Consume `@drey/core` v0.10.1.
+
+## 0.11.0
+
+### Added
+
+- Add exact-origin compatibility with the reviewed OMB Wiki buyer flow. Unknown
+  or changed flexible marketplace requests continue to fail closed.
+
+### Fixed
+
+- Open the unlock screen before granting a site connection when the wallet is
+  locked.
+- Keep long message approvals readable instead of clipping their contents.
+- Emit Vault PSBT QR handoffs using the device-compatible `crypto-psbt` format
+  without changing transaction bytes, approval policy, or recovery behavior.
+
+### Changed
+
+- Consume `@drey/core` v0.9.1.
+
+## 0.10.10
+
+### Changed
+
+- Label the primary balance as available to send only when the full amount is
+  currently sendable.
+- Replace the prominent protected-balance row with a compact Set aside
+  disclosure that appears only when bitcoin is excluded from regular sends.
+
+## 0.10.9
+
+### Added
+
+- Add a Recovery Center that summarizes locally verified Spending and Vault
+  recovery readiness without revealing recovery material or adding a new
+  recovery format or source of truth.
+
+### Fixed
+
+- Keep Recovery Center results visible while the app refreshes local evidence,
+  and avoid restarting settings screens when the active wallet session has not
+  actually changed.
+- Guide Vault creation as a clear four-step setup, explain that role names are
+  optional device labels, and keep the next required action prominent.
+- Make Mobile B pairing resumable and explicit about both response scans and the
+  final Vault-policy scan, without exposing the advanced signer fields by
+  default.
+
 ## 0.10.8
 
 ### Changed

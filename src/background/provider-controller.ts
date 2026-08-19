@@ -1,5 +1,5 @@
 import { bip322MessageHash } from '@drey/core/domain/transactions/bip322';
-import { bytesToHex } from '@drey/core/domain/vault/encoding';
+import { base64ToBytes, bytesToBase64, bytesToHex, hexToBytes } from '@drey/core/domain/vault/encoding';
 import { RpcError } from './errors';
 import { VaultError } from '@drey/core/domain/vault/errors';
 import type { WalletService } from './wallet-service';
@@ -32,6 +32,7 @@ import {
   PROVIDER_METHODS,
   PROVIDER_OPERATIONS,
   providerNetworkResult,
+  type AddressPurpose,
   type DataCategory,
   type ProviderConnectParams,
   type ProviderMethod,
@@ -54,12 +55,28 @@ import {
   type MarketplacePsbtCandidate,
 } from '@drey/core/domain/marketplaces/resolver';
 import type { MarketplaceContext, MarketplaceResolution } from '@drey/core/domain/marketplaces/types';
+import {
+  reviewCommunityVaultAcquisitionProviderRequest,
+  type CommunityVaultAcquisitionProviderContextV1,
+  type CommunityVaultAcquisitionProviderReviewV1,
+} from '@drey/core/domain/community-vault/acquisition-provider';
+import { COMMUNITY_VAULT_MAX_PREFLIGHT_AGE_MS } from '@drey/core/domain/community-vault/acquisition-contracts';
+import {
+  reviewCommunityVaultSaleBuyerProviderRequest,
+  reviewCommunityVaultSaleProviderRequest,
+  type CommunityVaultSaleBuyerProviderContextV1,
+  type CommunityVaultSaleBuyerProviderReviewV1,
+  type CommunityVaultSaleProviderContextV1,
+  type CommunityVaultSaleProviderReviewV1,
+} from '@drey/core/domain/community-vault/sale-provider';
+import { COMMUNITY_VAULT_SALE_MAX_PREFLIGHT_AGE_MS } from '@drey/core/domain/community-vault/sale-contracts';
 
 const CONNECTIONS_KEY = 'squirrel:provider:connections:v1';
 const REQUEST_TTL_MS = 5 * 60_000;
 export const APPROVAL_SWITCH_COOLDOWN_MS = 750;
 const MAX_PER_ORIGIN = 5;
 const MAX_TOTAL = 10;
+const MAX_CONNECTIONS = 128;
 const PHISHING_DECISION_CACHE_MS = 60_000;
 
 interface ConnectionRecord {
@@ -71,6 +88,8 @@ interface ConnectionRecord {
   sessionId: string;
   accountId: string;
   account: number;
+  addressPurposes: AddressPurpose[];
+  connectedAt: number;
 }
 
 interface PortState {
@@ -103,17 +122,42 @@ interface PendingApproval {
     candidate?: MarketplacePsbtCandidate;
     selectedInputIndexes?: number[];
   };
+  communityVaultAcquisition?: {
+    context: CommunityVaultAcquisitionProviderContextV1;
+    review: CommunityVaultAcquisitionProviderReviewV1;
+  };
+  communityVaultSale?: {
+    context: CommunityVaultSaleProviderContextV1;
+    review: CommunityVaultSaleProviderReviewV1;
+  };
+  communityVaultSaleBuyer?: {
+    context: CommunityVaultSaleBuyerProviderContextV1;
+    review: CommunityVaultSaleBuyerProviderReviewV1;
+  };
   /** §21.1 flexible request without marketplace context; core analysis must prove the listing shape. */
   genericListingCandidate?: boolean;
   approvalError?: string;
+}
+
+class ProviderConnectionLimitError extends Error {
+  constructor() {
+    super('provider connection limit reached');
+    this.name = 'ProviderConnectionLimitError';
+  }
 }
 
 export interface ProviderControllerDeps {
   service: WalletService;
   sessionStorage: StorageArea;
   now: () => number;
+  requestUnlock: () => Promise<boolean>;
   openOrFocusApproval: () => Promise<void>;
   closeApproval: () => Promise<void>;
+  openCommunityVaultSetup: (input: {
+    campaignId: string;
+    ownerId: string;
+    label?: string;
+  }) => Promise<void>;
   approvalChanged?: (snapshot: ApprovalSnapshot) => void;
   evaluatePhishing?: (origin: string) => PhishingDecision;
 }
@@ -250,12 +294,13 @@ export class ProviderController {
           throw new RpcError('ERR_UNSAFE_TRANSACTION', (error as Error).message);
         }
       }
-      if (pending.preparedPsbt?.requiresAdvanced === true) {
+      const passwordRequired = pending.preparedPsbt?.requiresAdvanced === true || pending.communityVaultSale !== undefined;
+      if (passwordRequired) {
         // Unreachable from the approval surface, which disables Approve until
         // both fields validate. A command that arrives without them did not come
         // from that surface, so it stays terminal.
-        if (command.confirmation !== 'SIGN PSBT' || !command.password) {
-          throw new RpcError('ERR_WRONG_PASSWORD', 'Advanced PSBT confirmation required');
+        if ((pending.preparedPsbt?.requiresAdvanced === true && command.confirmation !== 'SIGN PSBT') || !command.password) {
+          throw new RpcError('ERR_WRONG_PASSWORD', 'Transaction password confirmation required');
         }
         try {
           await this.deps.service.providerReauthenticate(command.password);
@@ -280,7 +325,7 @@ export class ProviderController {
       // Reauthentication touches storage and yields to other lifecycle events.
       // Rebind every authority and permission immediately before execution.
       await this.revalidate(pending);
-      const result = await this.executeApproved(pending);
+      const result = await this.executeApproved(pending, command.password);
       const delivered = this.respondResult(pending, result);
       if (delivered && pending.preparedPsbt?.marketplace) {
         await this.deps.service.providerMarkMarketplaceDelivered(pending.preparedPsbt).catch(() => undefined);
@@ -305,12 +350,16 @@ export class ProviderController {
 
   async invalidateSession(): Promise<void> {
     this.contextGeneration += 1;
+    // A lock/session change can arrive while an MV3 worker is still restoring
+    // session-backed document connections. Let that restore finish before
+    // clearing it so a late load cannot resurrect pre-lock authority in memory.
+    await this.ready;
     await this.withApprovalLock(async () => {
+      const connectedStates = this.connectedPortStates();
       this.connections.clear();
       await this.saveConnections();
       this.rejectAll(providerError('ERR_STALE_CONTEXT'));
-      for (const state of this.ports) {
-        if (!state.alive) continue;
+      for (const state of connectedStates) {
         this.safePost(state, {
           type: 'drey:provider:event',
           protocolVersion: PROVIDER_BRIDGE_VERSION,
@@ -323,6 +372,7 @@ export class ProviderController {
 
   async accountChanged(accountId: string, account: number): Promise<void> {
     this.contextGeneration += 1;
+    await this.ready;
     await this.withApprovalLock(async () => {
       await this.rejectWhere(() => true, providerError('ERR_STALE_CONTEXT'));
       const accountView = await this.deps.service.providerAccountView().catch(() => null);
@@ -338,16 +388,24 @@ export class ProviderController {
       for (const state of this.ports) {
         if (!state.alive) continue;
         const connected = accountView ? await this.liveConnection(state, accountView) : false;
+        // Provider events are account state. A merely injected document has no
+        // authority to observe their timing, even when its origin has a grant
+        // that another document used.
+        if (!connected) continue;
         const permitted = connected
           ? await this.deps.service.providerHasPermission(state.authority.origin, ['addresses'])
           : false;
+        const addresses = permitted && accountView
+          ? providerAddresses(accountView).filter((item) =>
+              this.hasAddressPurposes(state, [item.purpose]))
+          : undefined;
         this.safePost(state, {
           type: 'drey:provider:event',
           protocolVersion: PROVIDER_BRIDGE_VERSION,
           event: 'accountChange',
           data: {
             type: 'accountChange',
-            ...(permitted && accountView ? { addresses: providerAddresses(accountView) } : {}),
+            ...(addresses === undefined ? {} : { addresses }),
           },
         });
       }
@@ -356,11 +414,13 @@ export class ProviderController {
 
   async permissionsRevoked(origin: string): Promise<void> {
     this.contextGeneration += 1;
+    await this.ready;
     await this.withApprovalLock(async () => {
       await this.rejectWhere(
         (pending) => pending.state.authority.origin === origin,
         providerError('ERR_STALE_CONTEXT'),
       );
+      const connectedStates = this.connectedPortStates(origin);
       let changed = false;
       for (const [key, connection] of this.connections) {
         if (connection.origin !== origin) continue;
@@ -368,8 +428,7 @@ export class ProviderController {
         changed = true;
       }
       if (changed) await this.saveConnections();
-      for (const state of this.ports) {
-        if (!state.alive || state.authority.origin !== origin) continue;
+      for (const state of connectedStates) {
         this.safePost(state, {
           type: 'drey:provider:event',
           protocolVersion: PROVIDER_BRIDGE_VERSION,
@@ -412,6 +471,14 @@ export class ProviderController {
     let preparationReserved = false;
     try {
       if (method === 'wallet_disconnect' || method === 'wallet_renouncePermissions') {
+        // Both methods are idempotent for an unconnected document. Checking the
+        // exact live binding first also prevents their success/error result from
+        // becoming a lock-state oracle when the encrypted grant journal cannot
+        // be opened. A connected document still performs durable revocation.
+        if (!(await this.liveConnection(state))) {
+          this.postResult(state, request.requestNonce, null);
+          return;
+        }
         await this.disconnectOrigin(state.authority.origin);
         this.postResult(state, request.requestNonce, null);
         return;
@@ -424,7 +491,37 @@ export class ProviderController {
         return;
       }
       if (method === 'getInfo') {
-        this.postResult(state, request.requestNonce, await this.executeRead(method, params.data, state.authority.origin));
+        this.postResult(state, request.requestNonce, await this.executeRead(method, params.data, state));
+        return;
+      }
+      if (method === 'wallet_connect' && (await this.deps.service.sessionStatus()).locked) {
+        if (this.totalPending() + this.preparingTotal >= MAX_TOTAL ||
+            this.originPending(state.authority.origin) + this.originPreparing(state.authority.origin) >= MAX_PER_ORIGIN) {
+          this.postError(state, request.requestNonce, providerError('ERR_QUEUE_FULL'));
+          return;
+        }
+        const unlockRequestedAt = this.deps.now();
+        this.reservePreparation(state.authority.origin);
+        preparationReserved = true;
+        const unlocked = await this.deps.requestUnlock();
+        if (!state.alive) return;
+        if (this.deps.now() >= unlockRequestedAt + REQUEST_TTL_MS) {
+          this.postError(state, request.requestNonce, providerError('ERR_REQUEST_EXPIRED'));
+          return;
+        }
+        if (!unlocked) {
+          this.postError(state, request.requestNonce, providerError('ERR_USER_REJECTED'));
+          return;
+        }
+        this.releasePreparation(state.authority.origin);
+        preparationReserved = false;
+      }
+      // Unconnected read methods must not become a wallet lock-state oracle.
+      // Check the exact browser document binding before touching live account
+      // state; interactive connect/permission requests remain free to surface
+      // an actionable locked error.
+      if (spec.requiresConnection && this.connectionFor(state) === null) {
+        this.postError(state, request.requestNonce, providerError('ERR_NOT_CONNECTED'));
         return;
       }
       const account = await this.deps.service.providerAccountView();
@@ -436,12 +533,13 @@ export class ProviderController {
         }
         const requested = normalizeProviderConnectionRequest(params.data as ConnectParams);
         if (phishing.action === 'allow' &&
-            await this.deps.service.providerHasExactPermission(state.authority.origin, requested.categories)) {
-          await this.connect(state, account);
+            await this.deps.service.providerHasExactPermission(state.authority.origin, requested.categories) &&
+            this.hasAddressPurposes(state, requested.purposes)) {
+          await this.connect(state, account, requested.purposes);
           const result = await this.executeRead(
             'wallet_getAccount',
             { purposes: requested.purposes },
-            state.authority.origin,
+            state,
           );
           this.postResult(state, request.requestNonce, result);
           return;
@@ -451,14 +549,29 @@ export class ProviderController {
         this.postError(state, request.requestNonce, providerError('ERR_NOT_CONNECTED'));
         return;
       }
+      if (method === 'drey_openCommunityVault') {
+        await this.deps.openCommunityVaultSetup(
+          params.data as { campaignId: string; ownerId: string; label?: string },
+        );
+        this.postResult(state, request.requestNonce, null);
+        return;
+      }
       const required = mapCategories(spec.dataCategories);
       if (method !== 'wallet_connect' && method !== 'wallet_requestPermissions' && required.length > 0 &&
           !(await this.deps.service.providerHasPermission(state.authority.origin, required))) {
         this.postError(state, request.requestNonce, providerError('ERR_NO_ACCOUNT'));
         return;
       }
+      if ((method === 'getAddresses' || method === 'getAccounts') &&
+          !this.hasAddressPurposes(
+            state,
+            (params.data as { purposes: AddressPurpose[] }).purposes,
+          )) {
+        this.postError(state, request.requestNonce, providerError('ERR_NO_ACCOUNT'));
+        return;
+      }
       if (!spec.requiresFreshApproval) {
-        this.postResult(state, request.requestNonce, await this.executeRead(method, params.data, state.authority.origin));
+        this.postResult(state, request.requestNonce, await this.executeRead(method, params.data, state));
         return;
       }
       if (this.totalPending() + this.preparingTotal >= MAX_TOTAL ||
@@ -490,11 +603,67 @@ export class ProviderController {
           psbt: string;
           signInputs?: Record<string, number[]>;
           marketplaceContext?: MarketplaceContext;
+          communityVaultAcquisitionContext?: CommunityVaultAcquisitionProviderContextV1;
+          communityVaultSaleContext?: CommunityVaultSaleProviderContextV1;
+          communityVaultSaleBuyerContext?: CommunityVaultSaleBuyerProviderContextV1;
         };
         const candidate = inspectMarketplacePsbt(psbtParams.psbt);
         const selectedInputIndexes = psbtParams.signInputs
           ? Object.values(psbtParams.signInputs).flat()
           : undefined;
+        if (psbtParams.communityVaultAcquisitionContext) {
+          if (selectedInputIndexes === undefined) {
+            throw new RpcError('ERR_INVALID_PAYLOAD', 'Community Vault acquisition inputs are required');
+          }
+          const review = reviewCommunityVaultAcquisitionProviderRequest({
+            context: psbtParams.communityVaultAcquisitionContext,
+            psbtHex: bytesToHex(base64ToBytes(psbtParams.psbt)),
+            selectedInputIndexes,
+            nowMs: String(this.deps.now()),
+          });
+          pending.communityVaultAcquisition = {
+            context: psbtParams.communityVaultAcquisitionContext,
+            review,
+          };
+        }
+        if (psbtParams.communityVaultSaleContext) {
+          if (psbtParams.communityVaultAcquisitionContext || psbtParams.marketplaceContext ||
+              psbtParams.communityVaultSaleBuyerContext) {
+            throw new RpcError('ERR_INVALID_PAYLOAD', 'Community Vault contexts cannot be combined');
+          }
+          if (selectedInputIndexes === undefined) {
+            throw new RpcError('ERR_INVALID_PAYLOAD', 'Community Vault sale input is required');
+          }
+          const review = reviewCommunityVaultSaleProviderRequest({
+            context: psbtParams.communityVaultSaleContext,
+            psbtHex: bytesToHex(base64ToBytes(psbtParams.psbt)),
+            selectedInputIndexes,
+            nowMs: String(this.deps.now()),
+          });
+          pending.communityVaultSale = {
+            context: psbtParams.communityVaultSaleContext,
+            review,
+          };
+        }
+        if (psbtParams.communityVaultSaleBuyerContext) {
+          if (psbtParams.communityVaultAcquisitionContext || psbtParams.marketplaceContext ||
+              psbtParams.communityVaultSaleContext) {
+            throw new RpcError('ERR_INVALID_PAYLOAD', 'Community Vault contexts cannot be combined');
+          }
+          if (selectedInputIndexes === undefined) {
+            throw new RpcError('ERR_INVALID_PAYLOAD', 'Community Vault buyer inputs are required');
+          }
+          const review = reviewCommunityVaultSaleBuyerProviderRequest({
+            context: psbtParams.communityVaultSaleBuyerContext,
+            psbtHex: bytesToHex(base64ToBytes(psbtParams.psbt)),
+            selectedInputIndexes,
+            nowMs: String(this.deps.now()),
+          });
+          pending.communityVaultSaleBuyer = {
+            context: psbtParams.communityVaultSaleBuyerContext,
+            review,
+          };
+        }
         const resolution = resolveMarketplaceRequest({
           origin: state.authority.origin,
           network: account.network,
@@ -548,10 +717,22 @@ export class ProviderController {
           pending.marketplace = { context: messageParams.marketplaceContext, resolution };
         }
       }
+      if (method === 'sendTransfer') {
+        this.assertPreparationLive(pending);
+        await this.deps.service.providerEnsureSpendReady({
+          expectedVaultId: pending.expectedVaultId,
+          expectedSessionId: pending.expectedSessionId,
+          expectedAccountId: pending.expectedAccountId,
+          expectedAccount: pending.expectedAccount,
+        }, () => this.assertPreparationLive(pending));
+        this.assertPreparationLive(pending);
+      }
       if (method === 'signPsbt' || method === 'sendTransfer' || method === 'ord_sendInscriptions') {
         pending.preparedPsbt = await this.prepareTransaction(pending);
+        this.assertPreparationLive(pending);
       }
       await this.withApprovalLock(async () => {
+        this.assertPreparationLive(pending);
         this.queue.push(pending);
         this.releasePreparation(state.authority.origin);
         preparationReserved = false;
@@ -581,15 +762,17 @@ export class ProviderController {
     }
   }
 
-  private async executeRead(method: ProviderMethod, params: unknown, origin: string): Promise<unknown> {
+  private async executeRead(method: ProviderMethod, params: unknown, state: PortState): Promise<unknown> {
     if (method === 'getInfo') {
       return {
         version: __EXTENSION_VERSION__,
         platform: 'web',
         methods: [...PROVIDER_METHODS],
         supports: ['WBIP001', 'WBIP004'],
+        capabilities: ['community-vault-v1', 'community-vault-offers-v1'],
       };
     }
+    const origin = state.authority.origin;
     const account = await this.deps.service.providerAccountView();
     const network = providerNetworkResult(providerNetwork(account.network));
     const addresses = providerAddresses(account);
@@ -597,10 +780,7 @@ export class ProviderController {
       case 'wallet_getAccount':
         return {
           id: (await this.permissionResults(origin, account))[0]?.resourceId ?? '',
-          addresses: addresses.filter((item) => {
-            const purposes = (params as { purposes?: Array<'payment' | 'ordinals'> } | null)?.purposes;
-            return purposes === undefined || purposes.includes(item.purpose);
-          }),
+          addresses: addresses.filter((item) => this.hasAddressPurposes(state, [item.purpose])),
           walletType: 'software',
           network,
         };
@@ -639,17 +819,17 @@ export class ProviderController {
     }
   }
 
-  private async executeApproved(pending: PendingApproval): Promise<unknown> {
+  private async executeApproved(pending: PendingApproval, password?: string): Promise<unknown> {
     const origin = pending.state.authority.origin;
     if (pending.method === 'wallet_connect') {
       const requested = normalizeProviderConnectionRequest(pending.params as ConnectParams);
       await this.deps.service.providerGrantPermission(origin, requested.categories);
       const account = await this.deps.service.providerAccountView();
-      await this.connect(pending.state, account);
+      await this.connect(pending.state, account, requested.purposes);
       const base = await this.executeRead(
         'wallet_getAccount',
         { purposes: requested.purposes },
-        origin,
+        pending.state,
       ) as Record<string, unknown>;
       return base;
     }
@@ -662,7 +842,13 @@ export class ProviderController {
         (item.type === 'account' ? ['account', 'addresses', 'balance', 'inscriptions'] as const : ['network'] as const));
       await this.deps.service.providerGrantPermission(origin, mapRequestedCategories(categories));
       const account = await this.deps.service.providerAccountView();
-      await this.connect(pending.state, account);
+      await this.connect(
+        pending.state,
+        account,
+        categories.includes('addresses')
+          ? ['ordinals', 'payment']
+          : this.connectionFor(pending.state)?.addressPurposes ?? [],
+      );
       return this.permissionResults(origin, account);
     }
     if (pending.method === 'signMessage') {
@@ -690,6 +876,23 @@ export class ProviderController {
       if (!pending.preparedPsbt) throw new RpcError('ERR_PLAN_CHANGED', 'prepared PSBT missing');
       const params = pending.params as { signInputs?: Record<string, number[]>; broadcast?: boolean };
       const indexes = params.signInputs ? Object.values(params.signInputs).flat() : undefined;
+      if (pending.communityVaultSale) {
+        if (params.broadcast === true) {
+          throw new RpcError('ERR_UNSAFE_TRANSACTION', 'Community Vault approvals never broadcast');
+        }
+        if (!password) throw new RpcError('ERR_WRONG_PASSWORD', 'Community Vault password required');
+        const context = pending.communityVaultSale.context;
+        const signed = await this.deps.service.communityVaultSign({
+          campaignId: context.plan.campaignId,
+          expectedVaultId: pending.expectedVaultId,
+          expectedSessionId: pending.expectedSessionId,
+          password,
+          policy: context.policy,
+          plan: context.plan.spendPlan,
+          psbtHex: pending.preparedPsbt.psbtHex,
+        });
+        return { psbt: bytesToBase64(hexToBytes(signed.psbtHex)) };
+      }
       if (params.broadcast === true) {
         return this.deps.service.providerBroadcastPreparedPsbt(
           pending.preparedPsbt,
@@ -752,6 +955,19 @@ export class ProviderController {
     if (pending.preparedPsbt) {
       await this.deps.service.providerRevalidatePreparedPsbt(pending.preparedPsbt);
       this.assertPendingLive(pending);
+    }
+  }
+
+  /** Synchronous guard used while work is not yet visible in the approval queue. */
+  private assertPreparationLive(pending: PendingApproval): void {
+    if (pending.approvalGeneration !== this.approvalGeneration ||
+        pending.contextGeneration !== this.contextGeneration ||
+        !pending.state.alive ||
+        !pending.state.nonces.has(pending.request.requestNonce)) {
+      throw new RpcError('ERR_PLAN_CHANGED', 'provider preparation authority changed');
+    }
+    if (this.deps.now() >= pending.createdAt + REQUEST_TTL_MS) {
+      throw new RpcError('ERR_PLAN_EXPIRED', 'provider request expired');
     }
   }
 
@@ -828,7 +1044,22 @@ export class ProviderController {
           }));
           const economics = pending.marketplace?.context.economics;
           const economicClaims = economics === undefined
-            ? []
+            ? pending.preparedPsbt.communityVaultAcquisition
+              ? [{
+                  kind: 'buyer_total' as const,
+                  valueSats: pending.preparedPsbt.communityVaultAcquisition.cashDueSats,
+                }]
+              : pending.preparedPsbt.communityVaultSale
+                ? [{
+                    kind: 'guaranteed_proceeds' as const,
+                    valueSats: pending.preparedPsbt.communityVaultSale.ownerPayoutSats,
+                  }]
+                : pending.preparedPsbt.communityVaultSaleBuyer
+                  ? [{
+                      kind: 'buyer_total' as const,
+                      valueSats: pending.preparedPsbt.communityVaultSaleBuyer.buyerTotalSats,
+                    }]
+                : []
             : [
                 ...(economics.totalSats === undefined
                   ? []
@@ -892,7 +1123,15 @@ export class ProviderController {
                           ? ['account', 'addresses', 'balance', 'inscriptions'] as const
                           : ['network'] as const)),
                     ),
-                    purposes: [] as Array<'payment' | 'ordinals'>,
+                    purposes: (pending.params as Array<{
+                      dataCategories?: Array<'account' | 'addresses' | 'balance' | 'inscriptions' | 'network'>;
+                      type: 'account' | 'wallet';
+                    }>).some((item) => (item.dataCategories ??
+                      (item.type === 'account'
+                        ? ['account', 'addresses', 'balance', 'inscriptions'] as const
+                        : ['network'] as const)).includes('addresses'))
+                      ? ['ordinals', 'payment'] as AddressPurpose[]
+                      : [] as AddressPurpose[],
                   };
               return {
                 kind: 'connection' as const,
@@ -981,6 +1220,15 @@ export class ProviderController {
                 broadcaster: pending.marketplace.context.broadcaster,
                 flexible: pending.marketplace.resolution.flexible,
               } } : {}),
+              ...(pending.preparedPsbt.communityVaultAcquisition ? {
+                communityVaultAcquisition: pending.preparedPsbt.communityVaultAcquisition,
+              } : {}),
+              ...(pending.preparedPsbt.communityVaultSale ? {
+                communityVaultSale: pending.preparedPsbt.communityVaultSale,
+              } : {}),
+              ...(pending.preparedPsbt.communityVaultSaleBuyer ? {
+                communityVaultSaleBuyer: pending.preparedPsbt.communityVaultSaleBuyer,
+              } : {}),
             }
           : {
               account: pending.expectedAccount,
@@ -1012,7 +1260,7 @@ export class ProviderController {
                 flexible: pending.marketplace.resolution.flexible,
               } } : {}),
             },
-        requiresPassword: pending.preparedPsbt?.requiresAdvanced === true,
+        requiresPassword: pending.preparedPsbt?.requiresAdvanced === true || pending.communityVaultSale !== undefined,
         confirmationPhrase: pending.preparedPsbt?.requiresAdvanced === true ? 'SIGN PSBT' : null,
         approvalError: pending.approvalError ?? null,
       } : null,
@@ -1032,11 +1280,59 @@ export class ProviderController {
       if (feeRateSatPerVb !== undefined) throw new RpcError('ERR_INVALID_PAYLOAD', 'PSBT fee is immutable');
       const params = pending.params as { psbt: string; signInputs?: Record<string, number[]>; broadcast?: boolean };
       const selectedInputIndexes = params.signInputs ? Object.values(params.signInputs).flat() : undefined;
+      const community = pending.communityVaultAcquisition;
+      const sale = pending.communityVaultSale;
+      const buyer = pending.communityVaultSaleBuyer;
       return this.deps.service.providerPreparePsbt({
         psbtBase64: params.psbt,
         binding: { ...common, providerMethod: 'signPsbt' },
         broadcast: params.broadcast === true,
         ...(selectedInputIndexes === undefined ? {} : { selectedInputIndexes }),
+        ...(community === undefined ? {} : {
+          kind: 'community_vault_acquisition' as const,
+          communityVaultAcquisition: community.review,
+          expiresAt: Math.min(
+            Number(community.context.plan.expiresAtMs),
+            Number(community.context.preflight.verifiedAtMs) + COMMUNITY_VAULT_MAX_PREFLIGHT_AGE_MS,
+          ),
+          protectedSatFlow: [{
+            inputIndex: community.context.plan.assetInputIndex,
+            inputOffset: BigInt(community.context.plan.inscriptionInputOffsetSats),
+            outputIndex: community.context.plan.vaultOutputIndex,
+            outputOffset: BigInt(community.context.plan.inscriptionOutputOffsetSats),
+            inscriptionId: community.context.plan.inscriptionId,
+          }],
+        }),
+        ...(sale === undefined ? {} : {
+          kind: 'community_vault_sale' as const,
+          communityVaultSale: sale.review,
+          expiresAt: Math.min(
+            Number(sale.context.plan.expiresAtMs),
+            Number(sale.context.preflight.verifiedAtMs) + COMMUNITY_VAULT_SALE_MAX_PREFLIGHT_AGE_MS,
+          ),
+          protectedSatFlow: [{
+            inputIndex: sale.context.plan.spendPlan.ordinalRoute.inputIndex,
+            inputOffset: BigInt(sale.context.plan.spendPlan.ordinalRoute.inputOffsetSats),
+            outputIndex: sale.context.plan.spendPlan.ordinalRoute.outputIndex,
+            outputOffset: BigInt(sale.context.plan.spendPlan.ordinalRoute.outputOffsetSats),
+            inscriptionId: sale.context.plan.inscriptionId,
+          }],
+        }),
+        ...(buyer === undefined ? {} : {
+          kind: 'community_vault_sale' as const,
+          communityVaultSaleBuyer: buyer.review,
+          expiresAt: Math.min(
+            Number(buyer.context.plan.expiresAtMs),
+            Number(buyer.context.preflight.verifiedAtMs) + COMMUNITY_VAULT_SALE_MAX_PREFLIGHT_AGE_MS,
+          ),
+          protectedSatFlow: [{
+            inputIndex: buyer.context.plan.spendPlan.ordinalRoute.inputIndex,
+            inputOffset: BigInt(buyer.context.plan.spendPlan.ordinalRoute.inputOffsetSats),
+            outputIndex: buyer.context.plan.spendPlan.ordinalRoute.outputIndex,
+            outputOffset: BigInt(buyer.context.plan.spendPlan.ordinalRoute.outputOffsetSats),
+            inscriptionId: buyer.context.plan.inscriptionId,
+          }],
+        }),
         ...(pending.marketplace === undefined ? {} : {
           marketplace: {
             context: pending.marketplace.context,
@@ -1230,12 +1526,17 @@ export class ProviderController {
   }
 
   private mapError(error: unknown): BridgeJsonRpcError {
+    if (error instanceof ProviderConnectionLimitError) return providerError('ERR_QUEUE_FULL');
     if (error instanceof MarketplaceProviderError) return providerError(error.providerCode);
     if (error instanceof RpcError) {
       if (error.code === 'ERR_INVALID_PAYLOAD') return INVALID_PARAMS_ERROR;
       if (error.code === 'ERR_LOCKED') return providerError('ERR_LOCKED');
       if (error.code === 'ERR_PLAN_EXPIRED') return providerError('ERR_REQUEST_EXPIRED');
-      if (error.code === 'ERR_PLAN_CHANGED' || error.code === 'ERR_DATA_STALE') return providerError('ERR_STALE_CONTEXT');
+      if (error.code === 'ERR_PLAN_CHANGED') return providerError('ERR_STALE_CONTEXT');
+      if (error.code === 'ERR_DATA_STALE') return providerError('ERR_DATA_STALE');
+      if (error.code === 'ERR_BROADCAST_OUTCOME_UNKNOWN') {
+        return providerError('ERR_BROADCAST_OUTCOME_UNKNOWN');
+      }
       if (error.code === 'ERR_WRONG_PASSWORD') return providerError('ERR_USER_REJECTED');
       if (error.code === 'ERR_UNSAFE_TRANSACTION' || error.code === 'ERR_INSUFFICIENT_FUNDS') {
         return providerError('ERR_UNSUPPORTED_BY_ACCOUNT');
@@ -1282,15 +1583,55 @@ export class ProviderController {
     return this.active?.request.requestNonce === nonce || this.queue.some((item) => item.request.requestNonce === nonce);
   }
 
-  private async connect(state: PortState, account: Awaited<ReturnType<WalletService['providerAccountView']>>): Promise<void> {
+  private async connect(
+    state: PortState,
+    account: Awaited<ReturnType<WalletService['providerAccountView']>>,
+    addressPurposes: readonly AddressPurpose[],
+  ): Promise<void> {
     const key = authorityKey(state.authority);
     if (key === null) return;
+    // A replacement document in one browser frame can never use the prior
+    // document ID. Remove that unreachable authority before inserting the new
+    // exact binding, then prune other records with no live Port. This preserves
+    // same-document/MV3 reconnect while bounding hostile iframe churn.
+    for (const [existingKey, connection] of this.connections) {
+      if (existingKey !== key && connection.tabId === state.authority.tabId &&
+          connection.frameId === state.authority.frameId) this.connections.delete(existingKey);
+    }
+    if (!this.connections.has(key) && this.connections.size >= MAX_CONNECTIONS) {
+      const liveKeys = new Set([...this.ports].flatMap((portState) => {
+        const liveKey = portState.alive ? authorityKey(portState.authority) : null;
+        return liveKey === null ? [] : [liveKey];
+      }));
+      const stale = [...this.connections.entries()]
+        .filter(([existingKey]) => !liveKeys.has(existingKey))
+        .sort((left, right) => left[1].connectedAt - right[1].connectedAt);
+      for (const [staleKey] of stale) {
+        this.connections.delete(staleKey);
+        if (this.connections.size < MAX_CONNECTIONS) break;
+      }
+    }
+    if (!this.connections.has(key) && this.connections.size >= MAX_CONNECTIONS) {
+      throw new ProviderConnectionLimitError();
+    }
     this.connections.set(key, {
       origin: state.authority.origin, tabId: state.authority.tabId, frameId: state.authority.frameId,
-      documentId: state.authority.documentId!, vaultId: account.vaultId, sessionId: account.sessionId,
+      documentId: state.authority.documentId, vaultId: account.vaultId, sessionId: account.sessionId,
       accountId: account.accountId, account: account.account,
+      addressPurposes: [...new Set(addressPurposes)].sort(),
+      connectedAt: this.deps.now(),
     });
     await this.saveConnections();
+  }
+
+  private connectionFor(state: PortState): ConnectionRecord | null {
+    const key = authorityKey(state.authority);
+    return key === null ? null : this.connections.get(key) ?? null;
+  }
+
+  private hasAddressPurposes(state: PortState, requested: readonly AddressPurpose[]): boolean {
+    const approved = new Set(this.connectionFor(state)?.addressPurposes ?? []);
+    return requested.every((purpose) => approved.has(purpose));
   }
 
   private async liveConnection(
@@ -1312,6 +1653,7 @@ export class ProviderController {
   }
 
   private async disconnectOrigin(origin: string): Promise<void> {
+    const connectedStates = this.connectedPortStates(origin);
     await this.deps.service.providerRevokeOrigin(origin);
     for (const [key, connection] of this.connections) if (connection.origin === origin) this.connections.delete(key);
     await this.saveConnections();
@@ -1319,8 +1661,7 @@ export class ProviderController {
         (pending) => pending.state.authority.origin === origin,
         providerError('ERR_STALE_CONTEXT'),
       ));
-    for (const state of this.ports) {
-      if (!state.alive || state.authority.origin !== origin) continue;
+    for (const state of connectedStates) {
       this.safePost(state, {
         type: 'drey:provider:event',
         protocolVersion: PROVIDER_BRIDGE_VERSION,
@@ -1363,6 +1704,15 @@ export class ProviderController {
     return result;
   }
 
+  /** Ports with an exact browser-derived document connection, never mere discovery. */
+  private connectedPortStates(origin?: string): PortState[] {
+    return [...this.ports].filter((state) => {
+      if (!state.alive || (origin !== undefined && state.authority.origin !== origin)) return false;
+      const key = authorityKey(state.authority);
+      return key !== null && this.connections.has(key);
+    });
+  }
+
   private async loadConnections(): Promise<void> {
     const raw = (await this.deps.sessionStorage.get(CONNECTIONS_KEY))[CONNECTIONS_KEY];
     if (!Array.isArray(raw)) return;
@@ -1373,9 +1723,15 @@ export class ProviderController {
           typeof value.frameId !== 'number' || typeof value.documentId !== 'string' ||
           typeof value.vaultId !== 'string' || typeof value.sessionId !== 'string' ||
           typeof value.accountId !== 'string' ||
-          typeof value.account !== 'number') continue;
+          typeof value.account !== 'number' || !Array.isArray(value.addressPurposes) ||
+          value.addressPurposes.length > 2 ||
+          value.addressPurposes.some((purpose) => purpose !== 'payment' && purpose !== 'ordinals') ||
+          new Set(value.addressPurposes).size !== value.addressPurposes.length ||
+          typeof value.connectedAt !== 'number' || !Number.isSafeInteger(value.connectedAt) ||
+          value.connectedAt < 0) continue;
       const key = `${value.origin}|${value.tabId}|${value.frameId}|${value.documentId}`;
       this.connections.set(key, value as ConnectionRecord);
+      if (this.connections.size >= MAX_CONNECTIONS) break;
     }
   }
 

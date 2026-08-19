@@ -24,7 +24,22 @@ export type Rpc = <O extends Op>(op: O, payload: OpRequest<O>) => Promise<RpcRes
 export function makeRpc(sender: SenderContext): Rpc {
   return async (op, payload) => {
     try {
-      const raw: unknown = await chrome.runtime.sendMessage(makeEnvelope(sender, op, payload));
+      let raw: unknown;
+      if (typeof __BUILD_CHANNEL__ !== 'undefined' && __BUILD_CHANNEL__ === 'test') {
+        const recoveryFixtureRequested = typeof window !== 'undefined' &&
+          window.location.search.includes('dreyRecoveryScenario=');
+        if (recoveryFixtureRequested) {
+          const fixture = await import('../entrypoints/fullpage/recovery-center-e2e-fixtures');
+          const candidate = fixture.recoveryCenterE2eFixtureResponse(op, payload, window.location.href);
+          raw = candidate.requested
+            ? candidate.response
+            : await chrome.runtime.sendMessage(makeEnvelope(sender, op, payload));
+        } else {
+          raw = await chrome.runtime.sendMessage(makeEnvelope(sender, op, payload));
+        }
+      } else {
+        raw = await chrome.runtime.sendMessage(makeEnvelope(sender, op, payload));
+      }
       if ((raw as { ok?: unknown } | null)?.ok === true) {
         const parsed = EXTENSION_OP_SCHEMAS[op].response.safeParse((raw as { result?: unknown }).result);
         return parsed.success ? { ok: true, result: parsed.data } : { ok: false, code: 'ERR_INTERNAL' };
