@@ -33,7 +33,7 @@ export const approvalCommandSchema = z.discriminatedUnion('command', [
 const approvalIdentitySchema = z.object({
   walletName: z.string().min(1).max(128),
   account: z.number().int().min(0).max(MAX_ACCOUNT_INDEX),
-  network: z.enum(['mainnet', 'signet']),
+  network: z.enum(['mainnet', 'signet', 'regtest']),
 }).strict();
 
 const approvalReviewOutputSchema = z.object({

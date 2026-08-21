@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { WalletHomeResult } from '@drey/core/messaging/ops';
 import {
+  authoritativeActivityStatus,
   groupActivity,
   presentActivity,
 } from '../../src/ui/activity/activity-presentation';
@@ -24,6 +25,13 @@ function item(
 }
 
 describe('shared activity presentation', () => {
+  it('does not let stale tracking repaint terminal activity as pending', () => {
+    expect(authoritativeActivityStatus('replaced', 'accepted')).toBe('replaced');
+    expect(authoritativeActivityStatus('confirmed', 'accepted')).toBe('confirmed');
+    expect(authoritativeActivityStatus('conflicted', 'accepted')).toBe('conflicted');
+    expect(authoritativeActivityStatus('mempool', 'accepted')).toBe('accepted');
+  });
+
   it('separates outgoing principal from its network fee', () => {
     const presentation = presentActivity(item(), t, 'en', sats);
     expect(presentation.description).toBe('Sent');

@@ -3,6 +3,32 @@
 Notable user-facing changes to Drey are recorded here. For earlier releases,
 see the production release tags in the repository.
 
+## 0.13.1
+
+### Added
+
+- Add reviewed Community Vault approvals for transferring a complete owner
+  position. The current owner and buyer each see the fixed units, payment,
+  network fee, new owner keys, and replacement Vault before signing.
+
+### Fixed
+
+- Keep an eligible RBF speed-up available after the pending transaction has
+  spent its original inputs, while requiring fresh signed proof that the exact
+  parent transaction is still pending and replaceable.
+- Mark the original transaction as replaced after Drey accepts its replacement,
+  and stop offering another speed-up when the latest signed history says it is
+  no longer available.
+- Prevent quick repeated clicks from starting duplicate transaction planning or
+  approval requests, and keep an uncertain broadcast result connected to
+  Activity instead of returning to a new-send screen.
+
+### Changed
+
+- Make RBF and CPFP reviews explain what changes, what stays fixed, and which
+  network fee will be signed.
+- Consume `@drey/core` v0.16.1.
+
 ## 0.12.0
 
 ### Added

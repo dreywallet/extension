@@ -306,7 +306,11 @@ export function Settings(props: { session: SessionView }): ReactNode {
             <div>
               <strong>{site.origin}</strong>
               <p className={styles['rowLabel']}>
-                {site.network === 'mainnet' ? t('home.network.mainnet') : t('home.network.signet')}
+                {site.network === 'mainnet'
+                  ? t('home.network.mainnet')
+                  : site.network === 'regtest'
+                    ? t('home.network.regtest')
+                    : t('home.network.signet')}
                 {' · '}{t('approval.accountNumber', { number: site.account + 1 })}
                 {' · '}{site.categories.map((category) =>
                   t(`approval.category.${category}` as MessageKey)).join(', ')}

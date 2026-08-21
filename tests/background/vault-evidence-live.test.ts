@@ -33,6 +33,7 @@ describe.skipIf(!enabled)('live gateway is a usable Vault evidence source', () =
     // The pilot channel's own compile-time bindings: the same origin and pinned
     // response key the unsigned-only mainnet coordinator would use.
     const pilot = resolveBuildChannel('pilot');
+    if (pilot.network === 'regtest') throw new Error('pilot must not target regtest');
     const nonce = randomBytes(16).toString('hex');
     const response = await fetch(`${pilot.gatewayOrigin}/v1/status`, {
       headers: { 'x-squirrel-request-nonce': nonce },

@@ -20,7 +20,7 @@ import { derivationKey } from './keys';
 const stateSchema = z
   .object({
     version: z.literal(1),
-    network: z.enum(['mainnet', 'signet']),
+    network: z.enum(['mainnet', 'signet', 'regtest']),
     kind: z.enum(['payment', 'ordinals']),
     accountIndex: z.number().int().nonnegative().max(BIP32_INDEX_EXHAUSTED - 1),
     externalMode: z.literal('stable'),

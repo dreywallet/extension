@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   APPROVAL_SWITCH_COOLDOWN_MS,
+  isPositionTransferBuyerReady,
   ProviderController,
   type ProviderControllerDeps,
 } from '../../src/background/provider-controller';
@@ -172,6 +173,7 @@ function mockService() {
     providerPrepareOrdinalTransfer: vi.fn(),
     providerReauthenticate: vi.fn(),
     communityVaultSign: vi.fn(),
+    communityVaultStatus: vi.fn(async () => ({ owners: [], unusableCampaignIds: [] })),
   };
   return {
     service: service as unknown as WalletService,
@@ -229,6 +231,27 @@ function mixedBuyerPsbt(): string {
 }
 
 describe('ProviderController authority, disclosure and approvals', () => {
+  it('requires the exact recovered buyer root for a position transfer', () => {
+    const review = {
+      campaignId: 'campaign-1',
+      buyerOwnerId: 'buyer-1',
+      buyerCampaignXpub: 'xpub-exact',
+    } as never;
+    const owner = {
+      campaignId: 'campaign-1',
+      ownerId: 'buyer-1',
+      campaignRoot: { campaignXpub: 'xpub-exact' },
+      recoveryConfirmed: true,
+    };
+    expect(isPositionTransferBuyerReady([owner] as never, review)).toBe(true);
+    expect(isPositionTransferBuyerReady([
+      { ...owner, campaignRoot: { campaignXpub: 'xpub-other' } },
+    ] as never, review)).toBe(false);
+    expect(isPositionTransferBuyerReady([
+      { ...owner, recoveryConfirmed: false },
+    ] as never, review)).toBe(false);
+  });
+
   it('uses the independent Community Vault owner root for a sale instead of the Spending signer', async () => {
     const h = harness();
     h.mock.service.communityVaultSign = vi.fn(async () => ({
@@ -283,6 +306,74 @@ describe('ProviderController authority, disclosure and approvals', () => {
       params: { signInputs: { payment: [1] }, broadcast: false },
       preparedPsbt,
       communityVaultSaleBuyer: { review: { buyerTotalSats: '102000' } },
+    });
+
+    expect(h.mock.service.communityVaultSign).not.toHaveBeenCalled();
+    expect(h.mock.service.providerSignPreparedPsbt).toHaveBeenCalledWith(
+      preparedPsbt,
+      [1],
+      expect.any(Function),
+    );
+    expect(result).toEqual({ psbt: 'cHNidP8=' });
+  });
+
+  it('uses the independent owner root for a position-transfer approval', async () => {
+    const h = harness();
+    h.mock.service.communityVaultSign = vi.fn(async () => ({
+      version: 1 as const,
+      psbtHex: '70736274ff',
+      psbtHash: '22'.repeat(32),
+      approvedOwnerId: 'owner-2',
+      addedUnits: [40],
+      signedUnits: [40],
+      signedOwnerIds: ['owner-2'],
+    }));
+    const context = {
+      currentPolicy: { campaignId: 'campaign-1' },
+      plan: { spendPlan: { planId: 'position-transfer-1' } },
+    };
+    const result = await (h.controller as unknown as {
+      executeApproved(pending: unknown, password?: string): Promise<unknown>;
+    }).executeApproved({
+      state: { authority },
+      method: 'signPsbt',
+      params: { signInputs: { vault: [0] }, broadcast: false },
+      preparedPsbt: { psbtHex: '70736274ff' },
+      communityVaultPositionTransfer: {
+        context,
+        review: { role: 'owner', units: [20, 21] },
+      },
+      expectedVaultId: 'vault-1',
+      expectedSessionId: '123e4567-e89b-42d3-a456-426614174001',
+    }, 'owner-password');
+
+    expect(h.mock.service.communityVaultSign).toHaveBeenCalledWith({
+      campaignId: 'campaign-1',
+      expectedVaultId: 'vault-1',
+      expectedSessionId: '123e4567-e89b-42d3-a456-426614174001',
+      password: 'owner-password',
+      policy: context.currentPolicy,
+      plan: context.plan.spendPlan,
+      psbtHex: '70736274ff',
+    });
+    expect(h.mock.service.providerSignPreparedPsbt).not.toHaveBeenCalled();
+    expect(result).toEqual({ psbt: 'cHNidP8=' });
+  });
+
+  it('uses only the Spending signer for position-buyer funding', async () => {
+    const h = harness();
+    h.mock.service.providerSignPreparedPsbt = vi.fn(async () => ({ psbtBase64: 'cHNidP8=' }));
+    const preparedPsbt = { psbtHex: '70736274ff' };
+    const result = await (h.controller as unknown as {
+      executeApproved(pending: unknown, password?: string): Promise<unknown>;
+    }).executeApproved({
+      state: { authority },
+      method: 'signPsbt',
+      params: { signInputs: { payment: [1] }, broadcast: false },
+      preparedPsbt,
+      communityVaultPositionTransfer: {
+        review: { role: 'buyer', buyerTotalSats: '102000' },
+      },
     });
 
     expect(h.mock.service.communityVaultSign).not.toHaveBeenCalled();
@@ -539,10 +630,14 @@ describe('ProviderController authority, disclosure and approvals', () => {
     expect(page.messages).toEqual([expect.objectContaining({
       ok: true,
       result: expect.objectContaining({
-        version: '0.12.0',
+        version: '0.13.1',
         platform: 'web',
         supports: ['WBIP001', 'WBIP004'],
-        capabilities: ['community-vault-v1', 'community-vault-offers-v1'],
+        capabilities: [
+          'community-vault-v1',
+          'community-vault-offers-v1',
+          'community-vault-position-transfer-v1',
+        ],
         methods: expect.arrayContaining(['getInfo', 'wallet_connect', 'signPsbt']),
       }),
     })]);

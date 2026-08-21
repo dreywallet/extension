@@ -265,7 +265,9 @@ export function ManageAccounts(props: {
         <WatchOnlyAccountImport
           expectation={props.expectation}
           accounts={accounts}
-          network={accounts[0]?.accountId.startsWith('acct_mainnet_') ? 'mainnet' : 'signet'}
+          network={accounts[0]?.accountId.startsWith('acct_mainnet_')
+            ? 'mainnet'
+            : accounts[0]?.accountId.startsWith('acct_regtest_') ? 'regtest' : 'signet'}
           onClose={() => setImportOpen(false)}
           onImported={() => { setImportOpen(false); load(); }}
         />

@@ -2,7 +2,7 @@
   "name": "drey-extension",
   "description": "Drey — non-custodial Bitcoin L1 and Ordinals browser extension",
   "private": true,
-  "version": "0.12.0",
+  "version": "0.13.1",
   "license": "AGPL-3.0-only",
   "author": "Squirrel Systems LLC",
   "repository": {
@@ -20,7 +20,8 @@
     ]
   },
   "scripts": {
-    "dev": "wxt",
+    "dev": "node scripts/run-regtest-development.mjs",
+    "build:regtest": "DREY_BUILD_OUTPUT_ROOT=.output/regtest node scripts/run-regtest-development.mjs build",
     "build": "DREY_BUILD_OUTPUT_ROOT=.output/production wxt build && node scripts/check-approval-gallery-isolation.mjs .output/production/chrome-mv3",
     "build:next": "DREY_BUILD_OUTPUT_ROOT=.output/next wxt build --mode production && node scripts/check-approval-gallery-isolation.mjs .output/next/chrome-mv3",
     "build:approval-gallery": "vite build --config vite.approval-gallery.config.ts",
@@ -49,6 +50,11 @@
     "test:watch": "vitest",
     "test:e2e": "node scripts/run-e2e.mjs",
     "test:e2e:headed": "node scripts/run-e2e.mjs --headed",
+    "test:e2e:regtest": "pnpm build:regtest && node scripts/run-regtest-e2e.mjs",
+    "test:e2e:regtest:smoke": "pnpm build:regtest && node scripts/run-regtest-e2e.mjs --grep-invert '@extended|@ordinals'",
+    "test:e2e:regtest:extended": "pnpm build:regtest && node scripts/run-regtest-e2e.mjs --grep @extended",
+    "test:e2e:regtest:ordinals": "pnpm build:regtest && node scripts/run-regtest-e2e.mjs --grep @ordinals",
+    "test:e2e:regtest:headed": "pnpm build:regtest && node scripts/run-regtest-e2e.mjs --headed",
     "test:pilot:live-status": "node scripts/probe-pilot-live-status.mjs",
     "test:pilot:browsers": "node scripts/test-pilot-browser-lifecycle.mjs",
     "pilot:vault-roundtrip": "node --import tsx --import ./scripts/pilot-libsodium-alias.mjs scripts/pilot-vault-roundtrip.ts",
@@ -60,7 +66,7 @@
     "ci:m9x": "node scripts/ci-m9x.mjs"
   },
   "dependencies": {
-    "@drey/core": "git+https://github.com/dreywallet/core.git#v0.14.4",
+    "@drey/core": "git+https://github.com/dreywallet/core.git#v0.16.1",
     "@ngraveio/bc-ur": "1.1.13",
     "@noble/curves": "1.9.7",
     "@scure/bip32": "^1.7.0",

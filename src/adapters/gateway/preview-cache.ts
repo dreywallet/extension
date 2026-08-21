@@ -51,7 +51,7 @@ const cachedGalleryRecordSchema = z
     vaultId: z.string().min(1),
     sessionId: z.string().min(1),
     network: z.string().min(1),
-    accountId: z.string().regex(/^acct_(?:mainnet|signet)_[0-9a-f]{64}$/u),
+    accountId: z.string().regex(/^acct_(?:mainnet|signet|regtest)_[0-9a-f]{64}$/u),
     cachedAt: z.number().int().nonnegative(),
     items: z.array(galleryCachedItemSchema).max(4096),
   })

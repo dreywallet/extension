@@ -243,7 +243,7 @@ export interface GalleryData {
 export function useGalleryData(
   expectation: ActiveSessionExpectation,
   accountId: string,
-  options: { continuous?: boolean } = {},
+  options: { continuous?: boolean; synchronizeOnMount?: boolean } = {},
 ): GalleryData {
   const rpc = useRpc();
   const { expectedVaultId, expectedSessionId } = expectation;
@@ -262,6 +262,10 @@ export function useGalleryData(
   // once the current batch settles.
   const invalidationQueued = useRef(false);
   const refreshRef = useRef<GalleryData['refresh']>(async () => undefined);
+  // A result transition may know the Gallery was unmounted while ownership
+  // changed. Capture that one-shot instruction for this mount; a parent can
+  // clear its prop immediately without downgrading the already-mounted fetch.
+  const synchronizeOnMount = useRef(options.synchronizeOnMount === true).current;
   // Inscriptions whose rasters this surface has asked for. Kept so a
   // revalidation re-requests exactly what is on screen instead of the whole
   // wallet, and so a scroll burst does not re-ask for what is already loading.
@@ -523,6 +527,22 @@ export function useGalleryData(
       void joined.then(() => {
         if (generation.current !== joinGeneration) return;
         refreshInFlight.current = false;
+        // A transaction result can remount Gallery while the request started
+        // by its previous mount is still finishing. That request describes
+        // the pre-transaction outpoints, so joining it is useful only as a
+        // scheduling barrier: discard its store write and run the requested
+        // wallet synchronization before exposing any actions or notices.
+        if (synchronizeOnMount) {
+          store.delete(key);
+          resultRef.current = null;
+          setResult(null);
+          setAuthority('fresh');
+          setStatus('loading');
+          invalidationQueued.current = false;
+          rasterQueued.current = false;
+          void refresh(true, true);
+          return;
+        }
         const settled = store.get(key);
         if (settled === undefined) {
           if (autoRefetchParked(key)) {
@@ -562,7 +582,7 @@ export function useGalleryData(
         }
         setRefreshing(false);
       });
-    } else if (willFetch) void refresh(false, true);
+    } else if (willFetch) void refresh(synchronizeOnMount, true);
 
     /**
      * Paint-ahead. A cold surface — first popup open, or after an MV3 worker
@@ -639,7 +659,7 @@ export function useGalleryData(
       rasterQueued.current = false;
       chrome.runtime.onMessage.removeListener(onMessage);
     };
-  }, [key, refresh]);
+  }, [key, refresh, synchronizeOnMount]);
 
   const hasPendingItems =
     authority === 'fresh' &&

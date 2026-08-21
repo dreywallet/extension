@@ -239,7 +239,8 @@ export default defineBackground(() => {
     // mis-edited into, say, mainnet + full yields a build with no coordinator
     // at all rather than one that quietly downgrades to something plausible.
     const vaultCoordinatorCapability =
-      __VAULT_COORDINATOR_ENABLED__ && __VAULT_COORDINATOR_MOVEMENT__ !== 'none'
+      __VAULT_COORDINATOR_ENABLED__ && __VAULT_COORDINATOR_MOVEMENT__ !== 'none' &&
+        __GATEWAY_NETWORK__ !== 'regtest'
         ? resolveVaultCoordinatorCapability(__GATEWAY_NETWORK__, __VAULT_COORDINATOR_MOVEMENT__)
         : undefined;
     const service = new WalletService({

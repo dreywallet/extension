@@ -36,6 +36,16 @@ export interface ActivityGroup {
   items: ActivityItem[];
 }
 
+export function authoritativeActivityStatus(
+  activityStatus: ActivityItem['confirmationState'],
+  trackedStatus: string,
+): string {
+  return activityStatus === 'confirmed' || activityStatus === 'replaced' ||
+    activityStatus === 'conflicted'
+    ? activityStatus
+    : trackedStatus;
+}
+
 function shortInscriptionId(inscriptionId: string): string {
   return `${inscriptionId.slice(0, 8)}…${inscriptionId.slice(-8)}`;
 }

@@ -31,7 +31,11 @@ export default defineConfig({
   projects: [
     {
       name: 'extension',
-      testIgnore: ['**/secret-visible.spec.ts', '**/heap-secrets.spec.ts'],
+      testIgnore: [
+        '**/secret-visible.spec.ts',
+        '**/heap-secrets.spec.ts',
+        '**/regtest-*.spec.ts',
+      ],
       outputDir: './test-results/e2e/extension',
     },
     {

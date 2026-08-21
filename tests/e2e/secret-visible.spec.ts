@@ -1234,7 +1234,9 @@ test('restores the public fixture, persists privacy, and exercises provider appr
     )).toBeVisible();
 
     await terminateExtensionWorker(extensionContext, extensionId);
-    await fullpage.getByRole('button', { name: 'Activity' }).click();
+    await fullpage.getByLabel('Wallet navigation')
+      .getByRole('button', { name: 'Activity' })
+      .click();
     const collapsedRecoveryWarning = fullpage.locator('summary').getByText(
       'Broadcast outcome needs manual reconciliation. Refreshing does not resubmit.',
     );
@@ -1244,9 +1246,8 @@ test('restores the public fixture, persists privacy, and exercises provider appr
 
     await setGatewayScenario({ broadcastMode: 'accepted' });
     await fullpage.getByRole('button', { name: 'Send' }).click();
-    await fullpage.getByRole('button', { name: 'Send another' }).click();
-    await expect(fullpage.getByRole('heading', { name: 'Send Bitcoin' })).toBeVisible();
-    await expect(fullpage.getByText('Account 1', { exact: true })).toBeVisible();
+    await expect(fullpage.getByRole('heading', { name: 'Broadcast outcome unknown' }))
+      .toBeVisible();
     await fullpage.goto(`chrome-extension://${extensionId}/fullpage.html#/settings`);
     await expect(fullpage.getByRole('radio', { name: 'White' })).toHaveAttribute('aria-checked', 'true');
     await fullpage.getByRole('radio', { name: 'Green' }).click();

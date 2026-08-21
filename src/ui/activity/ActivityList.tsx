@@ -6,7 +6,6 @@ import {
   type SyntheticEvent,
 } from 'react';
 import type { WalletHomeResult } from '@drey/core/messaging/ops';
-import { mempoolTransactionUrl } from '@drey/core/domain/explorer';
 import { isSessionStateChangedEvent } from '@drey/core/messaging/events';
 import { satsToBtcDecimal } from '@drey/core/domain/sats';
 import type { ActiveSessionExpectation } from '../hooks/use-session';
@@ -25,6 +24,7 @@ import {
   type ActivityItem,
   type ActivityPresentation,
 } from './activity-presentation';
+import { transactionExplorerUrl } from './explorer';
 import styles from './ActivityList.module.css';
 
 type ActivityVariant = 'compact' | 'standard' | 'comfortable';
@@ -113,7 +113,7 @@ export function ActivityList(props: {
   emptyClassName?: string | undefined;
   expectation: ActiveSessionExpectation;
   accountId: string;
-  network: 'mainnet' | 'signet' | null;
+  network: 'mainnet' | 'signet' | 'regtest' | null;
   interaction?: ActivityInteraction | undefined;
 }): ReactNode {
   const { t, lang } = useI18n();
@@ -236,7 +236,7 @@ export function ActivityList(props: {
       <a
         key={key}
         className={`${className} ${styles['itemLink']}`}
-        href={mempoolTransactionUrl(props.network, item.txid)}
+        href={transactionExplorerUrl(props.network, item.txid)}
         target="_blank"
         rel="noopener noreferrer"
         title={t('activity.viewExplorer')}

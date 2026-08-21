@@ -46,7 +46,7 @@ function decodeRenderedQr(svg: SVGElement): string {
   return decodeQR({ width, height: width, data });
 }
 
-function setup(gateClosed = false, network: 'mainnet' | 'signet' = 'mainnet'): void {
+function setup(gateClosed = false, network: 'mainnet' | 'signet' | 'regtest' = 'mainnet'): void {
   installFakeChrome({
     'address.receive': (payload) => {
       if (gateClosed) return { ok: false, code: 'ERR_BACKUP_REQUIRED' };
@@ -99,6 +99,10 @@ describe('Receive', () => {
     expect(screen.queryByText(/stable Bitcoin address on Mainnet/u)).toBeNull();
     await screen.findByText(PAYMENT_ADDR);
     expect(screen.getByText(/stable Bitcoin address on Signet/u)).toBeInTheDocument();
+    cleanup();
+    setup(false, 'regtest');
+    await screen.findByText(PAYMENT_ADDR);
+    expect(screen.getByText(/stable Bitcoin address on Regtest/u)).toBeInTheDocument();
     cleanup();
     setup(false, 'mainnet');
     await screen.findByText(PAYMENT_ADDR);

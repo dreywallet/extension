@@ -6,7 +6,7 @@ export interface PaymentRequestCardModel {
   amountBtc: string | null;
   amountSats: string | null;
   label: string | null;
-  network: 'mainnet' | 'signet';
+  network: 'mainnet' | 'signet' | 'regtest';
   qrValue: string;
 }
 
@@ -14,7 +14,7 @@ export function paymentRequestCardModel(input: {
   address: string;
   amountSats?: bigint | undefined;
   label: string;
-  network: 'mainnet' | 'signet';
+  network: 'mainnet' | 'signet' | 'regtest';
   qrValue: string;
 }): PaymentRequestCardModel {
   return {
@@ -116,7 +116,7 @@ export async function renderPaymentRequestPng(input: {
   context.fillText('DREY', 88, 140);
   context.font = '700 30px Inter, Arial, sans-serif';
   context.textAlign = 'right';
-  if (input.model.network === 'signet') context.fillText(input.testNetworkWarning, 992, 126);
+  if (input.model.network !== 'mainnet') context.fillText(input.testNetworkWarning, 992, 126);
   context.textAlign = 'left';
   context.font = '700 38px Inter, Arial, sans-serif';
   context.fillText(input.title, 88, 204);

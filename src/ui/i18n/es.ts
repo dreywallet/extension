@@ -210,6 +210,7 @@ export const es: Record<MessageKey, string> = {
   'home.recentActivity': 'Actividad reciente',
   'home.network.mainnet': 'Mainnet',
   'home.network.signet': 'Signet',
+  'home.network.regtest': 'Regtest',
   'home.wrongLaneOne': 'Drey encontró 1 moneda con un coleccionable en una dirección de Bitcoin.',
   'home.wrongLane': 'Drey encontró {count} monedas con coleccionables en direcciones de Bitcoin.',
   'home.wrongLane.review': 'Revisar monedas',
@@ -261,6 +262,11 @@ export const es: Record<MessageKey, string> = {
   'send.fee.degraded': 'Las tarifas recomendadas no están disponibles. Introduce una tarifa personalizada para intentarlo; la red podría rechazarla o tardar mucho en confirmarla.',
   'send.review': 'Revisar transacción',
   'send.review.title': 'Revisar transacción',
+  'send.review.speedUp.title': 'Revisar aceleración',
+  'send.review.rbf.explanation':
+    'El destinatario y la cantidad no cambian. Drey sustituye la transacción pendiente por una versión con una comisión mayor.',
+  'send.review.cpfp.explanation':
+    'El destinatario y la cantidad no cambian. Drey añade una transacción de seguimiento con una comisión de red para ayudar a que ambas se confirmen antes.',
   'send.review.amount': 'Envío',
   'send.review.fee': 'Comisión',
   'send.review.total': 'Total',
@@ -274,6 +280,7 @@ export const es: Record<MessageKey, string> = {
   'send.review.reauth.highRelativeFee': 'La comisión de red supera el 10 % de la cantidad enviada.',
   'send.password': 'Confirmar contraseña de la aplicación',
   'send.approve': 'Firmar y transmitir',
+  'send.approve.speedUp': 'Firmar y acelerar',
   'send.result.title': 'Transacción enviada',
   'send.result.title.pending': 'Resultado de transmisión desconocido',
   'send.result.title.accepted': 'Transacción enviada',
@@ -390,6 +397,8 @@ export const es: Record<MessageKey, string> = {
   'approval.community.title': '¿Aprobar la compra comunitaria?',
   'approval.community.saleTitle': '¿Aprobar esta venta de OMB?',
   'approval.community.offerTitle': '¿Financiar esta oferta por el OMB?',
+  'approval.community.positionBuyerTitle': '¿Comprar esta posición completa?',
+  'approval.community.positionOwnerTitle': '¿Aprobar esta transferencia de posición?',
   'approval.community.summary': 'Tu aprobación de Community Vault',
   'approval.community.body':
     'Estás financiando el {units}% de este OMB. Drey firma solo tus entradas exactas y no transmite nada.',
@@ -397,6 +406,10 @@ export const es: Record<MessageKey, string> = {
     'Posees el {units}% de este OMB. Drey firma todas tus unidades una vez, paga directamente a cada propietario y no transmite nada.',
   'approval.community.offerBody':
     'Drey autoriza solo las entradas BTC limpias mostradas. Cada propietario recibe su pago directamente y aquí no se transmite nada.',
+  'approval.community.positionBuyerBody':
+    'Estás comprando la posición completa del {units}% del vendedor. El pago, la comisión, las nuevas claves y la nueva bóveda son fijos.',
+  'approval.community.positionOwnerBody':
+    'Estás aprobando el traslado de una posición completa del {units}% a un nuevo propietario. El vendedor cobra en la misma transacción.',
   'approval.transaction.description':
     'Verifica todas las salidas y la comisión antes de firmar.',
   'approval.send.title': '¿Enviar bitcoin?',
@@ -664,7 +677,7 @@ export const es: Record<MessageKey, string> = {
 
   'activity.confirmed': 'Confirmada',
   'activity.title': 'Actividad de transacciones',
-  'activity.bestNext.title': 'Mejor acción siguiente',
+  'activity.bestNext.title': '¿Quieres que se confirme antes?',
   'activity.bestNext.unavailable': 'No hay una forma segura de aumentar la comisión de esta transacción.',
   'activity.openDetails': 'Abre los detalles de la transacción en Drey.',
   'activity.detail.context': 'Detalles',
@@ -689,8 +702,10 @@ export const es: Record<MessageKey, string> = {
   'activity.fee': '{fee} sats de comisión de red',
   'activity.feeDisplay': '{fee} de comisión de red',
   'activity.units': 'Unidad de visualización',
-  'activity.speedUp.rbf': 'Acelerar con RBF',
-  'activity.speedUp.cpfp': 'Acelerar con CPFP',
+  'activity.speedUp.rbf': 'Acelerar transacción',
+  'activity.speedUp.cpfp': 'Acelerar transacción',
+  'activity.speedUp.explanation':
+    'El destinatario y la cantidad no cambian. Revisarás la nueva comisión de red antes de firmar.',
   'activity.pendingSafety':
     'Usa los controles Acelerar de Drey o espera la confirmación. El soporte de Drey nunca pedirá tus palabras de recuperación ni te dirá que las introduzcas en un sitio web.',
   'activity.status.pending': 'Transmisión pendiente',

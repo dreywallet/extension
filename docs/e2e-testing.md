@@ -176,6 +176,124 @@ even when the browser or the test fails, and the wallet involved is always the
 disposable signet fixture. The suite runs under the `secret-safe` project, so
 traces, video, and screenshots stay disabled for it.
 
+## Real local regtest lifecycle
+
+The OrbStack regtest stack has a separate acceptance path from the deterministic
+signet fixtures. Start the stack from `gateway/`, then run:
+
+```bash
+cd ../gateway
+pnpm regtest:up
+cd ../extension
+pnpm test:e2e:regtest
+```
+
+For a shorter payment-lifecycle check, or only the deeper payment edges:
+
+```bash
+pnpm test:e2e:regtest:smoke
+pnpm test:e2e:regtest:extended
+pnpm test:e2e:regtest:ordinals
+```
+
+The smoke profile retains the original six lifecycle, incoming-payment,
+multi-input, RBF, BIP-321, and reorg journeys. The extended profile covers
+Send Max with no hidden change output, exact manual coin selection, exact
+two-input consolidation while a third coin remains untouched, and an
+underfunded manual send that must not change the real mempool. It also restores
+a newly generated disposable phrase after funding account 1 and placing a real
+inscription in account 5, survives a service-worker restart during discovery,
+requires all five accounts and the exact inscription to be visible, and signs a
+real payment from the recovered keys. Additional recovery cases exercise a
+wrong and correct BIP39 passphrase, the explicit Extended-scan prompt through
+receive index 59 and change index 39, and delete-and-restore behavior for local
+coin labels and freeze choices. The unqualified command runs both payment
+profiles plus the real-Ordinals journey.
+
+This command rebuilds the loopback-only development extension and refuses to
+run unless its manifest targets only `127.0.0.1:18480`, its network is regtest,
+and Vault coordination is disabled. One secret-safe Playwright worker then:
+
+- creates a fresh disposable wallet without retaining its phrase or profile;
+- derives and funds a `bcrt1` receive address from a dedicated cardinal-only
+  faucet;
+- waits for independently verified signed Core/Fulcrum/ord tip convergence,
+  including identical heights and block hashes;
+- discovers the confirmed UTXO through the real bounded wallet snapshot;
+- plans and signs a custom 1 sat/vB payment without relying on a trained fee
+  estimator;
+- independently decodes the mempool transaction and requires the exact funded
+  outpoint, miner-controlled recipient, amount, two-output recipient/change
+  shape, value conservation, and requested fee rate;
+- reviews and signs a real RBF speed-up after the spent parent input has left
+  the current UTXO snapshot, then requires Core to replace the original with a
+  higher-fee transaction that preserves the exact input, recipient, and amount;
+- mines one block and confirms the extension projects the same amount and exact
+  post-fee balance as confirmed Activity, with the original clearly marked
+  Replaced and the replacement marked Confirmed.
+
+The faucet is deliberately separate from the mining wallet. Its bootstrap
+transaction peels the first, non-common coinbase sat range into an isolated
+sink before creating the reusable funding output. This prevents payment tests
+from accidentally receiving a rare sat while leaving the wallet's production
+rare-sat protection intact. The Ordinals recipient uses another disposable
+Core wallet so a transferred inscription can never re-enter payment fixtures
+through later coin selection.
+
+The real-Ordinals case creates a 40-byte plain-text inscription with the pinned
+`ord` binary, receives it on the wallet's Taproot lane, and requires a freshly
+verified text preview and exact inscription identity before Send becomes
+available. It then reviews and broadcasts a custom 1 sat/vB transfer, proving
+the protected inscription input and clean fee input are the only inputs, the
+10,000-sat postage reaches the exact Taproot recipient, value and fee conserve,
+and `ord` indexes the confirmed inscription at the exact destination satpoint.
+
+The companion real-chain feature cases also cover a pending incoming payment
+becoming spendable after confirmation, automatic selection of two real UTXOs,
+BIP-321 paste/import with plainly displayed local-only label and purpose, and a
+shallow reorg. The reorg case requires the signed gateway to fail closed while
+Core, Fulcrum, and ord disagree, retain only the last coherent wallet view, and
+recover after the replacement branch advances far enough for every index.
+
+The recovery case creates its phrase only inside the secret-safe test process,
+never reports or retains it, and uses fresh addresses on every run. A worker
+termination can race the final durable scan commit, so the accepted UI outcomes
+are either seamless completion or the explicit in-place **Resume scan** action;
+the test then proves the completed result by switching through all discovered
+accounts, opening the recovered inscription, and broadcasting from account 1.
+The passphrase case first requires the accepted phrase plus a wrong passphrase
+to produce the explicit empty-wallet explanation, then restores with the exact
+passphrase, checks the persistent passphrase warning, and spends. The boundary
+case bridges each 20-address window with real history, requires the user-visible
+continuation decision, and signs from the recovered index-59 key. The metadata
+case labels and freezes a real coin, removes the wallet through the guarded UI,
+and proves that restoring brings back the coin without recreating either local
+choice.
+
+The payment-edge cases independently decode the broadcast transaction and
+Core mempool entry. They require the exact selected inputs, expected one- or
+two-output shape, requested fee-rate range, and satoshi conservation. The
+consolidation case also confirms the resulting wallet-owned output and the
+untouched third coin remain visible after confirmation. The insufficient-funds
+case compares the full mempool before and after the rejected review attempt.
+
+The live RBF case deliberately exercises the normal post-broadcast state where
+the parent input is absent from the current UTXO snapshot. The client recovers
+only the immutable wallet-owned input from its encrypted accepted parent plan,
+requires fresh signed proof that the exact parent remains replaceable, and
+reclassifies only any additional live funding inputs. The production gateway
+recovers a mempool-spent prevout value from its immutable parent transaction
+before asking Bitcoin Core to preflight the exact replacement. No test-only
+route, stale spendability claim, or extra user prompt is involved.
+
+The test reads the ignored mode-0600 Core RPC identity directly and never puts
+credentials or disposable addresses in command arguments. Its dedicated
+Playwright configuration disables HTML reports, screenshots, video, and traces.
+The wrapper always runs `audit:e2e-artifacts` and removes the complete result set
+and temporary browser profile, whether the lifecycle passes or fails. A failure
+must be rerun through this wrapper; do not invoke the spec with the ordinary E2E
+configuration.
+
 ## Artifact safety
 
 For non-secret tests, screenshots, video, and traces are retained only on failure.

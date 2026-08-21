@@ -106,7 +106,7 @@ function pendingGallery(number: number | null = 1234) {
   };
 }
 
-function renderGallery(account = 0) {
+function renderGallery(account = 0, synchronizeOnMount = false) {
   return render(
     <Providers>
       <Gallery
@@ -114,6 +114,7 @@ function renderGallery(account = 0) {
         account={account}
         accountId={account === 0 ? ACCOUNT_ID : OTHER_ACCOUNT_ID}
         onReceive={() => undefined}
+        synchronizeOnMount={synchronizeOnMount}
       />
     </Providers>,
   );
@@ -1022,6 +1023,37 @@ describe('gallery request sharing and failure closure', () => {
     // The surface that joined still gets the result.
     expect(await findGalleryArticle()).toBeInTheDocument();
     expect(galleryList).toHaveBeenCalledOnce();
+  });
+
+  it('synchronizes after a result remount even when a pre-transaction request is in flight', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let calls = 0;
+    const galleryList = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) {
+        await gate;
+        return { ok: true, result: galleryResult() };
+      }
+      return { ok: true, result: galleryResult(true) };
+    });
+    const scanStart = vi.fn(() => ({ ok: true, result: { scanId: 'scan-2' } }));
+    installFakeChrome({
+      'gallery.list': galleryList,
+      'scan.status': () => ({ ok: true, result: completedScan }),
+      'scan.start': scanStart,
+      'gallery.update': () => ({ ok: true, result: { updated: true } }),
+    });
+
+    const beforeAction = renderGallery();
+    await waitFor(() => expect(galleryList).toHaveBeenCalledOnce());
+    beforeAction.unmount();
+    renderGallery(0, true);
+    release();
+
+    expect(await screen.findByText('Recovered addresses included')).toBeInTheDocument();
+    expect(galleryList).toHaveBeenCalledTimes(2);
+    expect(scanStart).toHaveBeenCalledOnce();
   });
 
   it('clears the grid and parks when the wallet scan fails', async () => {

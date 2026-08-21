@@ -1,5 +1,6 @@
 import '@testing-library/jest-dom/vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Transactions } from '../../src/entrypoints/fullpage/Transactions';
 import type { WalletHomeResult } from '@drey/core/messaging/ops';
@@ -114,6 +115,22 @@ function view(initialSection: 'send' | 'utxos' | 'activity', session = SESSION_1
         capabilities={CAPABILITIES}
         initialSection={initialSection}
         onNavigate={() => undefined}
+      />
+    </Providers>
+  );
+}
+
+function NavigableTransactionsView() {
+  const [section, setSection] = useState<'send' | 'utxos' | 'activity'>('activity');
+  return (
+    <Providers>
+      <Transactions
+        accountId={ACCOUNT_ID}
+        expectedVaultId="vault-1"
+        expectedSessionId={SESSION_1}
+        capabilities={CAPABILITIES}
+        initialSection={section}
+        onNavigate={setSection}
       />
     </Providers>
   );
@@ -674,6 +691,35 @@ describe('transaction screen orchestration', () => {
       .toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Freeze' })).not.toBeInTheDocument();
     expect(screen.queryByText('dust_quarantined')).not.toBeInTheDocument();
+  });
+
+  it('shows a clear error instead of silently ignoring a failed freeze action', async () => {
+    installFakeChrome({
+      'fees.quote': () => ({ ok: true, result: QUOTE }),
+      'utxo.list': () => ({
+        ok: true,
+        result: {
+          utxos: [utxoRow({
+            valueSats: '50000',
+            effectiveValueSats: '49932',
+            classification: 'cardinal_clean',
+            eligible: true,
+            reasons: [],
+          })],
+          privacyNotes: [],
+        },
+      }),
+      'utxo.setFrozen': () => ({ ok: false, code: 'ERR_INTERNAL' }),
+    });
+
+    render(view('utxos'));
+    await screen.findByText('50,000 sats');
+    fireEvent.click(screen.getByLabelText('Details for coin aaaa…aaaa:0'));
+    fireEvent.click(screen.getByRole('button', { name: 'Freeze' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Something went wrong. Please try again.',
+    );
   });
 
   it('states the verification refresh once for the wallet, not once per coin', async () => {
@@ -1354,9 +1400,10 @@ describe('transaction screen orchestration', () => {
     expect(scanStarts).toBe(2);
   });
 
-  it('shows scanned wallet history while retaining controls for tracked outgoing transactions', async () => {
+  it('opens a clear no-jargon speed-up review without changing recipient or amount', async () => {
     const incomingTxid = '8'.repeat(64);
     const outgoingTxid = '9'.repeat(64);
+    const plans: unknown[] = [];
     installFakeChrome({
       'wallet.home': () => ({
         ok: true,
@@ -1415,9 +1462,33 @@ describe('transaction screen orchestration', () => {
           historyPartial: false,
         },
       }),
+      'transaction.plan': (payload) => {
+        plans.push(payload);
+        return {
+          ok: true,
+          result: {
+            planId: 'rbf-plan', planHash: 'a'.repeat(64), expiresAt: Date.now() + 60_000,
+            review: {
+              kind: 'rbf', network: 'mainnet', accountId: ACCOUNT_ID,
+              recipients: [{ address: 'bc1qrecipient', valueSats: '2500', role: 'recipient' }],
+              inputs: [{
+                txid: '7'.repeat(64), vout: 0, valueSats: '5000',
+                classification: 'cardinal_clean', path: "m/84'/0'/0'/0/0",
+              }],
+              change: [{ address: 'bc1qchange', valueSats: '2200', role: 'payment_change' }],
+              amountSats: '2500', feeSats: '300', totalSats: '2800',
+              vsize: '110', feeRateSatPerKvB: '2728', feeRateSatPerVb: '2.728',
+              urgency: 'standard', rbf: true, psbtHash: 'b'.repeat(64),
+              standardModeMissingProtections: [], requiresReauth: false, reauthReasons: [],
+              effectCount: 0, requiresPreviewAcknowledgement: false, inscriptions: [],
+              ordinalAction: null,
+            },
+          },
+        };
+      },
     });
 
-    render(view('activity'));
+    render(<NavigableTransactionsView />);
 
     const received = await screen.findByText('Received at Ordinals address');
     const receivedSummary = received.closest('summary');
@@ -1435,12 +1506,31 @@ describe('transaction screen orchestration', () => {
     expect(sentSummary).toHaveTextContent('−2,500 sats');
     expect(sentSummary).toHaveTextContent('234 sats network fee');
     fireEvent.click(sentSummary!);
-    expect(screen.getByRole('button', { name: 'Speed up with RBF' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Speed up with CPFP' })).not.toBeInTheDocument();
+    expect(screen.getByText('Want it confirmed sooner?')).toBeInTheDocument();
+    expect(screen.getByText(
+      'Your recipient and amount stay unchanged. You’ll review the new network fee before signing.',
+    )).toBeInTheDocument();
+    const speedUp = screen.getByRole('button', { name: 'Speed up transaction' });
+    expect(screen.queryByText(/\bRBF\b|\bCPFP\b/u)).not.toBeInTheDocument();
     expect(screen.queryByText('Your transaction history will appear here.'))
       .not.toBeInTheDocument();
     expect(screen.getAllByRole('link', { name: 'View transaction on mempool.space' }))
       .toHaveLength(2);
+
+    fireEvent.click(speedUp);
+    await waitFor(() => expect(plans).toHaveLength(1));
+    expect(plans[0]).toMatchObject({
+      kind: 'rbf', txid: outgoingTxid,
+      fee: { type: 'automatic', tier: 'standard' },
+    });
+    expect(await screen.findByRole('heading', { name: 'Review speed-up' })).toBeInTheDocument();
+    expect(screen.getByText(
+      'The recipient and amount stay the same. Drey replaces the pending transaction with a higher-fee version.',
+    )).toBeInTheDocument();
+    expect(screen.getByText('bc1qrecipient')).toBeInTheDocument();
+    expect(screen.getAllByText('2,500 sats').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('300 sats')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sign and speed up' })).toBeInTheDocument();
   });
 
   it('keeps an unmatched indeterminate broadcast visible for manual reconciliation', async () => {
@@ -1641,12 +1731,13 @@ describe('transaction screen orchestration', () => {
       `https://mempool.space/tx/${txid}`,
     );
 
-    expect(screen.queryByRole('button', { name: 'Speed up with RBF' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Speed up with CPFP' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Speed up transaction' })).not.toBeInTheDocument();
   });
 
   it('renders a retained inscription in native review and forwards the unavailable-preview acknowledgement', async () => {
     const approvals: unknown[] = [];
+    let finishApproval!: (value: unknown) => void;
+    const approval = new Promise((resolve) => { finishApproval = resolve; });
     const inscriptionId = `${'a'.repeat(64)}i0`;
     const txid = 'b'.repeat(64);
     installFakeChrome({
@@ -1677,7 +1768,7 @@ describe('transaction screen orchestration', () => {
       }),
       'transaction.approve': (payload) => {
         approvals.push(payload);
-        return { ok: true, result: { planId: 'm9p-plan', txid: 'e'.repeat(64), status: 'accepted', detail: null } };
+        return approval;
       },
     });
 
@@ -1697,9 +1788,19 @@ describe('transaction screen orchestration', () => {
     expect(approve).toBeDisabled();
     fireEvent.click(screen.getByLabelText(/checked the full inscription identifier/iu));
     expect(approve).toBeEnabled();
-    fireEvent.click(approve);
+    await act(async () => {
+      approve.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      approve.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
     await waitFor(() => expect(approvals).toHaveLength(1));
     expect(approvals[0]).toMatchObject({ previewUnavailableAcknowledged: true });
+    finishApproval({
+      ok: true,
+      result: {
+        planId: 'm9p-plan', txid: 'e'.repeat(64), status: 'accepted', detail: null,
+      },
+    });
     const explorer = await screen.findByRole('link', { name: /View transaction on mempool\.space/u });
     expect(screen.getByRole('heading', { name: 'Transaction sent' })).toBeInTheDocument();
     expect(screen.getByText('1,000 sats')).toBeInTheDocument();

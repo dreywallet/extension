@@ -39,7 +39,7 @@ export function Receive(props: {
   const { expectedVaultId, expectedSessionId } = props.expectation;
   const [kind, setKind] = useState<Kind>(props.initialKind);
   const [address, setAddress] = useState<string | null>(null);
-  const [network, setNetwork] = useState<'mainnet' | 'signet' | null>(null);
+  const [network, setNetwork] = useState<'mainnet' | 'signet' | 'regtest' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [amount, setAmount] = useState('');
   const [label, setLabel] = useState('');
@@ -170,8 +170,11 @@ export function Receive(props: {
           {(() => {
           // The network comes from the worker's channel-pinned answer, never a
           // UI-side assumption (M6 network unification).
-          const networkLabel =
-            network === 'signet' ? t('home.network.signet') : t('home.network.mainnet');
+          const networkLabel = network === 'regtest'
+            ? t('home.network.regtest')
+            : network === 'signet'
+              ? t('home.network.signet')
+              : t('home.network.mainnet');
           return kind === 'payment'
             ? t('receive.bitcoin.explain', { network: networkLabel })
             : t('receive.ordinals.explain', { network: networkLabel });
@@ -195,7 +198,7 @@ export function Receive(props: {
             alt={t('receive.qr.alt')}
             errorText={t('receive.qr.tooLong')}
           />
-          <div className={styles['address']}>{address}</div>
+          <div className={styles['address']} data-testid="receive-address">{address}</div>
           <CopyButton value={address} kind="address" label={t('receive.copyAddress')} />
 
           {kind === 'payment' ? (

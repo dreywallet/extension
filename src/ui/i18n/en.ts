@@ -206,6 +206,7 @@ export const en = {
   'home.recentActivity': 'Recent activity',
   'home.network.mainnet': 'Mainnet',
   'home.network.signet': 'Signet',
+  'home.network.regtest': 'Regtest',
   'home.wrongLaneOne': 'Drey found 1 coin holding a collectible at a Bitcoin address.',
   'home.wrongLane': 'Drey found {count} coins holding collectibles at Bitcoin addresses.',
   'home.wrongLane.review': 'Review coins',
@@ -256,6 +257,11 @@ export const en = {
   'send.fee.degraded': 'Recommended fee rates are unavailable. Enter a custom rate to try anyway; it may be rejected by the network or take a long time to confirm.',
   'send.review': 'Review transaction',
   'send.review.title': 'Review transaction',
+  'send.review.speedUp.title': 'Review speed-up',
+  'send.review.rbf.explanation':
+    'The recipient and amount stay the same. Drey replaces the pending transaction with a higher-fee version.',
+  'send.review.cpfp.explanation':
+    'The recipient and amount stay the same. Drey adds a follow-up transaction with a network fee to help both confirm sooner.',
   'send.review.amount': 'Sending',
   'send.review.fee': 'Fee',
   'send.review.total': 'Total',
@@ -269,6 +275,7 @@ export const en = {
   'send.review.reauth.highRelativeFee': 'The network fee is more than 10% of the amount being sent.',
   'send.password': 'Confirm app password',
   'send.approve': 'Sign and broadcast',
+  'send.approve.speedUp': 'Sign and speed up',
   'send.result.title': 'Transaction submitted',
   'send.result.title.pending': 'Broadcast outcome unknown',
   'send.result.title.accepted': 'Transaction sent',
@@ -383,6 +390,8 @@ export const en = {
   'approval.community.title': 'Approve community purchase?',
   'approval.community.saleTitle': 'Approve this OMB sale?',
   'approval.community.offerTitle': 'Fund this OMB offer?',
+  'approval.community.positionBuyerTitle': 'Buy this complete position?',
+  'approval.community.positionOwnerTitle': 'Approve this position transfer?',
   'approval.community.summary': 'Your Community Vault approval',
   'approval.community.body':
     'You are funding {units}% of this OMB. Drey signs only your exact inputs, and nothing is broadcast.',
@@ -390,6 +399,10 @@ export const en = {
     'You own {units}% of this OMB. Drey signs all your units once, pays every owner directly, and does not broadcast.',
   'approval.community.offerBody':
     'Drey authorizes only the clean BTC inputs shown. Every owner is paid directly, and nothing broadcasts here.',
+  'approval.community.positionBuyerBody':
+    'You are buying the seller’s complete {units}% position. The payment, fee, new owner keys, and new vault are fixed.',
+  'approval.community.positionOwnerBody':
+    'You are approving one complete {units}% position moving to a new owner. The seller is paid in the same transaction.',
   'approval.transaction.description':
     'Verify every output and fee before signing this transaction.',
   'approval.send.title': 'Send bitcoin?',
@@ -662,7 +675,7 @@ export const en = {
 
   'activity.confirmed': 'Confirmed',
   'activity.title': 'Transaction activity',
-  'activity.bestNext.title': 'Best next action',
+  'activity.bestNext.title': 'Want it confirmed sooner?',
   'activity.bestNext.unavailable': 'No safe fee-bump is available for this transaction.',
   'activity.openDetails': 'Opens transaction details in Drey.',
   'activity.detail.context': 'Details',
@@ -687,8 +700,10 @@ export const en = {
   'activity.fee': '{fee} sats network fee',
   'activity.feeDisplay': '{fee} network fee',
   'activity.units': 'Display amount unit',
-  'activity.speedUp.rbf': 'Speed up with RBF',
-  'activity.speedUp.cpfp': 'Speed up with CPFP',
+  'activity.speedUp.rbf': 'Speed up transaction',
+  'activity.speedUp.cpfp': 'Speed up transaction',
+  'activity.speedUp.explanation':
+    'Your recipient and amount stay unchanged. You’ll review the new network fee before signing.',
   'activity.pendingSafety':
     'Use Drey’s in-app Speed Up controls or wait for confirmation. Drey support will never ask for your recovery words or tell you to enter them on a website.',
   'activity.status.pending': 'Pending broadcast',

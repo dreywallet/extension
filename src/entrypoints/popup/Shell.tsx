@@ -1,6 +1,7 @@
-import { lazy, Suspense, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import { useI18n } from '../../ui/i18n';
 import { useGatewayStatus } from '../../ui/hooks/use-gateway-status';
+import { clearGalleryDataStore } from '../../ui/hooks/use-gallery-data';
 import { useRpc } from '../../ui/hooks/use-rpc';
 import type { SessionView } from '../../ui/hooks/use-session';
 import { GatewayBadge } from '../../ui/components/GatewayBadge';
@@ -44,9 +45,16 @@ export function Shell(props: {
   const [receiveKind, setReceiveKind] = useState<'payment' | 'ordinals'>('payment');
   const [ordinalAction, setOrdinalAction] = useState<OrdinalActionDraft | null>(null);
   const [targetInscriptionId, setTargetInscriptionId] = useState<string | null>(null);
+  const [synchronizeGalleryOnMount, setSynchronizeGalleryOnMount] = useState(false);
   const surface = props.surface ?? 'popup';
   const persistent = isPersistentSurface(surface);
   const gateway = useGatewayStatus({ persistent });
+
+  useEffect(() => {
+    if (overlay === 'none' && destination === 'ordinals' && synchronizeGalleryOnMount) {
+      setSynchronizeGalleryOnMount(false);
+    }
+  }, [destination, overlay, synchronizeGalleryOnMount]);
 
   const destinations: { id: Destination; icon: PopupIconName; label: string }[] = [
     { id: 'bitcoin', icon: 'bitcoin', label: t('nav.bitcoin') },
@@ -135,6 +143,17 @@ export function Shell(props: {
                 initialOrdinalAction={ordinalAction}
                 compact
                 onOpenAddressBook={() => openFullpage(FULLPAGE_HASH.addressBook)}
+                onOrdinalDone={() => {
+                  // A lazy raster batch may have started during the action
+                  // click before React unmounted Gallery. Clear again at the
+                  // result boundary so that late paint cannot repopulate the
+                  // pre-transaction location.
+                  clearGalleryDataStore();
+                  setSynchronizeGalleryOnMount(true);
+                  setOrdinalAction(null);
+                  setOverlay('none');
+                  setDestination('ordinals');
+                }}
                 onNavigate={(section) => {
                   if (section !== 'send') openFullpage(transactionFullpageHash(section));
                 }}
@@ -183,11 +202,17 @@ export function Shell(props: {
                 account={props.session.activeAccount}
                 accountId={props.session.activeAccountId}
                 continuous={!persistent}
+                synchronizeOnMount={synchronizeGalleryOnMount}
                 onReceive={() => {
                   setReceiveKind('ordinals');
                   setOverlay('receive');
                 }}
                 onOrdinalAction={(draft) => {
+                  // The Gallery unmounts behind the transaction surface, so
+                  // it cannot hear the wallet-data event emitted on broadcast.
+                  // Drop its verified paint now; Done returns to a fresh scan
+                  // instead of briefly showing the pre-transaction location.
+                  clearGalleryDataStore();
                   setOrdinalAction(draft);
                   setOverlay('send');
                 }}

@@ -21,6 +21,7 @@ import { feeForVsize } from '@drey/core/domain/transactions/fees';
 import { base64ToBytes } from '@drey/core/domain/vault/encoding';
 import { installTestCryptoProvider } from '../helpers/install-crypto-provider';
 import { makeHarness } from './service-helpers';
+import { reconcileTrackedTransactionStatus } from '../../src/background/wallet-service';
 
 const fixtures = join(coreFixturesDir, 'gateway');
 const status = statusCapabilitiesSchema.parse(
@@ -85,6 +86,7 @@ async function setupWallet(options: {
     classifiedTip: status.coreTip,
     classificationRevision: status.activeRevision,
   };
+  const pendingTransactionIds = new Set<string>();
   const gateway = {
     endpoint: 'http://fixture-gateway',
     fetchStatus: async () => ({ ok: true as const, status, verifiedAtMs: now }),
@@ -94,16 +96,47 @@ async function setupWallet(options: {
       value: { ...status, classifications: [classification], unknownOutpoints: [] },
       verifiedAtMs: now,
     }),
-    broadcastTransaction: async (request: { txid: string }) => ({
+    fetchSnapshot: async (request: { scriptHashes: string[] }) => ({
       ok: true as const,
       value: {
         ...status,
-        submittedTxid: request.txid,
-        status: 'accepted' as const,
-        txid: request.txid,
-        errorCode: null,
-        detail: null,
+        requestedScriptHashes: request.scriptHashes,
+        activeScriptHashes: request.scriptHashes,
+        historyCoverage: { status: 'complete' as const, limitedScriptHashes: [] },
+        utxos: [],
+        history: [...pendingTransactionIds].map((txid) => ({
+          txid,
+          height: null,
+          timestamp: null,
+          fundedScriptHashes: [],
+          spentScriptHashes: request.scriptHashes,
+          deltaSats: '-1',
+          replacesTxid: null,
+          replacedByTxid: null,
+          confirmationState: 'mempool' as const,
+          feeSats: '1',
+          vsize: 1,
+          replaceable: true,
+          packageFeeSats: '1',
+          packageVsize: 1,
+          cpfpEligible: false,
+        })),
       },
+      verifiedAtMs: now,
+    }),
+    broadcastTransaction: async (request: { txid: string }) => ({
+      ok: true as const,
+      value: (() => {
+        pendingTransactionIds.add(request.txid);
+        return {
+          ...status,
+          submittedTxid: request.txid,
+          status: 'accepted' as const,
+          txid: request.txid,
+          errorCode: null,
+          detail: null,
+        };
+      })(),
       verifiedAtMs: now,
     }),
   } as unknown as GatewayClient;
@@ -168,7 +201,27 @@ async function setupWallet(options: {
     now,
   ));
   dek.fill(0);
-  return { harness, cache, vaultId, expectation, recipient, walletUtxo, now };
+  return {
+    harness, cache, vaultId, expectation, recipient, walletUtxo, now,
+    pendingTransactionIds,
+  };
+}
+
+async function replaceCachedUtxos(
+  setup: Awaited<ReturnType<typeof setupWallet>>,
+  utxos: WalletUtxo[],
+) {
+  const session = await getSession(setup.harness.session);
+  if (!session) throw new Error('missing session');
+  const dek = base64ToBytes(session.dekB64);
+  await setup.cache.put(sealRecord(
+    dek,
+    utxos,
+    { vaultId: setup.vaultId, network: 'signet', type: 'utxos', key: 'a0:payment' },
+    new Uint8Array(24).fill(4),
+    setup.now,
+  ));
+  dek.fill(0);
 }
 
 async function seedCpfpHistory(
@@ -313,6 +366,77 @@ describe('transaction fee recovery arithmetic', () => {
     expect(replacement.review.feeSats).toBe(String(
       BigInt(original.review.feeSats) + feeForVsize(replacementVsize, 1_000n),
     ));
+  });
+
+  it('replaces a pending wallet transaction after its spent inputs leave the UTXO snapshot', async () => {
+    const setup = await setupWallet({ quote: quoteAt(2_000, 1_000) });
+    const original = await setup.harness.service.createTransactionPlan({
+      kind: 'native_send',
+      account: 0,
+      recipient: setup.recipient.address,
+      amountSats: '50000',
+      sendMax: false,
+      fee: { type: 'custom', rateSatPerVb: '1' },
+      ...setup.expectation,
+    });
+    const accepted = await setup.harness.service.approveTransaction({
+      planId: original.planId,
+      planHash: original.planHash,
+      ...setup.expectation,
+    });
+    if (!accepted.txid) throw new Error('missing accepted transaction id');
+
+    await replaceCachedUtxos(setup, []);
+
+    const replacement = await setup.harness.service.createTransactionPlan({
+      kind: 'rbf',
+      account: 0,
+      txid: accepted.txid,
+      fee: { type: 'custom', rateSatPerVb: '2' },
+      ...setup.expectation,
+    });
+    expect(replacement.review.recipients).toEqual(original.review.recipients);
+    expect(replacement.review.inputs).toEqual(original.review.inputs);
+    expect(BigInt(replacement.review.feeSats)).toBeGreaterThan(BigInt(original.review.feeSats));
+
+    const replaced = await setup.harness.service.approveTransaction({
+      planId: replacement.planId,
+      planHash: replacement.planHash,
+      ...setup.expectation,
+    });
+    expect(replaced.status).toBe('accepted');
+    expect(reconcileTrackedTransactionStatus('accepted', 'mempool', true)).toBe('replaced');
+    expect(reconcileTrackedTransactionStatus('accepted', 'confirmed', true)).toBe('confirmed');
+    expect(reconcileTrackedTransactionStatus('accepted', 'mempool', false)).toBe('accepted');
+  });
+
+  it('fails closed when fresh signed history no longer reports the parent as pending', async () => {
+    const setup = await setupWallet({ quote: quoteAt(2_000, 1_000) });
+    const original = await setup.harness.service.createTransactionPlan({
+      kind: 'native_send',
+      account: 0,
+      recipient: setup.recipient.address,
+      amountSats: '50000',
+      sendMax: false,
+      fee: { type: 'custom', rateSatPerVb: '1' },
+      ...setup.expectation,
+    });
+    const accepted = await setup.harness.service.approveTransaction({
+      planId: original.planId,
+      planHash: original.planHash,
+      ...setup.expectation,
+    });
+    if (!accepted.txid) throw new Error('missing accepted transaction id');
+    setup.pendingTransactionIds.clear();
+    await replaceCachedUtxos(setup, []);
+
+    await expect(setup.harness.service.createTransactionPlan({
+      kind: 'rbf',
+      account: 0,
+      txid: accepted.txid,
+      fee: { type: 'custom', rateSatPerVb: '2' },
+      ...setup.expectation,
+    })).rejects.toMatchObject({ code: 'ERR_NOT_ACCELERATABLE' });
   });
 
   it('uses exact sub-sat sat/kvB input when calculating UTXO effective value', async () => {

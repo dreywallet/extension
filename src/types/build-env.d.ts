@@ -9,8 +9,10 @@ declare const __EXTENSION_VERSION__: string;
 declare const __LIVE_GATEWAY_ENABLED__: boolean;
 declare const __GATEWAY_URL__: string;
 declare const __GATEWAY_PUBKEY_HEX__: string;
-declare const __GATEWAY_NETWORK__: 'mainnet' | 'signet';
+declare const __GATEWAY_NETWORK__: 'mainnet' | 'signet' | 'regtest';
 declare const __GATEWAY_PROTOCOL_VERSIONS__: readonly (1 | 2)[];
+/** Empty outside local regtest builds, so packaged channels contain no loopback explorer. */
+declare const __REGTEST_EXPLORER_ORIGIN__: string;
 /** True only on channels with a pinned manifest key (stable WebAuthn RP identity). */
 declare const __PASSKEY_ENROLLMENT_ENABLED__: boolean;
 /**

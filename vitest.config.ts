@@ -12,6 +12,7 @@ export default defineConfig({
   esbuild: { jsx: 'automatic' },
   define: {
     __EXTENSION_VERSION__: JSON.stringify(extensionVersion.version),
+    __REGTEST_EXPLORER_ORIGIN__: JSON.stringify('http://127.0.0.1:18481'),
     // Unit/UI tests exercise the passkey-capable path; channel gating itself
     // is covered by tests/build/channel.test.ts against resolveBuildChannel.
     __PASSKEY_ENROLLMENT_ENABLED__: JSON.stringify(true),

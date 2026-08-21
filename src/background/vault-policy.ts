@@ -99,13 +99,17 @@ export const VAULT_STANDALONE_TOOL_DIGEST_UNPUBLISHED = '00'.repeat(32);
  * and exact sale signing. v0.14.1 records its recovery release and stabilizes
  * slow cryptographic drills. v0.14.2 reissues the release under the required
  * annotated private tag and stabilizes the remaining long acquisition drill.
- * v0.14.4 adds the buyer offer provider handshake; none of these patches change
- * the standalone personal Vault recovery artifact.
+ * v0.14.4 adds the buyer offer provider handshake. v0.15.1 adds complete-position
+ * Community Vault transfers and their provider review envelope. v0.16.0 adds
+ * regtest to the shared network and Vault signing boundaries, changing both
+ * the reviewed source and standalone personal Vault recovery artifact. v0.16.1
+ * keeps that artifact byte-identical while binding its source to the activity
+ * replacement projection fix.
  */
 export const VAULT_STANDALONE_TOOL_RELEASE = Object.freeze({
-  coreTag: 'v0.14.4',
-  sourceDigest: '2983f204dea066f1a37f82265b5ac7d7bdeabcded94dc4665a6de6bd8a4359a3',
-  artifactDigest: 'e9b46a159b22b7d1498ecc421cc621f4e0f5b20b76ec94d0272f1b4f2f82faaa',
+  coreTag: 'v0.16.1',
+  sourceDigest: 'e355e335de453e6b4a5f9660e3c7696ded4a1e872ea6ab039a0ceb4fa9a7721a',
+  artifactDigest: '55e2d13c09f7a16ff9db416633079dbc78aad071f7f70a85c1d72a589023d86c',
 });
 
 /**
@@ -203,6 +207,7 @@ export function composeVaultPolicyRecord(
  */
 export function summarizeVaultPolicy(record: VaultPolicyRecordV1): VaultCoordinatorPolicySummary {
   const { identity, metadata } = record;
+  if (identity.network === 'regtest') throw new Error('regtest Vault coordinator is disabled');
   const first = deriveVaultOutput(identity, 'receive', 0);
   return {
     policyId: identity.policyId,

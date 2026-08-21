@@ -32,7 +32,7 @@ export const test = base.extend<TestFixtures>({
     if (browserName !== 'chromium') throw new Error(`Extension E2E requires Chromium, received ${browserName}`);
     await access(path.join(EXTENSION_PATH, 'manifest.json')).catch(() => {
       throw new Error(
-        `Missing ${path.join(EXTENSION_PATH, 'manifest.json')}. Run the test-channel build before Playwright.`,
+        `Missing ${path.join(EXTENSION_PATH, 'manifest.json')}. Build the requested extension channel before Playwright.`,
       );
     });
     const profile = await mkdtemp(path.join(os.tmpdir(), 'drey-e2e-profile-'));

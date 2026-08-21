@@ -105,6 +105,9 @@ export default defineConfig({
         __GATEWAY_PUBKEY_HEX__: JSON.stringify(channel.gatewayPublicKeyHex),
         __GATEWAY_NETWORK__: JSON.stringify(channel.network),
         __GATEWAY_PROTOCOL_VERSIONS__: JSON.stringify(channel.gatewayProtocolVersions),
+        __REGTEST_EXPLORER_ORIGIN__: JSON.stringify(
+          channel.network === 'regtest' ? 'http://127.0.0.1:18481' : '',
+        ),
         __PASSKEY_ENROLLMENT_ENABLED__: JSON.stringify(channel.passkeyEnrollmentEnabled),
         __VAULT_COORDINATOR_ENABLED__: JSON.stringify(channel.vaultCoordinatorEnabled),
         __VAULT_COORDINATOR_MOVEMENT__: JSON.stringify(

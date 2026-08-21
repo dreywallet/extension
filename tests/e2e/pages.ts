@@ -73,24 +73,39 @@ export class OnboardingPage {
     }
   }
 
-  async restorePublicFixture(args: { mnemonic: string; password: string; name?: string }): Promise<void> {
+  async restorePublicFixture(args: {
+    mnemonic: string;
+    password: string;
+    name?: string;
+    passphrase?: string;
+  }): Promise<void> {
     await this.beginRestorePublicFixture(args);
     await this.finishRestoreScan();
   }
 
-  async beginRestorePublicFixture(args: { mnemonic: string; password: string; name?: string }): Promise<void> {
+  async beginRestorePublicFixture(args: {
+    mnemonic: string;
+    password: string;
+    name?: string;
+    passphrase?: string;
+  }): Promise<void> {
     await this.page.getByRole('button', { name: /Restore a wallet/u }).click();
     await fillPrivate(this.page.getByLabel('Word 1', { exact: true }), args.mnemonic);
+    if (args.passphrase !== undefined) {
+      await this.page.getByText('BIP39 passphrase (advanced, optional)').click();
+      await fillPrivate(this.page.getByLabel('Passphrase', { exact: true }), args.passphrase);
+    }
     await this.page.getByRole('button', { name: 'Continue' }).click();
     await this.page.getByLabel('Wallet name').fill(args.name ?? 'Public signet fixture');
     await fillPrivate(this.page.getByLabel('App password', { exact: true }), args.password);
-    await fillPrivate(this.page.getByLabel('Confirm app password'), args.password);
+    const confirmation = this.page.getByLabel('Confirm app password');
+    if (await confirmation.count() > 0) await fillPrivate(confirmation, args.password);
     await this.page.getByRole('button', { name: 'Continue' }).click();
     await expect(this.page.getByRole('heading', { name: 'Account scan' })).toBeVisible();
   }
 
-  async finishRestoreScan(): Promise<void> {
-    await expect(this.page.getByText('Scan complete.')).toBeVisible({ timeout: 45_000 });
+  async finishRestoreScan(timeout = 45_000): Promise<void> {
+    await expect(this.page.getByText('Scan complete.')).toBeVisible({ timeout });
     await this.page.getByRole('button', { name: 'Continue' }).click();
     await this.skipOptionalPasskeyOffer();
     await expect(this.page.getByRole('heading', { name: 'Your wallet is ready' })).toBeVisible();

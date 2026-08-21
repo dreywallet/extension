@@ -1,6 +1,5 @@
 import { useMemo, type ReactNode } from 'react';
 import type { WalletHomeResult } from '@drey/core/messaging/ops';
-import { mempoolTransactionUrl } from '@drey/core/domain/explorer';
 import { satsToBtcDecimal } from '@drey/core/domain/sats';
 import type { OpResult } from '../../adapters/rpc-client';
 import { Button } from '../../ui/components/Button';
@@ -13,6 +12,8 @@ import type {
   ActivityItem,
   ActivityPresentation,
 } from '../../ui/activity/activity-presentation';
+import { transactionExplorerUrl } from '../../ui/activity/explorer';
+import { authoritativeActivityStatus } from '../../ui/activity/activity-presentation';
 import { useI18n } from '../../ui/i18n';
 import type { ActiveSessionExpectation } from '../../ui/hooks/use-session';
 import { useActivityUnit, usePortfolioPrivacy } from '../../ui/UiRoot';
@@ -91,7 +92,7 @@ export function ActivitySection(props: {
   accountId: string;
   activity: WalletHomeResult['activity'] | null;
   transactions: Transaction[];
-  network: 'mainnet' | 'signet' | null;
+  network: 'mainnet' | 'signet' | 'regtest' | null;
   loadState: LoadState;
   hasMore: boolean;
   loadingOlder: boolean;
@@ -131,9 +132,10 @@ export function ActivitySection(props: {
   const decorate = (item: ActivityItem): ActivityDecoration => {
     const transaction = tracked.get(item.txid);
     if (transaction === undefined) return {};
-    const danger = transaction.status === 'rejected' || transaction.status === 'conflicted';
+    const status = authoritativeActivityStatus(item.confirmationState, transaction.status);
+    const danger = status === 'rejected' || status === 'conflicted';
     return {
-      state: statusText(transaction.status, t),
+      state: statusText(status, t),
       tone: danger ? 'danger' : transaction.recovering ? 'warning' : 'muted',
       attention: transaction.recovering ? t('activity.recovering') : null,
     };
@@ -141,13 +143,16 @@ export function ActivitySection(props: {
 
   const renderDetails = (item: ActivityItem, presentation: ActivityPresentation): ReactNode => {
     const transaction = tracked.get(item.txid);
-    const state = transaction === undefined ? presentation.state : statusText(transaction.status, t);
+    const trackedStatus = transaction === undefined
+      ? null
+      : authoritativeActivityStatus(item.confirmationState, transaction.status);
+    const state = trackedStatus === null ? presentation.state : statusText(trackedStatus, t);
     const context = exactContext(item, presentation, t);
     const unidentifiedOrdinalsContext = hasUnidentifiedOrdinalsContext(item);
     const accelerate = transaction?.recommendedAcceleration ?? null;
-    const trailStatus = transaction === undefined
+    const trailStatus = trackedStatus === null
       ? item.confirmationState
-      : blockTrailStatus(transaction.status) ?? item.confirmationState;
+      : blockTrailStatus(trackedStatus) ?? item.confirmationState;
     return (
       <div className={sectionStyles['detailBody']}>
         <BlockTrail
@@ -202,6 +207,7 @@ export function ActivitySection(props: {
         {accelerate !== null ? (
           <div className={sectionStyles['actions']}>
             <strong>{t('activity.bestNext.title')}</strong>
+            <p className={styles['advisory']}>{t('activity.speedUp.explanation')}</p>
             <Button variant="secondary" onClick={() => props.onAccelerate(accelerate, item.txid)}>
               {t(accelerate === 'rbf' ? 'activity.speedUp.rbf' : 'activity.speedUp.cpfp')}
             </Button>
@@ -213,7 +219,7 @@ export function ActivitySection(props: {
         {props.network === null ? null : (
           <a
             className={sectionStyles['explorer']}
-            href={mempoolTransactionUrl(props.network, item.txid)}
+            href={transactionExplorerUrl(props.network, item.txid)}
             target="_blank"
             rel="noopener noreferrer"
             aria-label={t('activity.viewExplorer')}
@@ -265,6 +271,7 @@ export function ActivitySection(props: {
       {accelerate !== null ? (
         <div className={sectionStyles['actions']}>
           <strong>{t('activity.bestNext.title')}</strong>
+          <p className={styles['advisory']}>{t('activity.speedUp.explanation')}</p>
           <Button variant="secondary" onClick={() => props.onAccelerate(accelerate, transaction.txid)}>
             {t(accelerate === 'rbf' ? 'activity.speedUp.rbf' : 'activity.speedUp.cpfp')}
           </Button>
@@ -276,7 +283,7 @@ export function ActivitySection(props: {
       {props.network === null ? null : (
         <a
           className={sectionStyles['explorer']}
-          href={mempoolTransactionUrl(props.network, transaction.txid)}
+          href={transactionExplorerUrl(props.network, transaction.txid)}
           target="_blank"
           rel="noopener noreferrer"
           aria-label={t('activity.viewExplorer')}

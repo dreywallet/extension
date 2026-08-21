@@ -104,6 +104,7 @@ export function summarizeVaultPlan(
   plan: VaultUnsignedPlanV1,
   destinationAddress: string,
 ): VaultCoordinatorPlanSummary {
+  if (plan.network === 'regtest') throw new Error('regtest Vault coordinator is disabled');
   return {
     planId: plan.planId,
     planDigest: plan.planDigest,

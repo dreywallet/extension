@@ -240,6 +240,92 @@ describe('provider approval window', () => {
     expect(screen.queryByText(/broadcast transaction/iu)).toBeNull();
   });
 
+  it('shows a complete-position transfer without marketplace language', async () => {
+    let listener: ((message: unknown) => void) | null = null;
+    const port = {
+      postMessage: vi.fn(), disconnect: vi.fn(),
+      onMessage: {
+        addListener: (next: (message: unknown) => void) => { listener = next; },
+        removeListener: vi.fn(),
+      },
+      onDisconnect: { addListener: vi.fn(), removeListener: vi.fn() },
+    };
+    (globalThis as { chrome?: unknown }).chrome = { runtime: { connect: () => port } };
+    renderApproval();
+    (listener as unknown as (message: unknown) => void)({
+      type: 'drey:approval:snapshot', protocolVersion: 1,
+      request: {
+        requestNonce: '123e4567-e89b-42d3-a456-426614174134', method: 'signPsbt',
+        origin: 'https://ordinalmaxibiz.wiki', unicodeOrigin: 'https://ordinalmaxibiz.wiki',
+        warnings: [], createdAt: 1, expiresAt: 300_001, approveAfter: 1,
+        review: transactionReview({
+          network: 'mainnet', feeSats: '2000', walletInputSats: '0', walletOutputSats: '0',
+          externalOutputSats: '111000', netWalletDebitSats: '0', economicClaims: [],
+        }),
+        details: {
+          security: { requiresAdvanced: false, protectedValueExposedToFees: '0' },
+          inputs: [], outputs: [],
+          communityVaultPositionTransfer: {
+            role: 'owner', campaignId: 'campaign-1', transferId: 'transfer-1',
+            units: Array.from({ length: 20 }, (_, index) => index + 20),
+            sellerPriceSats: '100000', buyerTotalSats: '102000', settlementFeeSats: '2000',
+          },
+        },
+        requiresPassword: true, confirmationPhrase: null, approvalError: null,
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: 'Approve this position transfer?' }))
+      .toBeInTheDocument();
+    expect(screen.getByText(/complete 20% position/iu)).toBeInTheDocument();
+    expect(screen.getByText(/seller is paid in the same transaction/iu)).toBeInTheDocument();
+    expect(screen.queryByText(/marketplace/iu)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Sign transaction' })).toBeDisabled();
+  });
+
+  it('shows the buyer one complete-position purchase and no password field', async () => {
+    let listener: ((message: unknown) => void) | null = null;
+    const port = {
+      postMessage: vi.fn(), disconnect: vi.fn(),
+      onMessage: {
+        addListener: (next: (message: unknown) => void) => { listener = next; },
+        removeListener: vi.fn(),
+      },
+      onDisconnect: { addListener: vi.fn(), removeListener: vi.fn() },
+    };
+    (globalThis as { chrome?: unknown }).chrome = { runtime: { connect: () => port } };
+    renderApproval();
+    (listener as unknown as (message: unknown) => void)({
+      type: 'drey:approval:snapshot', protocolVersion: 1,
+      request: {
+        requestNonce: '123e4567-e89b-42d3-a456-426614174135', method: 'signPsbt',
+        origin: 'https://ordinalmaxibiz.wiki', unicodeOrigin: 'https://ordinalmaxibiz.wiki',
+        warnings: [], createdAt: 1, expiresAt: 300_001, approveAfter: 1,
+        review: transactionReview({
+          network: 'mainnet', feeSats: '2000', walletInputSats: '103000', walletOutputSats: '1000',
+          externalOutputSats: '111000', netWalletDebitSats: '102000',
+          economicClaims: [{ kind: 'buyer_total', valueSats: '102000' }],
+        }),
+        details: {
+          security: { requiresAdvanced: false, protectedValueExposedToFees: '0' },
+          inputs: [], outputs: [],
+          communityVaultPositionTransfer: {
+            role: 'buyer', campaignId: 'campaign-1', transferId: 'transfer-1',
+            units: Array.from({ length: 20 }, (_, index) => index + 20),
+            sellerPriceSats: '100000', buyerTotalSats: '102000', settlementFeeSats: '2000',
+          },
+        },
+        requiresPassword: false, confirmationPhrase: null, approvalError: null,
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: 'Buy this complete position?' }))
+      .toBeInTheDocument();
+    expect(screen.getByText(/buying the seller’s complete 20% position/iu)).toBeInTheDocument();
+    expect(screen.getByText('102,000 sats')).toBeInTheDocument();
+    expect(screen.queryByLabelText('App password')).toBeNull();
+  });
+
   it('reprices a transfer without executing it from a React effect', async () => {
     const posted: unknown[] = [];
     let listener: ((message: unknown) => void) | null = null;

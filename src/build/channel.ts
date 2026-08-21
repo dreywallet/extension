@@ -8,6 +8,7 @@ export const BUILD_MODES = ['development', 'test', 'preview', 'pilot', 'producti
 export type BuildChannel = (typeof BUILD_MODES)[number];
 
 export interface BuildEnvironment {
+  DREY_REGTEST_GATEWAY_PUBLIC_KEY_HEX?: string;
   DREY_PREVIEW_GATEWAY_ORIGIN?: string;
   DREY_PREVIEW_GATEWAY_PUBLIC_KEY_HEX?: string;
   DREY_PREVIEW_MANIFEST_PUBLIC_KEY?: string;
@@ -18,7 +19,7 @@ export interface BuildChannelConfiguration {
   channel: BuildChannel;
   name: string;
   description: string;
-  network: 'mainnet' | 'signet';
+  network: 'mainnet' | 'signet' | 'regtest';
   gatewayOrigin: string;
   gatewayPublicKeyHex: string;
   gatewayProtocolVersions: readonly (1 | 2)[];
@@ -88,7 +89,7 @@ export const PRODUCTION_STORE_ITEM_ID = 'kngidlmmbfmnoeimngkajdlbdenlhgof';
  */
 export const PILOT_GATEWAY_PUBLIC_KEY_HEX =
   'eac4a676a0440c4da3909190dcd93f5a42d6291279bb8db9f0841891dec0cb7c';
-export const LOOPBACK_GATEWAY_ORIGIN = 'http://127.0.0.1:8080';
+export const LOOPBACK_GATEWAY_ORIGIN = 'http://127.0.0.1:18480';
 export const TEST_LOOPBACK_GATEWAY_ORIGIN = 'http://127.0.0.1:18080';
 
 // Same Ed25519 public key as tests/fixtures/gateway/dev-public-key.json. It is
@@ -163,6 +164,14 @@ function previewGatewayKey(environment: BuildEnvironment): string {
   return value;
 }
 
+function regtestGatewayKey(environment: BuildEnvironment): string {
+  const value = environment.DREY_REGTEST_GATEWAY_PUBLIC_KEY_HEX?.trim().toLowerCase();
+  if (value === undefined || !/^[0-9a-f]{64}$/u.test(value)) {
+    throw new Error('development build requires DREY_REGTEST_GATEWAY_PUBLIC_KEY_HEX from the local regtest stack');
+  }
+  return value;
+}
+
 function previewManifestKey(environment: BuildEnvironment): string {
   const value = required(environment, 'DREY_PREVIEW_MANIFEST_PUBLIC_KEY');
   if (value === TEST_MANIFEST_PUBLIC_KEY) {
@@ -190,9 +199,9 @@ export function resolveBuildChannel(
         channel: mode,
         name: 'Drey',
         description: 'Non-custodial Bitcoin and Ordinals wallet',
-        network: 'signet',
+        network: 'regtest',
         gatewayOrigin: LOOPBACK_GATEWAY_ORIGIN,
-        gatewayPublicKeyHex: PUBLIC_FIXTURE_GATEWAY_KEY_HEX,
+        gatewayPublicKeyHex: regtestGatewayKey(environment),
         gatewayProtocolVersions: [1, 2],
         liveGatewayEnabled: true,
         productionPackagingEnabled: false,
@@ -200,8 +209,8 @@ export function resolveBuildChannel(
         syntheticPreviewAudit: false,
         disposableMainnetPilot: false,
         passkeyEnrollmentEnabled: false,
-        vaultCoordinatorEnabled: true,
-        vaultCoordinatorMovement: 'full',
+        vaultCoordinatorEnabled: false,
+        vaultCoordinatorMovement: null,
         icons: PRODUCTION_ICONS,
       };
     case 'test':

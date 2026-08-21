@@ -249,7 +249,12 @@ export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {})
     typeof details['communityVaultSaleBuyer'] === 'object'
     ? details['communityVaultSaleBuyer'] as Record<string, unknown>
     : null;
-  const communityReview = communitySaleBuyer ?? communitySale ?? community;
+  const communityPositionTransfer = details?.['communityVaultPositionTransfer'] &&
+    typeof details['communityVaultPositionTransfer'] === 'object'
+    ? details['communityVaultPositionTransfer'] as Record<string, unknown>
+    : null;
+  const positionTransferBuyer = communityPositionTransfer?.['role'] === 'buyer';
+  const communityReview = communityPositionTransfer ?? communitySaleBuyer ?? communitySale ?? community;
   const communityUnits = Array.isArray(communityReview?.['units'])
     ? communityReview['units'].filter((unit): unit is number =>
         typeof unit === 'number' && Number.isInteger(unit) && unit >= 0 && unit <= 99)
@@ -307,7 +312,11 @@ export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {})
       <header className={styles['requestHeader']}>
         <p className={styles['eyebrow']}>{t('approval.eyebrow')}</p>
         <h1 ref={headingRef} tabIndex={-1} className={styles['requestTitle']}>
-          {communitySaleBuyer ? t('approval.community.offerTitle') :
+          {communityPositionTransfer
+            ? t(positionTransferBuyer
+              ? 'approval.community.positionBuyerTitle'
+              : 'approval.community.positionOwnerTitle') :
+            communitySaleBuyer ? t('approval.community.offerTitle') :
             communitySale ? t('approval.community.saleTitle') :
             community ? t('approval.community.title') :
             marketplace ? marketplaceTitle(marketplace['action'], t) : copy.title}
@@ -324,7 +333,11 @@ export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {})
       {review.kind === 'transaction' && communityReview ? (
         <section className={styles['transactionSummary']}>
           <h2>{t('approval.community.summary')}</h2>
-          <p>{communitySaleBuyer
+          <p>{communityPositionTransfer
+            ? t(positionTransferBuyer
+              ? 'approval.community.positionBuyerBody'
+              : 'approval.community.positionOwnerBody', { units: communityUnits.length })
+            : communitySaleBuyer
             ? t('approval.community.offerBody')
             : communitySale
               ? t('approval.community.saleBody', { units: communityUnits.length })

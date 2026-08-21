@@ -70,6 +70,16 @@ import {
   type CommunityVaultSaleProviderReviewV1,
 } from '@drey/core/domain/community-vault/sale-provider';
 import { COMMUNITY_VAULT_SALE_MAX_PREFLIGHT_AGE_MS } from '@drey/core/domain/community-vault/sale-contracts';
+import {
+  reviewCommunityVaultPositionTransferBuyerProviderRequest,
+  reviewCommunityVaultPositionTransferOwnerProviderRequest,
+  type CommunityVaultPositionTransferBuyerProviderContextV1,
+  type CommunityVaultPositionTransferOwnerProviderContextV1,
+  type CommunityVaultPositionTransferProviderReviewV1,
+} from '@drey/core/domain/community-vault/position-transfer-provider';
+import {
+  COMMUNITY_VAULT_POSITION_TRANSFER_MAX_PREFLIGHT_AGE_MS,
+} from '@drey/core/domain/community-vault/position-transfer-contracts';
 
 const CONNECTIONS_KEY = 'squirrel:provider:connections:v1';
 const REQUEST_TTL_MS = 5 * 60_000;
@@ -112,7 +122,7 @@ interface PendingApproval {
   expectedSessionId: string;
   expectedAccountId: string;
   expectedAccount: number;
-  expectedNetwork: 'mainnet' | 'signet';
+  expectedNetwork: 'mainnet' | 'signet' | 'regtest';
   approvalGeneration: number;
   contextGeneration: number;
   preparedPsbt?: ProviderPsbtPlanV3;
@@ -133,6 +143,11 @@ interface PendingApproval {
   communityVaultSaleBuyer?: {
     context: CommunityVaultSaleBuyerProviderContextV1;
     review: CommunityVaultSaleBuyerProviderReviewV1;
+  };
+  communityVaultPositionTransfer?: {
+    context: CommunityVaultPositionTransferBuyerProviderContextV1 |
+      CommunityVaultPositionTransferOwnerProviderContextV1;
+    review: CommunityVaultPositionTransferProviderReviewV1;
   };
   /** §21.1 flexible request without marketplace context; core analysis must prove the listing shape. */
   genericListingCandidate?: boolean;
@@ -172,6 +187,17 @@ function mapCategories(categories: readonly DataCategory[]): PermissionDataCateg
   return [...new Set(categories)].sort() as PermissionDataCategory[];
 }
 
+export function isPositionTransferBuyerReady(
+  owners: Awaited<ReturnType<WalletService['communityVaultStatus']>>['owners'],
+  review: CommunityVaultPositionTransferProviderReviewV1,
+): boolean {
+  return owners.some((owner) =>
+    owner.campaignId === review.campaignId &&
+    owner.ownerId === review.buyerOwnerId &&
+    owner.campaignRoot.campaignXpub === review.buyerCampaignXpub &&
+    owner.recoveryConfirmed);
+}
+
 function mapRequestedCategories(
   categories: ReadonlyArray<'account' | 'addresses' | 'balance' | 'inscriptions' | 'network'>,
 ): PermissionDataCategory[] {
@@ -179,7 +205,7 @@ function mapRequestedCategories(
     .sort() as PermissionDataCategory[];
 }
 
-function providerNetwork(network: 'mainnet' | 'signet'): 'Mainnet' | 'Signet' {
+function providerNetwork(network: 'mainnet' | 'signet' | 'regtest'): 'Mainnet' | 'Signet' {
   return network === 'mainnet' ? 'Mainnet' : 'Signet';
 }
 
@@ -294,7 +320,9 @@ export class ProviderController {
           throw new RpcError('ERR_UNSAFE_TRANSACTION', (error as Error).message);
         }
       }
-      const passwordRequired = pending.preparedPsbt?.requiresAdvanced === true || pending.communityVaultSale !== undefined;
+      const passwordRequired = pending.preparedPsbt?.requiresAdvanced === true ||
+        pending.communityVaultSale !== undefined ||
+        pending.communityVaultPositionTransfer?.review.role === 'owner';
       if (passwordRequired) {
         // Unreachable from the approval surface, which disables Approve until
         // both fields validate. A command that arrives without them did not come
@@ -606,6 +634,10 @@ export class ProviderController {
           communityVaultAcquisitionContext?: CommunityVaultAcquisitionProviderContextV1;
           communityVaultSaleContext?: CommunityVaultSaleProviderContextV1;
           communityVaultSaleBuyerContext?: CommunityVaultSaleBuyerProviderContextV1;
+          communityVaultPositionTransferOwnerContext?:
+            CommunityVaultPositionTransferOwnerProviderContextV1;
+          communityVaultPositionTransferBuyerContext?:
+            CommunityVaultPositionTransferBuyerProviderContextV1;
         };
         const candidate = inspectMarketplacePsbt(psbtParams.psbt);
         const selectedInputIndexes = psbtParams.signInputs
@@ -661,6 +693,46 @@ export class ProviderController {
           });
           pending.communityVaultSaleBuyer = {
             context: psbtParams.communityVaultSaleBuyerContext,
+            review,
+          };
+        }
+        if (psbtParams.communityVaultPositionTransferOwnerContext) {
+          if (selectedInputIndexes === undefined) {
+            throw new RpcError('ERR_INVALID_PAYLOAD', 'Community Vault position input is required');
+          }
+          const review = reviewCommunityVaultPositionTransferOwnerProviderRequest({
+            context: psbtParams.communityVaultPositionTransferOwnerContext,
+            psbtHex: bytesToHex(base64ToBytes(psbtParams.psbt)),
+            selectedInputIndexes,
+            nowMs: String(this.deps.now()),
+          });
+          pending.communityVaultPositionTransfer = {
+            context: psbtParams.communityVaultPositionTransferOwnerContext,
+            review,
+          };
+        }
+        if (psbtParams.communityVaultPositionTransferBuyerContext) {
+          if (selectedInputIndexes === undefined) {
+            throw new RpcError('ERR_INVALID_PAYLOAD', 'Community Vault buyer inputs are required');
+          }
+          const review = reviewCommunityVaultPositionTransferBuyerProviderRequest({
+            context: psbtParams.communityVaultPositionTransferBuyerContext,
+            psbtHex: bytesToHex(base64ToBytes(psbtParams.psbt)),
+            selectedInputIndexes,
+            nowMs: String(this.deps.now()),
+          });
+          const owners = await this.deps.service.communityVaultStatus({
+            expectedVaultId: pending.expectedVaultId,
+            expectedSessionId: pending.expectedSessionId,
+          });
+          if (!isPositionTransferBuyerReady(owners.owners, review)) {
+            throw new RpcError(
+              'ERR_UNSAFE_TRANSACTION',
+              'Community Vault buyer setup or recovery verification is missing',
+            );
+          }
+          pending.communityVaultPositionTransfer = {
+            context: psbtParams.communityVaultPositionTransferBuyerContext,
             review,
           };
         }
@@ -769,7 +841,11 @@ export class ProviderController {
         platform: 'web',
         methods: [...PROVIDER_METHODS],
         supports: ['WBIP001', 'WBIP004'],
-        capabilities: ['community-vault-v1', 'community-vault-offers-v1'],
+        capabilities: [
+          'community-vault-v1',
+          'community-vault-offers-v1',
+          'community-vault-position-transfer-v1',
+        ],
       };
     }
     const origin = state.authority.origin;
@@ -888,6 +964,23 @@ export class ProviderController {
           expectedSessionId: pending.expectedSessionId,
           password,
           policy: context.policy,
+          plan: context.plan.spendPlan,
+          psbtHex: pending.preparedPsbt.psbtHex,
+        });
+        return { psbt: bytesToBase64(hexToBytes(signed.psbtHex)) };
+      }
+      if (pending.communityVaultPositionTransfer?.review.role === 'owner') {
+        if (params.broadcast === true) {
+          throw new RpcError('ERR_UNSAFE_TRANSACTION', 'Community Vault approvals never broadcast');
+        }
+        if (!password) throw new RpcError('ERR_WRONG_PASSWORD', 'Community Vault password required');
+        const context = pending.communityVaultPositionTransfer.context;
+        const signed = await this.deps.service.communityVaultSign({
+          campaignId: context.currentPolicy.campaignId,
+          expectedVaultId: pending.expectedVaultId,
+          expectedSessionId: pending.expectedSessionId,
+          password,
+          policy: context.currentPolicy,
           plan: context.plan.spendPlan,
           psbtHex: pending.preparedPsbt.psbtHex,
         });
@@ -1059,6 +1152,11 @@ export class ProviderController {
                       kind: 'buyer_total' as const,
                       valueSats: pending.preparedPsbt.communityVaultSaleBuyer.buyerTotalSats,
                     }]
+                  : pending.preparedPsbt.communityVaultPositionTransfer?.role === 'buyer'
+                    ? [{
+                        kind: 'buyer_total' as const,
+                        valueSats: pending.preparedPsbt.communityVaultPositionTransfer.buyerTotalSats,
+                      }]
                 : []
             : [
                 ...(economics.totalSats === undefined
@@ -1229,6 +1327,10 @@ export class ProviderController {
               ...(pending.preparedPsbt.communityVaultSaleBuyer ? {
                 communityVaultSaleBuyer: pending.preparedPsbt.communityVaultSaleBuyer,
               } : {}),
+              ...(pending.preparedPsbt.communityVaultPositionTransfer ? {
+                communityVaultPositionTransfer:
+                  pending.preparedPsbt.communityVaultPositionTransfer,
+              } : {}),
             }
           : {
               account: pending.expectedAccount,
@@ -1260,7 +1362,9 @@ export class ProviderController {
                 flexible: pending.marketplace.resolution.flexible,
               } } : {}),
             },
-        requiresPassword: pending.preparedPsbt?.requiresAdvanced === true || pending.communityVaultSale !== undefined,
+        requiresPassword: pending.preparedPsbt?.requiresAdvanced === true ||
+          pending.communityVaultSale !== undefined ||
+          pending.communityVaultPositionTransfer?.review.role === 'owner',
         confirmationPhrase: pending.preparedPsbt?.requiresAdvanced === true ? 'SIGN PSBT' : null,
         approvalError: pending.approvalError ?? null,
       } : null,
@@ -1283,6 +1387,7 @@ export class ProviderController {
       const community = pending.communityVaultAcquisition;
       const sale = pending.communityVaultSale;
       const buyer = pending.communityVaultSaleBuyer;
+      const positionTransfer = pending.communityVaultPositionTransfer;
       return this.deps.service.providerPreparePsbt({
         psbtBase64: params.psbt,
         binding: { ...common, providerMethod: 'signPsbt' },
@@ -1331,6 +1436,26 @@ export class ProviderController {
             outputIndex: buyer.context.plan.spendPlan.ordinalRoute.outputIndex,
             outputOffset: BigInt(buyer.context.plan.spendPlan.ordinalRoute.outputOffsetSats),
             inscriptionId: buyer.context.plan.inscriptionId,
+          }],
+        }),
+        ...(positionTransfer === undefined ? {} : {
+          kind: 'community_vault_sale' as const,
+          communityVaultPositionTransfer: positionTransfer.review,
+          expiresAt: Math.min(
+            Number(positionTransfer.context.plan.spendPlan.expiresAtMs),
+            Number(positionTransfer.context.preflight.verifiedAtMs) +
+              COMMUNITY_VAULT_POSITION_TRANSFER_MAX_PREFLIGHT_AGE_MS,
+          ),
+          protectedSatFlow: [{
+            inputIndex: positionTransfer.context.plan.spendPlan.ordinalRoute.inputIndex,
+            inputOffset: BigInt(
+              positionTransfer.context.plan.spendPlan.ordinalRoute.inputOffsetSats,
+            ),
+            outputIndex: positionTransfer.context.plan.spendPlan.ordinalRoute.outputIndex,
+            outputOffset: BigInt(
+              positionTransfer.context.plan.spendPlan.ordinalRoute.outputOffsetSats,
+            ),
+            inscriptionId: positionTransfer.context.currentPolicy.inscriptionId,
           }],
         }),
         ...(pending.marketplace === undefined ? {} : {

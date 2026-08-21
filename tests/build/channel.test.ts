@@ -14,6 +14,7 @@ import {
 import { resolveVaultCoordinatorCapability } from '../../src/background/vault-capability';
 
 const previewEnvironment = {
+  DREY_REGTEST_GATEWAY_PUBLIC_KEY_HEX: '17'.repeat(32),
   DREY_SYNTHETIC_PREVIEW_AUDIT: '1',
   DREY_PREVIEW_GATEWAY_ORIGIN: 'https://signet-preview.squirrelsystems.net',
   DREY_PREVIEW_GATEWAY_PUBLIC_KEY_HEX:
@@ -100,6 +101,12 @@ describe('build channel configuration', () => {
     });
   });
 
+  it('requires the generated local gateway identity for a development build', () => {
+    expect(() => resolveBuildChannel('development', {})).toThrow(
+      /DREY_REGTEST_GATEWAY_PUBLIC_KEY_HEX/u,
+    );
+  });
+
   it('offers passkey enrollment only on channels with a pinned manifest key (A0 §1)', () => {
     for (const mode of ['development', 'test', 'preview', 'pilot', 'production'] as const) {
       const channel = resolveBuildChannel(mode, previewEnvironment);
@@ -107,13 +114,13 @@ describe('build channel configuration', () => {
       // extension ID (and thus WebAuthn RP identity) a manifest key pins.
       expect(channel.passkeyEnrollmentEnabled, mode).toBe(channel.manifestPublicKey !== undefined);
     }
-    expect(resolveBuildChannel('development').passkeyEnrollmentEnabled).toBe(false);
+    expect(resolveBuildChannel('development', previewEnvironment).passkeyEnrollmentEnabled).toBe(false);
     expect(resolveBuildChannel('pilot').passkeyEnrollmentEnabled).toBe(false);
     expect(resolveBuildChannel('test').passkeyEnrollmentEnabled).toBe(true);
   });
 
   it('ships reviewed Vault authority in production while preview remains excluded', () => {
-    expect(resolveBuildChannel('development').vaultCoordinatorEnabled).toBe(true);
+    expect(resolveBuildChannel('development', previewEnvironment).vaultCoordinatorEnabled).toBe(false);
     expect(resolveBuildChannel('test').vaultCoordinatorEnabled).toBe(true);
     expect(resolveBuildChannel('pilot').vaultCoordinatorEnabled).toBe(true);
     expect(resolveBuildChannel('preview', previewEnvironment).vaultCoordinatorEnabled).toBe(false);
@@ -138,7 +145,7 @@ describe('build channel configuration', () => {
       );
       // Whatever a channel names must be one of the three pairings the ADR
       // permits; nothing else composes into a capability at all.
-      if (channel.vaultCoordinatorMovement !== null) {
+      if (channel.vaultCoordinatorMovement !== null && channel.network !== 'regtest') {
         expect(
           resolveVaultCoordinatorCapability(channel.network, channel.vaultCoordinatorMovement),
           mode,
@@ -147,7 +154,13 @@ describe('build channel configuration', () => {
     }
     expect(resolveBuildChannel('pilot').network).toBe('mainnet');
     expect(resolveBuildChannel('pilot').vaultCoordinatorMovement).toBe('production-mainnet');
-    expect(resolveBuildChannel('development').vaultCoordinatorMovement).toBe('full');
+    expect(resolveBuildChannel('development', previewEnvironment)).toMatchObject({
+      network: 'regtest',
+      gatewayOrigin: 'http://127.0.0.1:18480',
+      gatewayPublicKeyHex: previewEnvironment.DREY_REGTEST_GATEWAY_PUBLIC_KEY_HEX,
+      vaultCoordinatorEnabled: false,
+      vaultCoordinatorMovement: null,
+    });
     expect(resolveBuildChannel('test').vaultCoordinatorMovement).toBe('full');
   });
 

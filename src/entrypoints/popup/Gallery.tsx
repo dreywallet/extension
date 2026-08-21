@@ -286,6 +286,7 @@ export function Gallery(props: {
   onReceive: () => void;
   onOrdinalAction?: ((draft: OrdinalActionDraft) => void) | undefined;
   continuous?: boolean;
+  synchronizeOnMount?: boolean;
   initialInscriptionId?: string | null | undefined;
   onInitialInscriptionHandled?: (() => void) | undefined;
 }): ReactNode {
@@ -315,7 +316,10 @@ export function Gallery(props: {
     requestRasters,
     applyItemState,
   } =
-    useGalleryData(props.expectation, props.accountId, { continuous: props.continuous ?? true });
+    useGalleryData(props.expectation, props.accountId, {
+      continuous: props.continuous ?? true,
+      synchronizeOnMount: props.synchronizeOnMount ?? false,
+    });
   /**
    * The paint-ahead window: pixels from the previous session are on screen but
    * no verified batch has landed yet. Nothing here may be acted on — not Send,

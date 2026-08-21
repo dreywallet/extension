@@ -44,12 +44,12 @@ export function GatewayBadge(props: { view: GatewayStatusView | null }): ReactNo
 
   return (
     <span className={styles['group']} aria-label={t('gateway.status')}>
-      {view.network === 'signet' ? (
+      {view.network !== 'mainnet' ? (
         <span
           className={styles['networkMarker']}
-          aria-label={t('home.network.signet')}
-          title={t('home.network.signet')}
-        >{t('home.network.signet')}</span>
+          aria-label={t(view.network === 'regtest' ? 'home.network.regtest' : 'home.network.signet')}
+          title={t(view.network === 'regtest' ? 'home.network.regtest' : 'home.network.signet')}
+        >{t(view.network === 'regtest' ? 'home.network.regtest' : 'home.network.signet')}</span>
       ) : null}
       <span
         className={[styles['dot'], styles[indicator.className]].join(' ')}

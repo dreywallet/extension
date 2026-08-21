@@ -14,11 +14,11 @@ import { Field } from '../../ui/components/Field';
 import { InscriptionReview, parseInscriptionReview } from '../../ui/components/InscriptionReview';
 import { MediaBadgeTile, TextExcerptTile } from '../../ui/components/PreviewTile';
 import { errorMessageKey } from '../../ui/errors';
+import { transactionExplorerUrl } from '../../ui/activity/explorer';
 import { useI18n } from '../../ui/i18n';
 import { useRpc } from '../../ui/hooks/use-rpc';
 import type { ActiveSessionExpectation } from '../../ui/hooks/use-session';
 import type { AccountCapabilities } from '@drey/core/domain/accounts/capabilities';
-import { mempoolTransactionUrl } from '@drey/core/domain/explorer';
 import { btcDecimalToSats, parseSats, satsToBtcDecimal } from '@drey/core/domain/sats';
 import {
   formatFeeRateSatPerVb,
@@ -49,7 +49,7 @@ type PlanResult = OpResult<'transaction.plan'>;
 type ApproveResult = OpResult<'transaction.approve'>;
 type BroadcastResult = Exclude<ApproveResult, { status: 'review_required' }>;
 type SubmittedResult = BroadcastResult & {
-  network: 'mainnet' | 'signet';
+  network: 'mainnet' | 'signet' | 'regtest';
   kind: PlanResult['review']['kind'];
   inscriptionCount: number | null;
   receipt: Pick<PlanResult['review'], 'amountSats' | 'feeSats' | 'recipients'>;
@@ -100,6 +100,12 @@ function resultTitle(
     result.kind === 'rescue' ||
     result.kind === 'ordinal_sweep';
   return t(`${ordinal ? 'ordinal' : 'send'}.result.title.${result.status}`);
+}
+
+function isOrdinalResult(result: SubmittedResult): boolean {
+  return result.kind === 'ordinal_transfer' || result.kind === 'ordinal_batch_transfer' ||
+    result.kind === 'ordinal_postage_manage' || result.kind === 'rescue' ||
+    result.kind === 'ordinal_sweep';
 }
 
 function resultMark(status: SubmittedResult['status']): string {
@@ -196,6 +202,7 @@ export function Transactions(props: {
   onOpenSettings?: () => void;
   onOpenAddressBook?: () => void;
   onInitialRecipientConsumed?: () => void;
+  onOrdinalDone?: () => void;
 }): ReactNode {
   const { t, lang } = useI18n();
   const rpc = useRpc();
@@ -248,13 +255,17 @@ export function Transactions(props: {
   const [privacyNotes, setPrivacyNotes] = useState<string[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [transactionNetwork, setTransactionNetwork] = useState<'mainnet' | 'signet' | null>(null);
+  const [transactionNetwork, setTransactionNetwork] = useState<'mainnet' | 'signet' | 'regtest' | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const quoteGeneration = useRef(0);
   const utxoGeneration = useRef(0);
   const activityGeneration = useRef(0);
   const commandGeneration = useRef(0);
+  // React disables the action button on the next render, but two click events
+  // can still arrive in the same task. Keep the transaction command itself
+  // single-flight so a hurried double-click never reaches the worker twice.
+  const commandInFlight = useRef<symbol | null>(null);
   const paymentImportGeneration = useRef(0);
   const scanRefreshInFlight = useRef(false);
   const resumeScheduled = useRef(false);
@@ -373,6 +384,7 @@ export function Transactions(props: {
     utxoGeneration.current += 1;
     activityGeneration.current += 1;
     commandGeneration.current += 1;
+    commandInFlight.current = null;
     paymentImportGeneration.current += 1;
     scanRefreshInFlight.current = false;
     resumeScheduled.current = false;
@@ -504,7 +516,9 @@ export function Transactions(props: {
   }, [loadQuote, props.initialSection, quote]);
 
   const planIntent = useCallback(async (intent: Record<string, unknown>): Promise<void> => {
-    if (!props.capabilities.canBuildUnsignedPsbt) return;
+    if (!props.capabilities.canBuildUnsignedPsbt || commandInFlight.current !== null) return;
+    const command = Symbol('transaction-plan');
+    commandInFlight.current = command;
     const generation = commandGeneration.current;
     const currentFee = feeState.current.feeTier === 'custom'
       ? { type: 'custom' as const, rateSatPerVb: feeState.current.customFee }
@@ -512,14 +526,20 @@ export function Transactions(props: {
     setBusy(true);
     setError(null);
     setResult(null);
-    const response = await rpc('transaction.plan', {
-      account: accountIndex,
-      ...intent,
-      accountId: props.accountId,
-      fee: currentFee,
-      expectedVaultId,
-      expectedSessionId,
-    } as Parameters<typeof rpc<'transaction.plan'>>[1]);
+    const response = await (async () => {
+      try {
+        return await rpc('transaction.plan', {
+          account: accountIndex,
+          ...intent,
+          accountId: props.accountId,
+          fee: currentFee,
+          expectedVaultId,
+          expectedSessionId,
+        } as Parameters<typeof rpc<'transaction.plan'>>[1]);
+      } finally {
+        if (commandInFlight.current === command) commandInFlight.current = null;
+      }
+    })();
     if (generation !== commandGeneration.current) return;
     setBusy(false);
     if (!response.ok) {
@@ -741,22 +761,30 @@ export function Transactions(props: {
   }, [expectedSessionId, expectedVaultId, plan, props.accountId, rpc]);
 
   const approve = useCallback(async (): Promise<void> => {
-    if (!plan || !props.capabilities.canSignPsbt) return;
+    if (!plan || !props.capabilities.canSignPsbt || commandInFlight.current !== null) return;
+    const command = Symbol('transaction-approval');
+    commandInFlight.current = command;
     const generation = commandGeneration.current;
     setBusy(true);
     setError(null);
-    const response = await rpc('transaction.approve', {
-      planId: plan.planId,
-      accountId: props.accountId,
-      planHash: plan.planHash,
-      ...(password ? { password } : {}),
-      ...(previewUnavailableAcknowledged ? { previewUnavailableAcknowledged: true } : {}),
-      ...(nonTaprootDestinationAcknowledged
-        ? { nonTaprootDestinationAcknowledged: true }
-        : {}),
-      expectedVaultId,
-      expectedSessionId,
-    });
+    const response = await (async () => {
+      try {
+        return await rpc('transaction.approve', {
+          planId: plan.planId,
+          accountId: props.accountId,
+          planHash: plan.planHash,
+          ...(password ? { password } : {}),
+          ...(previewUnavailableAcknowledged ? { previewUnavailableAcknowledged: true } : {}),
+          ...(nonTaprootDestinationAcknowledged
+            ? { nonTaprootDestinationAcknowledged: true }
+            : {}),
+          expectedVaultId,
+          expectedSessionId,
+        });
+      } finally {
+        if (commandInFlight.current === command) commandInFlight.current = null;
+      }
+    })();
     if (generation !== commandGeneration.current) return;
     setBusy(false);
     if (!response.ok) {
@@ -800,6 +828,7 @@ export function Transactions(props: {
     props.accountId, props.capabilities.canSignPsbt, rpc, t]);
 
   const freeze = useCallback(async (utxo: Utxo): Promise<void> => {
+    setError(null);
     const response = await rpc('utxo.setFrozen', {
       txid: utxo.txid,
       vout: utxo.vout,
@@ -808,8 +837,16 @@ export function Transactions(props: {
       expectedVaultId,
       expectedSessionId,
     });
-    if (response.ok) await loadUtxos();
-  }, [expectedSessionId, expectedVaultId, loadUtxos, props.accountId, rpc]);
+    if (!response.ok) {
+      setError(t(errorMessageKey(response.code)));
+      return;
+    }
+    if (!response.result.updated) {
+      setError(t('common.error.internal'));
+      return;
+    }
+    await loadUtxos();
+  }, [expectedSessionId, expectedVaultId, loadUtxos, props.accountId, rpc, t]);
 
   const setLabel = useCallback(async (utxo: Utxo, label: UtxoLabel | null): Promise<void> => {
     const response = await rpc('utxo.setLabel', {
@@ -1134,7 +1171,7 @@ export function Transactions(props: {
             ) : null}
             <a
               className={`${styles['explorerLink']} ${styles['resultExplorer']}`}
-              href={mempoolTransactionUrl(result.network, result.txid)}
+              href={transactionExplorerUrl(result.network, result.txid)}
               target="_blank"
               rel="noopener noreferrer"
             >
@@ -1146,14 +1183,18 @@ export function Transactions(props: {
             <Button
               className={styles['resultAction']}
               onClick={() => {
+                if (result.status === 'pending') {
+                  props.onNavigate('activity');
+                  return;
+                }
                 setResult(null);
                 setOrdinalDraft(null);
+                if (isOrdinalResult(result)) props.onOrdinalDone?.();
               }}
             >
-              {result.kind === 'ordinal_transfer' || result.kind === 'ordinal_batch_transfer' ||
-                result.kind === 'ordinal_postage_manage' ||
-                result.kind === 'rescue' ||
-                result.kind === 'ordinal_sweep' ? t('ordinal.done') : t('send.new')}
+              {result.status === 'pending'
+                ? t('nav.activity')
+                : isOrdinalResult(result) ? t('ordinal.done') : t('send.new')}
             </Button>
           </section>
         ) : review ? (
@@ -1172,7 +1213,16 @@ export function Transactions(props: {
                 ? t('ordinal.review.rescue.title')
                 : review.kind === 'ordinal_sweep'
                   ? t('ordinal.review.sweep.title')
-                  : t('send.review.title')}</h1>
+                  : review.kind === 'rbf' || review.kind === 'cpfp'
+                    ? t('send.review.speedUp.title')
+                    : t('send.review.title')}</h1>
+            {review.kind === 'rbf' || review.kind === 'cpfp' ? (
+              <p className={styles['advisory']} role="note">
+                {t(review.kind === 'rbf'
+                  ? 'send.review.rbf.explanation'
+                  : 'send.review.cpfp.explanation')}
+              </p>
+            ) : null}
             {review.ordinalAction?.action === 'sweep'
               ? <p>{t('ordinal.review.sweep.noInscription')}</p>
               : null}
@@ -1482,6 +1532,8 @@ export function Transactions(props: {
                     ? t('ordinal.approve.rescue')
                     : review.kind === 'ordinal_sweep'
                       ? t('ordinal.approve.sweep')
+                    : review.kind === 'rbf' || review.kind === 'cpfp'
+                      ? t('send.approve.speedUp')
                       : t('send.approve')}</Button>
               ) : null}
             </div>

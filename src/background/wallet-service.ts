@@ -295,7 +295,10 @@ import {
   createOwnedAddressResolver,
   summarizeRecoveredAddresses,
 } from '@drey/core/domain/classification/owned-address';
-import { scriptPubKeyHex } from '@drey/core/domain/keys/script-hash';
+import {
+  scriptHashFromScriptPubKey,
+  scriptPubKeyHex,
+} from '@drey/core/domain/keys/script-hash';
 import { parseCanonicalSatpoint } from '@drey/core/domain/ordinals/satpoint';
 import {
   accountsMetaReadSchema,
@@ -441,6 +444,9 @@ import type { MarketplaceContext, MarketplaceResolution } from '@drey/core/domai
 import type { CommunityVaultAcquisitionProviderReviewV1 } from '@drey/core/domain/community-vault/acquisition-provider';
 import type { CommunityVaultSaleProviderReviewV1 } from '@drey/core/domain/community-vault/sale-provider';
 import type { CommunityVaultSaleBuyerProviderReviewV1 } from '@drey/core/domain/community-vault/sale-provider';
+import type {
+  CommunityVaultPositionTransferProviderReviewV1,
+} from '@drey/core/domain/community-vault/position-transfer-provider';
 import { verifyOrdnetSaleScriptPath } from '@drey/core/domain/marketplaces/ordnet-script-path';
 import {
   marketplaceReservationSchema,
@@ -485,6 +491,7 @@ import {
   reviewFromPlan,
   transactionCommitmentHash,
   type PlanDerivation,
+  type PlanInput,
   type PlanIntent,
   type PlanOutput,
   type TransactionPlan,
@@ -803,6 +810,23 @@ function cachedProviderFactsEqual(
     fresh.classificationRevision === expected.classificationRevision;
 }
 
+function rbfInputMatchesParent(candidate: PlanInput, parent: PlanInput): boolean {
+  return candidate.txid === parent.txid && candidate.vout === parent.vout &&
+    candidate.valueSats === parent.valueSats && candidate.scriptPubKey === parent.scriptPubKey &&
+    candidate.sequence === sequenceForInput('rbf', parent.sequence) &&
+    candidate.sighash === parent.sighash && candidate.ownership === parent.ownership &&
+    JSON.stringify(candidate.derivation) === JSON.stringify(parent.derivation) &&
+    JSON.stringify(candidate.classification) === JSON.stringify(parent.classification);
+}
+
+type CurrentStoredTransaction = StoredTransaction & { plan: TransactionPlan };
+
+function isCurrentStoredTransaction(
+  transaction: StoredTransaction,
+): transaction is CurrentStoredTransaction {
+  return transaction.plan.version === 4;
+}
+
 // Direct domain/service callers may omit operationId; the RPC boundary requires
 // it so every user-triggered create/restore is durably idempotent.
 type ServiceCreateRequest = Omit<VaultCreateRequest, 'operationId'> & { operationId?: string };
@@ -828,7 +852,7 @@ function marketplaceRequestHash(plan: ProviderPsbtPlanV3): string {
 
 const marketplaceWorkflowJournalSchema = z.object({
   version: z.literal(1),
-  accountId: z.string().regex(/^acct_(?:mainnet|signet)_[0-9a-f]{64}$/u),
+  accountId: z.string().regex(/^acct_(?:mainnet|signet|regtest)_[0-9a-f]{64}$/u),
   authority: z.object({
     origin: z.string().url(),
     tabId: z.number().int(),
@@ -976,6 +1000,16 @@ type ResolvedFee = ResolvedFeeBase & ({
 });
 
 export { MAX_PASSKEY_RECORDS_TOTAL, MAX_PASSKEY_RECORDS_PER_VAULT, PASSKEY_GRANT_TTL_MS } from './passkey-service';
+
+export function reconcileTrackedTransactionStatus(
+  journalStatus: StoredTransaction['status'],
+  observedState: SnapshotHistoryEntry['confirmationState'] | undefined,
+  replacedByAcceptedWalletTransaction: boolean,
+) {
+  return observedState === 'mempool' && replacedByAcceptedWalletTransaction
+    ? 'replaced' as const
+    : reconcileTransactionStatus(journalStatus, observedState);
+}
 
 export class WalletService {
   /** Serialization queue for storage/session critical sections. */
@@ -1722,7 +1756,7 @@ export class WalletService {
     address: string;
     path: string;
     kind: 'payment' | 'ordinals';
-    network: 'mainnet' | 'signet';
+    network: Network;
   }> {
     return this.runExclusive(() => this.withSessionDek(input, async (dek, session) => {
         const accountsMeta = await this.loadAccountsMetaLocked(dek, session.vaultId);
@@ -3489,6 +3523,7 @@ export class WalletService {
     communityVaultAcquisition?: CommunityVaultAcquisitionProviderReviewV1;
     communityVaultSale?: CommunityVaultSaleProviderReviewV1;
     communityVaultSaleBuyer?: CommunityVaultSaleBuyerProviderReviewV1;
+    communityVaultPositionTransfer?: CommunityVaultPositionTransferProviderReviewV1;
     marketplace?: {
       context: MarketplaceContext;
       resolution: MarketplaceResolution;
@@ -3642,6 +3677,9 @@ export class WalletService {
               }),
               ...(input.communityVaultSaleBuyer === undefined ? {} : {
                 communityVaultSaleBuyer: input.communityVaultSaleBuyer,
+              }),
+              ...(input.communityVaultPositionTransfer === undefined ? {} : {
+                communityVaultPositionTransfer: input.communityVaultPositionTransfer,
               }),
               ...(input.marketplace === undefined ? {} : { marketplace: input.marketplace }),
             });
@@ -6205,8 +6243,9 @@ export class WalletService {
           }))
         : this.resolveFee(plan.policy.fee),
     ]);
-    const { byOutpoint, sourceChanged } = refreshedClassifications;
+    const { byOutpoint, sourceChanged, preservedRbfOutpoints } = refreshedClassifications;
     for (const expected of plan.inputs) {
+      if (preservedRbfOutpoints.has(`${expected.txid}:${expected.vout}`)) continue;
       const fresh = byOutpoint.get(`${expected.txid}:${expected.vout}`);
       const expectedFacts = expected.classification;
       if (!fresh || fresh.valueSats !== expected.valueSats.toString() || fresh.scriptPubKey !== expected.scriptPubKey ||
@@ -6350,13 +6389,26 @@ export class WalletService {
       const recoveries = await this.loadRecoveriesLocked(dek, session.vaultId);
       const history = await this.loadHistoryLocked(dek, session.vaultId, input.accountId);
       const historyByTxid = new Map(history.map((entry) => [entry.txid, entry]));
+      const replacedTxids = new Set(transactions
+        .filter((transaction) =>
+          transaction.replacesTxid !== null &&
+          (transaction.status === 'accepted' || transaction.status === 'already_known' ||
+            transaction.status === 'confirmed'))
+        .map((transaction) => transaction.replacesTxid!));
       const results = transactions.map((tx) => {
         const observed = historyByTxid.get(tx.txid);
-        const status = reconcileTransactionStatus(tx.status, observed?.confirmationState);
+        const status = reconcileTrackedTransactionStatus(
+          tx.status,
+          observed?.confirmationState,
+          replacedTxids.has(tx.txid),
+        );
         const pending = status === 'accepted' || status === 'already_known' || status === 'pending';
+        const rbfCurrentlyAvailable = observed?.confirmationState === 'mempool' &&
+          observed.replaceable === true && observed.replacedByTxid === null;
         const recommendedAcceleration = !pending
           ? null
-          : tx.plan.rbf && tx.plan.outputs.some((output) => output.role === 'payment_change')
+          : rbfCurrentlyAvailable && tx.plan.rbf &&
+              tx.plan.outputs.some((output) => output.role === 'payment_change')
             ? 'rbf' as const
             : observed?.cpfpEligible
               ? 'cpfp' as const
@@ -6456,12 +6508,39 @@ export class WalletService {
   private async refreshPlanClassifications(plan: TransactionPlan): Promise<{
     byOutpoint: Map<string, UtxoClassification>;
     sourceChanged: boolean;
+    preservedRbfOutpoints: Set<string>;
   }> {
     const gateway = this.deps.gateway;
     if (!gateway) throw new RpcError('ERR_DATA_STALE', 'gateway unavailable');
-    const requested = plan.inputs.map((entry) => ({ txid: entry.txid, vout: entry.vout }));
-    const byOutpoint = new Map<string, UtxoClassification>();
     let sourceChanged = false;
+    const preservedRbfOutpoints = new Set<string>();
+    if (plan.kind === 'rbf') {
+      if (plan.replacesTxid === null) {
+        throw new RpcError('ERR_PLAN_CHANGED', 'replacement parent is missing');
+      }
+      const parent = await this.loadStoredTransactionForApproval(plan.replacesTxid, plan.accountId);
+      if (!parent) throw new RpcError('ERR_NOT_ACCELERATABLE', 'replacement parent is unavailable');
+      sourceChanged = (await this.assertPendingRbfParent(parent, plan.source)).sourceChanged;
+      const parentByOutpoint = new Map(
+        parent.plan.inputs.map((entry) => [`${entry.txid}:${entry.vout}`, entry]),
+      );
+      for (const candidate of plan.inputs) {
+        const key = `${candidate.txid}:${candidate.vout}`;
+        const original = parentByOutpoint.get(key);
+        if (original === undefined) continue;
+        if (!rbfInputMatchesParent(candidate, original)) {
+          throw new RpcError('ERR_PLAN_CHANGED', 'replacement parent input changed');
+        }
+        preservedRbfOutpoints.add(key);
+      }
+      if (preservedRbfOutpoints.size !== parent.plan.inputs.length) {
+        throw new RpcError('ERR_PLAN_CHANGED', 'replacement parent inputs are incomplete');
+      }
+    }
+    const requested = plan.inputs
+      .filter((entry) => !preservedRbfOutpoints.has(`${entry.txid}:${entry.vout}`))
+      .map((entry) => ({ txid: entry.txid, vout: entry.vout }));
+    const byOutpoint = new Map<string, UtxoClassification>();
     for (let offset = 0; offset < requested.length; offset += CLASSIFY_MAX_OUTPOINTS) {
       const chunk = requested.slice(offset, offset + CLASSIFY_MAX_OUTPOINTS);
       const result = await gateway.classifyOutpoints({ network: this.deps.network, outpoints: chunk });
@@ -6489,7 +6568,82 @@ export class WalletService {
         byOutpoint.set(key, record);
       }
     }
-    return { byOutpoint, sourceChanged };
+    return { byOutpoint, sourceChanged, preservedRbfOutpoints };
+  }
+
+  private async loadStoredTransactionForApproval(
+    txid: string,
+    accountId: string,
+  ): Promise<CurrentStoredTransaction | null> {
+    return this.runExclusive(async () => {
+      const session = await this.liveSession();
+      if (!session) throw new RpcError('ERR_LOCKED', 'wallet locked');
+      const dek = base64ToBytes(session.dekB64);
+      try {
+        return (await this.loadTransactionsLocked(dek, session.vaultId)).find(
+          (transaction): transaction is CurrentStoredTransaction =>
+            isCurrentStoredTransaction(transaction) && transaction.txid === txid &&
+            transaction.plan.accountId === accountId,
+        ) ?? null;
+      } finally {
+        zeroize(dek);
+      }
+    });
+  }
+
+  /**
+   * A parent input is absent from the ordinary UTXO/classification APIs once
+   * the wallet broadcasts it. The exact encrypted plan remains authoritative
+   * for those immutable prevout bytes, while this fresh signed snapshot proves
+   * that the exact wallet-signed txid is still pending and BIP125-replaceable.
+   */
+  private async assertPendingRbfParent(
+    parent: CurrentStoredTransaction,
+    expectedSource?: TransactionPlan['source'],
+  ): Promise<{ sourceChanged: boolean }> {
+    const gateway = this.deps.gateway;
+    if (!gateway || parent.plan.inputs.length === 0) {
+      throw new RpcError('ERR_NOT_ACCELERATABLE', 'replacement parent is unavailable');
+    }
+    const proofInput = parent.plan.inputs.find(
+      (entry) => entry.ownership === 'wallet' && entry.derivation !== null,
+    );
+    if (!proofInput) {
+      throw new RpcError('ERR_NOT_ACCELERATABLE', 'replacement parent ownership is unavailable');
+    }
+    const scriptHash = scriptHashFromScriptPubKey(proofInput.scriptPubKey);
+    const result = await gateway.fetchSnapshot({
+      network: this.deps.network,
+      scriptHashes: [scriptHash],
+    });
+    if (!result.ok) throw new RpcError('ERR_DATA_STALE', 'pending transaction proof unavailable');
+    const cached = await loadCachedStatus(
+      this.deps.session,
+      gateway.endpoint,
+      gateway.protocolVersions,
+    );
+    if (!cached || result.value.instanceId !== cached.status.instanceId ||
+        result.value.classificationRevision !== cached.status.activeRevision ||
+        !tipsEqual(result.value.coreTip, cached.status.coreTip) ||
+        !tipsEqual(result.value.indexTip, cached.status.indexTip)) {
+      throw new RpcError('ERR_DATA_STALE', 'pending transaction proof is not current');
+    }
+    if (parent.plan.source.classificationRevision !== result.value.classificationRevision) {
+      throw new RpcError('ERR_NOT_ACCELERATABLE', 'parent classification revision changed');
+    }
+    const observed = result.value.history.find((entry) => entry.txid === parent.txid);
+    if (!observed || !observed.spentScriptHashes.includes(scriptHash) ||
+        observed.confirmationState !== 'mempool' || observed.replaceable !== true ||
+        observed.replacedByTxid !== null) {
+      throw new RpcError('ERR_NOT_ACCELERATABLE', 'transaction is no longer replaceable');
+    }
+    return {
+      sourceChanged: expectedSource !== undefined &&
+        (result.value.instanceId !== expectedSource.instanceId ||
+          result.value.classificationRevision !== expectedSource.classificationRevision ||
+          !tipsEqual(result.value.coreTip, expectedSource.coreTip) ||
+          !tipsEqual(result.value.indexTip, expectedSource.indexTip)),
+    };
   }
 
   /**
@@ -7637,23 +7791,58 @@ export class WalletService {
     incrementalRelayFeeRate: bigint,
   ) {
     const parent = (await this.loadTransactionsLocked(dek, vaultId)).find((tx) => tx.txid === input.txid);
-    if (!parent || !parent.plan.rbf || parent.status === 'conflicted' || parent.status === 'rejected') {
+    if (!parent || !isCurrentStoredTransaction(parent) || !parent.plan.rbf ||
+        parent.status === 'conflicted' || parent.status === 'rejected') {
       throw new RpcError('ERR_NOT_ACCELERATABLE', 'transaction is not replaceable');
     }
+    await this.assertPendingRbfParent(parent);
     const original = parent.plan;
     const currentByOutpoint = new Map(utxos.map((u) => [outpointKey(u.outpoint), u]));
-    const replacementUtxos: WalletUtxo[] = [];
+    const replacementInputs: PlanInput[] = [];
     for (const oldInput of original.inputs) {
-      const current = currentByOutpoint.get(`${oldInput.txid}:${oldInput.vout}`);
-      if (!current || !evaluateEligibility(current, eligibility).eligible) {
-        throw new RpcError('ERR_NOT_ACCELERATABLE', 'original inputs are no longer eligible');
+      const key = `${oldInput.txid}:${oldInput.vout}`;
+      const current = currentByOutpoint.get(key);
+      if (current) {
+        const rebuilt = inputFromUtxo(
+          current,
+          this.deriveForUtxo(definition, current),
+          sequenceForInput('rbf', oldInput.sequence),
+        );
+        if (!evaluateEligibility(current, eligibility).eligible ||
+            !rbfInputMatchesParent(rebuilt, oldInput)) {
+          throw new RpcError('ERR_NOT_ACCELERATABLE', 'original input state changed');
+        }
+        replacementInputs.push(rebuilt);
+        continue;
       }
-      replacementUtxos.push(current);
+      const derivation = oldInput.derivation;
+      if (oldInput.ownership !== 'wallet' || derivation === null ||
+          derivation.accountId !== original.accountId || derivation.account !== original.account ||
+          oldInput.classification.primaryClass !== 'cardinal_clean' ||
+          oldInput.classification.confidence !== 'authoritative' ||
+          oldInput.classification.classificationRevision !== eligibility.activeRevision ||
+          eligibility.lockedOutpoints.has(key)) {
+        throw new RpcError('ERR_NOT_ACCELERATABLE', 'original input authority changed');
+      }
+      const derived = derivePublicAccountAddress(
+        definition,
+        derivation.lane,
+        derivation.chain,
+        derivation.index,
+      );
+      if (derived.scriptPubKeyHex !== oldInput.scriptPubKey ||
+          derived.path !== derivation.path || derived.publicKeyHex !== derivation.publicKeyHex) {
+        throw new RpcError('ERR_NOT_ACCELERATABLE', 'original input ownership changed');
+      }
+      replacementInputs.push({
+        ...oldInput,
+        sequence: sequenceForInput('rbf', oldInput.sequence),
+      });
     }
     const recipientOutputs = original.outputs.filter((o) => o.role === 'recipient');
     const originalChange = original.outputs.find((o) => o.role === 'payment_change');
     if (!originalChange) throw new RpcError('ERR_NOT_ACCELERATABLE', 'replacement has no reducible change');
-    const originalKeys = new Set(replacementUtxos.map((utxo) => outpointKey(utxo.outpoint)));
+    const originalKeys = new Set(replacementInputs.map((entry) => `${entry.txid}:${entry.vout}`));
     const additions = utxos
       .filter((utxo) => !originalKeys.has(outpointKey(utxo.outpoint)))
       .filter((utxo) => utxo.account === original.account && utxo.lane === 'payment')
@@ -7665,26 +7854,26 @@ export class WalletService {
     let newChange = 0n;
     for (;;) {
       vsize = estimateVsize(
-        replacementUtxos.map((utxo) => utxo.scriptPubKey),
+        replacementInputs.map((entry) => entry.scriptPubKey),
         [...recipientOutputs, originalChange].map((output) => output.scriptPubKey),
       );
       const targetFee = feeForVsize(vsize, feeRate);
       const incremental = original.feeSats + feeForVsize(vsize, incrementalRelayFeeRate);
       feeSats = targetFee > incremental ? targetFee : incremental;
-      const total = replacementUtxos.reduce((sum, utxo) => sum + utxo.valueSats, 0n);
+      const total = replacementInputs.reduce((sum, entry) => sum + entry.valueSats, 0n);
       newChange = total - recipientTotal - feeSats;
       if (newChange > economicChangeThreshold(originalChange.scriptPubKey, feeRate)) break;
       const addition = additions.shift();
       if (!addition) throw new RpcError('ERR_INSUFFICIENT_FUNDS', 'eligible inputs cannot fund replacement fee');
-      replacementUtxos.push(addition);
+      replacementInputs.push(inputFromUtxo(
+        addition,
+        this.deriveForUtxo(definition, addition),
+        sequenceForInput('rbf'),
+      ));
     }
     return {
       account: original.account,
-      inputs: replacementUtxos.map((u, index) => inputFromUtxo(
-        u,
-        this.deriveForUtxo(definition, u),
-        sequenceForInput('rbf', original.inputs[index]?.sequence),
-      )),
+      inputs: replacementInputs,
       outputs: [...recipientOutputs, { ...originalChange, valueSats: newChange }],
       feeSats, vsize, protectedSatFlow: [], rbf: true, parentTxid: null, replacesTxid: parent.txid,
     };
@@ -9219,7 +9408,7 @@ export class WalletService {
     const cache = this.requireCache();
     for (const key of await cache.listKeys(vaultId, this.deps.network, 'history')) {
       const legacy = /^a(0|[1-9][0-9]*):(payment|ordinals)$/u.exec(key);
-      const stable = /^pub:(acct_(?:mainnet|signet)_[0-9a-f]{64}):(payment|ordinals)$/u.exec(key);
+      const stable = /^pub:(acct_(?:mainnet|signet|regtest)_[0-9a-f]{64}):(payment|ordinals)$/u.exec(key);
       const account = legacy
         ? Number(legacy[1])
         : stable
@@ -9254,7 +9443,7 @@ export class WalletService {
     );
     for (const key of await cache.listKeys(vaultId, this.deps.network, 'history')) {
       const standard = /^a(0|[1-9][0-9]*):(payment|ordinals)$/u.exec(key);
-      const publicUnit = /^pub:(acct_(?:mainnet|signet)_[0-9a-f]{64}):(payment|ordinals)$/u.exec(key);
+      const publicUnit = /^pub:(acct_(?:mainnet|signet|regtest)_[0-9a-f]{64}):(payment|ordinals)$/u.exec(key);
       const account = standard
         ? Number(standard[1])
         : publicUnit
