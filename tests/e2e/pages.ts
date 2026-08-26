@@ -1,5 +1,11 @@
 import { expect, type BrowserContext, type Locator, type Page } from '@playwright/test';
 
+const dappPort = process.env.DREY_E2E_DAPP_PORT ?? '4173';
+if (!/^[1-9][0-9]{0,4}$/u.test(dappPort) || Number(dappPort) > 65_535) {
+  throw new Error('DREY_E2E_DAPP_PORT must be a valid TCP port');
+}
+export const DAPP_ORIGIN = `http://127.0.0.1:${dappPort}`;
+
 export async function fillPrivate(locator: Locator, value: string): Promise<void> {
   // Playwright's normal fill step records its value in the HTML report. Drive
   // React through the native setter so disposable phrases/passwords never
@@ -97,7 +103,8 @@ export class OnboardingPage {
     }
     await this.page.getByRole('button', { name: 'Continue' }).click();
     await this.page.getByLabel('Wallet name').fill(args.name ?? 'Public signet fixture');
-    await fillPrivate(this.page.getByLabel('App password', { exact: true }), args.password);
+    const password = this.page.getByLabel('App password', { exact: true });
+    if (await password.count() > 0) await fillPrivate(password, args.password);
     const confirmation = this.page.getByLabel('Confirm app password');
     if (await confirmation.count() > 0) await fillPrivate(confirmation, args.password);
     await this.page.getByRole('button', { name: 'Continue' }).click();
@@ -121,7 +128,11 @@ export class OnboardingPage {
     await fillPrivate(this.page.getByLabel('App password', { exact: true }), args.password);
     await fillPrivate(this.page.getByLabel('Confirm app password'), args.password);
     await this.page.getByRole('button', { name: 'Continue' }).click();
+    await expect(this.page.getByRole('heading', { name: 'Protect your new wallet' })).toBeVisible();
+    await this.page.getByRole('button', { name: 'Back up now' }).click();
     await expect(this.page.getByRole('heading', { name: 'Write down your recovery phrase' })).toBeVisible();
+    await expect(this.page.getByRole('button', { name: 'Show words' })).toBeVisible();
+    await this.page.getByRole('button', { name: 'Show words' }).click();
 
     // Keep the freshly generated phrase in this stack frame only. It is never
     // logged, attached, returned, or persisted in a browser profile.
@@ -170,11 +181,23 @@ export class ApprovalPage {
       wallet_connect: 'Connect this site?',
       wallet_requestPermissions: 'Share wallet information?',
       signMessage: 'Sign this message?',
+      signMultipleMessages: 'Sign 2 messages?',
+      signMultipleTransactions: 'Sign 2 transactions?',
       signPsbt: 'Sign this transaction?',
       sendTransfer: 'Send bitcoin?',
       ord_sendInscriptions: 'Send this inscription?',
     };
-    await expect(this.page.getByRole('heading', { name: titles[method] ?? 'Review site request' })).toBeVisible();
+    try {
+      await expect(this.page.getByRole('heading', { name: titles[method] ?? 'Review site request' })).toBeVisible();
+    } catch (cause) {
+      const diagnostics = await this.page.evaluate(() => ({
+        pathname: location.pathname,
+        title: document.title,
+        rootChildren: document.querySelector('#root')?.childElementCount ?? -1,
+        primaryHeading: document.querySelector('h1')?.textContent?.trim() ?? null,
+      })).catch(() => ({ pathname: 'closed', title: '', rootChildren: -1, primaryHeading: null }));
+      throw new Error(`Approval method did not render: ${JSON.stringify(diagnostics)}`, { cause });
+    }
   }
 
   async reject(): Promise<void> {
@@ -214,7 +237,7 @@ export class DappPage {
   constructor(readonly page: Page, readonly context: BrowserContext) {}
 
   async open(): Promise<void> {
-    await this.page.goto('http://127.0.0.1:4173/');
+    await this.page.goto(`${DAPP_ORIGIN}/`);
     await expect.poll(() => this.page.evaluate(() => Boolean((window as Window & { drey?: unknown }).drey)))
       .toBe(true);
   }
@@ -223,18 +246,41 @@ export class DappPage {
     await this.page.getByRole('button', { name: button, exact: true }).click();
   }
 
+  async configureTransactionBatch(request: {
+    network: { type: 'Regtest'; address?: string };
+    message: string;
+    psbts: Array<{
+      psbtBase64: string;
+      inputsToSign?: Array<{
+        address: string;
+        signingIndexes: number[];
+        sigHash?: 0 | 1 | 129 | 131;
+      }>;
+    }>;
+  }): Promise<void> {
+    await this.page.evaluate((value) => {
+      (window as Window & { __dreyE2eTransactionBatch?: unknown })
+        .__dreyE2eTransactionBatch = value;
+    }, request);
+  }
+
   async invokeWithApproval(button: string): Promise<ApprovalPage> {
     const existingPages = new Set(this.context.pages());
-    const popupPromise = this.context.waitForEvent('page', {
-      // Chrome emits the page event while windows.create is still at
-      // about:blank, before the extension URL commits.
-      predicate: (candidate) => !existingPages.has(candidate),
-      timeout: 10_000,
-    });
     await this.invoke(button);
-    let approval: Page;
+    const findApproval = (): Page | undefined => this.context.pages().find((candidate) =>
+      !existingPages.has(candidate) &&
+      !candidate.isClosed() &&
+      new URL(candidate.url()).pathname.endsWith('/approval.html'),
+    );
+    let approval: Page | undefined;
     try {
-      approval = await popupPromise;
+      // Chrome emits the page event while windows.create is still at
+      // about:blank. Poll all newly created pages for the committed approval
+      // URL so an unrelated transient page cannot capture the one-shot event.
+      await expect.poll(() => {
+        approval = findApproval();
+        return approval?.url();
+      }, { timeout: 10_000 }).toContain('/approval.html');
     } catch (cause) {
       const output = await this.output().textContent();
       let safeDetail = 'no provider error was returned';
@@ -248,12 +294,16 @@ export class DappPage {
       }
       throw new Error(`Approval window did not open; ${safeDetail}`, { cause });
     }
-    await approval.waitForURL((url) => url.pathname.endsWith('/approval.html'), { timeout: 10_000 });
+    if (!approval) throw new Error('Approval window disappeared after navigation');
     await approval.waitForLoadState('domcontentloaded');
     return new ApprovalPage(approval);
   }
 
   output(): Locator {
     return this.page.locator('#output');
+  }
+
+  async outputJson<T>(): Promise<T> {
+    return JSON.parse(await this.output().textContent() ?? 'null') as T;
   }
 }

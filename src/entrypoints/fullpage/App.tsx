@@ -117,6 +117,15 @@ export function App(): ReactNode {
 
   return (
     <PageShell>
+      {session.backupDeferred ? (
+        <div role="alert" data-testid="backup-reminder">
+          <strong>{t('backup.reminder.title')}</strong>
+          <p>{t('backup.reminder.message')}</p>
+          <Button onClick={() => void chrome.tabs.create({
+            url: chrome.runtime.getURL('/onboarding.html'),
+          })}>{t('backup.action.now')}</Button>
+        </div>
+      ) : null}
       {session.quarantinedVaultCount > 0 ? (
         <p role="alert">{t('common.error.quarantined')}</p>
       ) : null}

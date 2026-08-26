@@ -9,6 +9,7 @@ interface ProviderMetadata {
   icon: typeof DREY_PROVIDER_ICON;
   webUrl: 'https://squirrelsystems.net';
   chromeWebStoreUrl: 'https://chromewebstore.google.com/detail/drey/kngidlmmbfmnoeimngkajdlbdenlhgof';
+  googlePlayStoreUrl: 'https://play.google.com/store/apps/details?id=net.squirrelsystems.drey';
   methods: readonly string[];
 }
 
@@ -58,6 +59,8 @@ export function registerProviderDiscovery(
     webUrl: 'https://squirrelsystems.net',
     chromeWebStoreUrl:
       'https://chromewebstore.google.com/detail/drey/kngidlmmbfmnoeimngkajdlbdenlhgof',
+    googlePlayStoreUrl:
+      'https://play.google.com/store/apps/details?id=net.squirrelsystems.drey',
     methods: Object.freeze([...provider.methods]),
   };
 

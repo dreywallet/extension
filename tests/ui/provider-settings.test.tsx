@@ -43,6 +43,7 @@ function session(refresh: () => void, overrides: Partial<SessionView> = {}): Ses
     accountSummaries: [{ accountId: ACCOUNT_ID, account: 0, name: 'Main', signingSource: 'software' }],
     accountAddState: null,
     activeRecoveredAddressCount: 0,
+    backupDeferred: false,
     capabilities: {
       canView: true, canDeriveAddresses: true, canPlanTransactions: true,
       canSignTransactions: true, canSignMessages: true, canBroadcast: true,

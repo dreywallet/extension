@@ -1,10 +1,16 @@
 import type { ApprovalSnapshot } from '../../src/provider/approval';
+import { bip322MessageHash } from '@drey/core/domain/transactions/bip322';
+import { bytesToHex } from '@drey/core/domain/vault/encoding';
 
 // Isolation marker: production builds are audited to prove this gallery-only
 // fixture text never enters the browser extension artifact.
 export const APPROVAL_GALLERY_ISOLATION_MARKER = 'DREY_APPROVAL_GALLERY_ONLY';
 
 const FAR_FUTURE = Number.MAX_SAFE_INTEGER;
+
+function messageHash(message: string): string {
+  return bytesToHex(bip322MessageHash(new TextEncoder().encode(message)));
+}
 
 export interface ApprovalGalleryScenario {
   id: string;
@@ -54,6 +60,10 @@ const identity = {
 
 const LONG_TAPROOT_ADDRESS =
   'bc1pcquvhrqv0q68t4m0hfq6tpn006qrskyc7yrqnp2uyrf2emg3wynsdjyk38';
+const PAYMENT_ADDRESS = 'bc1qexamplepaymentaddress0000000000000000000000000';
+const ORDINAL_ADDRESS = LONG_TAPROOT_ADDRESS;
+const PAYMENT_PROOF = 'Sign in to ORD.NET\nPurpose: payment address\nNonce: 8bf1b1f09e2a4d4c';
+const ORDINAL_PROOF = 'Sign in to ORD.NET\nPurpose: Ordinals address\nNonce: 8bf1b1f09e2a4d4c';
 
 export const APPROVAL_GALLERY_SCENARIOS: readonly ApprovalGalleryScenario[] = [
   {
@@ -141,6 +151,60 @@ export const APPROVAL_GALLERY_SCENARIOS: readonly ApprovalGalleryScenario[] = [
         ].join('\n'),
       },
       { fixture: APPROVAL_GALLERY_ISOLATION_MARKER },
+    ),
+  },
+  {
+    id: 'message-batch',
+    label: 'Message batch',
+    description: 'One easy review for payment and Ordinals address proofs.',
+    snapshot: request(
+      '10000000-0000-4000-8000-000000000008',
+      'signMultipleMessages',
+      'https://ord.example',
+      {
+        kind: 'message_batch',
+        ...identity,
+        messageCount: 2,
+        totalMessageBytes: new TextEncoder().encode(PAYMENT_PROOF).length +
+          new TextEncoder().encode(ORDINAL_PROOF).length,
+        messages: [
+          {
+            index: 0,
+            address: PAYMENT_ADDRESS,
+            addressKind: 'payment',
+            message: PAYMENT_PROOF,
+            messageBytes: new TextEncoder().encode(PAYMENT_PROOF).length,
+            messageHash: messageHash(PAYMENT_PROOF),
+            protocol: 'BIP322',
+          },
+          {
+            index: 1,
+            address: ORDINAL_ADDRESS,
+            addressKind: 'ordinals',
+            message: ORDINAL_PROOF,
+            messageBytes: new TextEncoder().encode(ORDINAL_PROOF).length,
+            messageHash: messageHash(ORDINAL_PROOF),
+            protocol: 'BIP322',
+          },
+        ],
+      },
+      {
+        fixture: APPROVAL_GALLERY_ISOLATION_MARKER,
+        messageBatch: {
+          messageCount: 2,
+          totalMessageBytes: new TextEncoder().encode(PAYMENT_PROOF).length +
+            new TextEncoder().encode(ORDINAL_PROOF).length,
+          batchHash: '83'.repeat(32),
+          items: [
+            { index: 0, address: PAYMENT_ADDRESS, addressKind: 'payment',
+              messageBytes: new TextEncoder().encode(PAYMENT_PROOF).length,
+              messageHash: messageHash(PAYMENT_PROOF), protocol: 'BIP322' },
+            { index: 1, address: ORDINAL_ADDRESS, addressKind: 'ordinals',
+              messageBytes: new TextEncoder().encode(ORDINAL_PROOF).length,
+              messageHash: messageHash(ORDINAL_PROOF), protocol: 'BIP322' },
+          ],
+        },
+      },
     ),
   },
   {

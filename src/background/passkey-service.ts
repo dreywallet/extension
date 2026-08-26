@@ -26,11 +26,16 @@ import {
 } from '@drey/core/domain/vault/passkey-envelope';
 import { NONCE_BYTES } from '@drey/core/domain/vault/crypto';
 import { openVaultPayload, unlockVault, zeroize } from '@drey/core/domain/vault/vault';
+import { unlockProfileCredential, unwrapProfileSecret } from '@drey/core/domain/vault/profile-credential';
 import type { VaultRecordV1 } from '@drey/core/domain/vault/record';
 import type { ActiveSessionRequest } from '@drey/core/messaging/ops';
 import type { StorageArea } from '../adapters/storage/area';
 import type { UnlockSession } from '../adapters/session/session-store';
 import { loadVaults } from '../adapters/storage/vault-store';
+import {
+  loadProfileCredential,
+  profileWalletSecret,
+} from '../adapters/storage/profile-credential-store';
 import {
   loadPasskeyEnvelopes,
   passkeyEnvelopesForVault,
@@ -341,7 +346,23 @@ export interface PasskeyOpsContext extends PasskeyContext {
   installSessionLocked(
     vaultId: string,
     dek: Uint8Array,
+    profileKey?: Uint8Array,
   ): Promise<{ vaultId: string; sessionId: string; deadline: number }>;
+}
+
+async function verifyAppPassword(
+  ctx: PasskeyContext,
+  record: VaultRecordV1,
+  password: string,
+): Promise<void> {
+  const profile = await loadProfileCredential(ctx.local);
+  if (profile === null) {
+    const unlocked = await unlockVault(record, password);
+    zeroize(unlocked.dek);
+    return;
+  }
+  const profileKey = await unlockProfileCredential(profile.credential, password);
+  profileKey.fill(0);
 }
 
 /**
@@ -400,8 +421,7 @@ export async function passkeyBeginEnrollment(
       throw new RpcError('ERR_PASSKEY_UNAVAILABLE', 'this build has no stable RP identity');
     }
     const { record, session } = await ctx.activeRecord(input);
-    const unlocked = await unlockVault(record, input.password); // throws on wrong-password
-    zeroize(unlocked.dek); // reauthentication only — enroll wraps the session DEK
+    await verifyAppPassword(ctx, record, input.password);
     const stored = await loadPasskeyEnvelopes(ctx.local);
     const forVault = passkeyEnvelopesForVault(stored, record.vaultId);
     if (
@@ -488,12 +508,21 @@ export async function passkeyEnroll(
       }
       throw err;
     }
-    const dek = base64ToBytes(session.dekB64);
+    const dek = base64ToBytes(session.profileKeyB64 ?? session.dekB64);
     const prfOutput = base64ToBytes(input.prfOutputB64);
     const prfSalt = base64ToBytes(input.prfSaltB64);
     try {
-      // The session DEK must still open the live record before it is wrapped.
-      openVaultPayload(record, dek);
+      // A profile enrollment wraps the profile key; a legacy session keeps
+      // wrapping the wallet DEK until the next password unlock migrates it.
+      if (session.profileKeyB64 === undefined) {
+        openVaultPayload(record, dek);
+      } else {
+        const profile = await loadProfileCredential(ctx.local);
+        const wrapper = profile === null ? null : profileWalletSecret(profile, record.vaultId);
+        if (wrapper === null) throw new RpcError('ERR_PASSKEY_UNAVAILABLE', 'wallet is not linked');
+        const activeDek = unwrapProfileSecret(wrapper, dek);
+        try { openVaultPayload(record, activeDek); } finally { activeDek.fill(0); }
+      }
       const stored = await loadPasskeyEnvelopes(ctx.local);
       const forVault = passkeyEnvelopesForVault(stored, record.vaultId);
       if (
@@ -651,17 +680,30 @@ export async function passkeyUnlock(
     }
     const prfOutput = base64ToBytes(input.prfOutputB64);
     let dek: Uint8Array | null = null;
+    let activeDek: Uint8Array | null = null;
     try {
       dek = unwrapPasskeyDek({
         envelope: raw,
         prfOutput,
         expected: { rpOrigin, vaultId: input.vaultId, network: ctx.network },
       });
-      // The envelope authenticated, but the DEK must additionally still open
-      // this vault's payload before any prior session is dropped.
+      const profile = await loadProfileCredential(ctx.local);
+      const wrapper = profile === null ? null : profileWalletSecret(profile, input.vaultId);
+      if (wrapper !== null) {
+        try {
+          activeDek = unwrapProfileSecret(wrapper, dek);
+          openVaultPayload(record, activeDek);
+          return await ctx.installSessionLocked(input.vaultId, activeDek, dek);
+        } catch {
+          activeDek?.fill(0);
+          activeDek = null;
+        }
+      }
+      // Compatibility with passkeys enrolled before profile migration.
       openVaultPayload(record, dek);
       return await ctx.installSessionLocked(input.vaultId, dek);
     } finally {
+      activeDek?.fill(0);
       if (dek !== null) zeroize(dek);
       zeroize(prfOutput);
     }
@@ -741,8 +783,7 @@ export async function passkeyRemove(
 ): Promise<{ removed: number }> {
   return ctx.runExclusive(async () => {
     const { record, session } = await ctx.activeRecord(input);
-    const unlocked = await unlockVault(record, input.password); // throws on wrong-password
-    zeroize(unlocked.dek);
+    await verifyAppPassword(ctx, record, input.password);
     const rpOrigin = ctx.passkeyRpOrigin;
     const stored = await loadPasskeyEnvelopes(ctx.local);
     // purgeInvalid keeps exactly what would be OFFERED (bound public key,

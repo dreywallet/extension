@@ -269,16 +269,6 @@ export function Settings(props: { session: SessionView }): ReactNode {
         </section>
       ) : null}
 
-      <section className={`${styles['section']} ${styles['recoverySettingsCard']}`}>
-        <div>
-          <h2 className={styles['sectionTitle']}>{t('communityVault.title')}</h2>
-          <p className={styles['rowLabel']}>{t('communityVault.entry.summary')}</p>
-        </div>
-        <Button onClick={() => (window.location.hash = FULLPAGE_HASH.communityVault)}>
-          {t('communityVault.entry.open')}
-        </Button>
-      </section>
-
       <section className={styles['section']}>
         <h2 className={styles['sectionTitle']}>{t('settings.contacts')}</h2>
         <div className={styles['row']}>
@@ -394,6 +384,16 @@ export function Settings(props: { session: SessionView }): ReactNode {
           </span>
         </summary>
         <div className={styles['disclosureContent']}>
+          <div className={styles['row']}>
+            <div>
+              <p className={styles['rowLabel']}>{t('communityVault.title')}</p>
+              <p className={styles['rowLabel']}>{t('communityVault.entry.summary')}</p>
+            </div>
+            <Button variant="secondary"
+              onClick={() => (window.location.hash = FULLPAGE_HASH.communityVault)}>
+              {t('communityVault.entry.open')}
+            </Button>
+          </div>
           {vaultCoordinatorChannelEnabled() ? (
             <div className={styles['row']}>
               <span className={styles['rowLabel']}>{t('settings.vault.entry')}</span>

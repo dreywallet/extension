@@ -9,7 +9,7 @@ import {
   setGatewayScenario,
   statusAttempts,
 } from './gateway';
-import { ExtensionPage, fillPrivate, PopupPage } from './pages';
+import { DAPP_ORIGIN, ExtensionPage, fillPrivate, PopupPage } from './pages';
 import { terminateExtensionWorker, wakeExtensionWorker } from './worker';
 
 // Read the repository's public vector at runtime so Playwright's HTML reporter
@@ -438,6 +438,68 @@ test('creates a disposable wallet and enforces backup verification', async ({
   await popup.unlock(TEST_PASSWORD);
 });
 
+test('creates and switches a second wallet with one profile unlock', async ({
+  onboarding, popup, extensionContext, extensionId,
+}) => {
+  await onboarding.open();
+  await onboarding.createDisposable({
+    password: TEST_PASSWORD,
+    name: 'Everyday',
+  });
+
+  const fullpage = await extensionContext.newPage();
+  await fullpage.goto(
+    `chrome-extension://${extensionId}/fullpage.html#/settings/wallets-accounts`,
+  );
+  await expect(fullpage.getByRole('heading', { level: 2, name: 'Everyday' })).toBeVisible();
+
+  const additionalPagePromise = extensionContext.waitForEvent('page');
+  await fullpage.getByRole('button', { name: 'Add wallet' }).click();
+  const additional = await additionalPagePromise;
+  await expect(additional.getByRole('heading', { name: 'Welcome to Drey' })).toBeVisible();
+  await additional.getByRole('button', { name: /Create a new wallet/u }).click();
+  await additional.getByLabel('Wallet name').fill('Travel');
+  await expect(additional.getByLabel('App password', { exact: true })).toHaveCount(0);
+  await expect(additional.getByLabel('Confirm app password')).toHaveCount(0);
+  await additional.getByRole('button', { name: 'Continue' }).click();
+  await expect(additional.getByRole('heading', { name: 'Protect your new wallet' })).toBeVisible();
+  await additional.getByRole('button', { name: 'Do this later' }).click();
+  await expect(additional.getByRole('heading', {
+    name: 'Your wallet cannot be recovered without this phrase',
+  })).toBeVisible();
+  await additional.getByRole('button', { name: 'I understand — remind me' }).click();
+  const passkeyOffer = additional.getByRole('heading', { name: 'Unlock faster with a passkey' });
+  const ready = additional.getByRole('heading', { name: 'Your wallet is ready' });
+  const offered = await Promise.race([
+    passkeyOffer.waitFor({ state: 'visible' }).then(() => true),
+    ready.waitFor({ state: 'visible' }).then(() => false),
+  ]);
+  if (offered) {
+    await additional.getByRole('button', { name: 'Not now' }).click();
+  }
+  await expect(ready).toBeVisible();
+  await additional.close();
+
+  await popup.open();
+  await expect(popup.page.getByTestId('backup-reminder')).toBeVisible();
+  await popup.lock();
+  await popup.unlock(TEST_PASSWORD);
+
+  await fullpage.reload();
+  await expect(fullpage.getByRole('heading', { level: 2, name: 'Travel' })).toBeVisible();
+  await expect(fullpage.getByTestId('backup-reminder')).toBeVisible();
+  await fullpage.getByRole('button', { name: 'Switch' }).click();
+  await expect(fullpage).toHaveURL(/#\/settings$/u);
+  await expect(fullpage.getByRole('heading', { name: 'Switch wallet' })).toHaveCount(0);
+
+  await fullpage.goto(
+    `chrome-extension://${extensionId}/fullpage.html#/settings/wallets-accounts`,
+  );
+  await expect(fullpage.getByRole('heading', { level: 2, name: 'Everyday' })).toBeVisible();
+  await expect(fullpage.getByTestId('backup-reminder')).toHaveCount(0);
+  await fullpage.close();
+});
+
 test('resumes a durable scan checkpoint after worker termination', async ({
   onboarding, extensionContext, extensionId,
 }) => {
@@ -844,7 +906,7 @@ test('updates one incoming payment from pending to confirmed after hide and resu
 
   const away = await extensionContext.newPage();
   try {
-    await away.goto('http://127.0.0.1:4173/');
+    await away.goto(`${DAPP_ORIGIN}/`);
     await away.bringToFront();
     await setGatewayScenario({ snapshotScenario: 'incoming_confirmed' });
     const beforeConfirmed = await snapshotAttempts();
@@ -920,7 +982,7 @@ test('labels a signed sat-flow-verified mempool inscription as a pending Ordinal
   };
   const away = await extensionContext.newPage();
   try {
-    await away.goto('http://127.0.0.1:4173/');
+    await away.goto(`${DAPP_ORIGIN}/`);
     await away.bringToFront();
     await setGatewayScenario({ snapshotScenario: 'incoming_ordinal_confirmed' });
     const beforeConfirmed = await snapshotAttempts();
@@ -1007,7 +1069,7 @@ test('keeps refreshing after returning until stale gateway data becomes fresh', 
 
   const away = await extensionContext.newPage();
   try {
-    await away.goto('http://127.0.0.1:4173/');
+    await away.goto(`${DAPP_ORIGIN}/`);
     await away.bringToFront();
     await popup.page.bringToFront();
 
@@ -1175,6 +1237,22 @@ test('restores the public fixture, persists privacy, and exercises provider appr
   await signed.expectMethod('signMessage');
   await signed.approve({ password: TEST_PASSWORD });
   await expect(dapp.output()).toContainText('"protocol": "BIP322"');
+
+  const signedBatch = await dapp.invokeWithApproval('Sign address proofs');
+  await signedBatch.expectMethod('signMultipleMessages');
+  await expect(signedBatch.page.getByRole('heading', { name: 'Message 1 of 2' })).toBeVisible();
+  await expect(signedBatch.page.getByRole('heading', { name: 'Message 2 of 2' })).toBeVisible();
+  await expect(signedBatch.page.getByText('Drey local payment address proof')).toBeVisible();
+  await expect(signedBatch.page.getByText('Drey local Ordinals address proof')).toBeVisible();
+  await expect(signedBatch.page.getByLabel('App password')).toHaveCount(0);
+  await signedBatch.approve();
+  await expect(dapp.output()).toContainText('"results"');
+  const batchResult = JSON.parse(await dapp.output().textContent() ?? '{}') as {
+    expectedAddresses?: string[];
+    results?: Array<{ address?: string; protocol?: string }>;
+  };
+  expect(batchResult.results?.map((result) => result.address)).toEqual(batchResult.expectedAddresses);
+  expect(batchResult.results?.map((result) => result.protocol)).toEqual(['BIP322', 'BIP322']);
 
   const sent = await dapp.invokeWithApproval('Send transfer');
   await sent.expectMethod('sendTransfer');
@@ -1482,7 +1560,7 @@ test('@m9p reviews signed inert inscription previews and fails closed across mis
   const externalRequests: string[] = [];
   const inspectRequest = (request: { url(): string }): void => {
     const url = request.url();
-    if (url.startsWith('http://127.0.0.1:4173/') || url.startsWith('http://127.0.0.1:18080/') ||
+    if (url.startsWith(`${DAPP_ORIGIN}/`) || url.startsWith('http://127.0.0.1:18080/') ||
         url.startsWith(`chrome-extension://${extensionId}/`) || url.startsWith('data:image/png')) return;
     externalRequests.push(url);
   };

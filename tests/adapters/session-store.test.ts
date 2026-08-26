@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   clearSession,
   getSession,
+  peekSession,
   putSession,
   setSessionAccessTrusted,
   type UnlockSession,
@@ -32,6 +33,18 @@ describe('session-store', () => {
     expect(await getSession(area)).toBeNull();
   });
 
+  it('round-trips a profile key and removes it with the session', async () => {
+    const area = makeFakeArea();
+    const profileSession: UnlockSession = {
+      ...SESSION,
+      profileKeyB64: btoa('\u0002'.repeat(32)),
+    };
+    await putSession(area, profileSession);
+    expect(await getSession(area)).toEqual(profileSession);
+    await clearSession(area);
+    expect(await getSession(area)).toBeNull();
+  });
+
   it('clears a malformed session or non-32-byte DEK', async () => {
     const area = makeFakeArea();
     expect(await getSession(area)).toBeNull();
@@ -41,6 +54,19 @@ describe('session-store', () => {
     expect(area.store.has('squirrel:session')).toBe(false);
 
     area.store.set('squirrel:session', { ...SESSION, dekB64: 'AAAA' });
+    expect(await getSession(area)).toBeNull();
+    expect(area.store.has('squirrel:session')).toBe(false);
+  });
+
+  it('can inspect a malformed session without mutating storage', async () => {
+    const area = makeFakeArea();
+    const malformed = { ...SESSION, dekB64: 'AAAA' };
+    area.store.set('squirrel:session', malformed);
+
+    expect(await peekSession(area)).toBeNull();
+    expect(area.store.get('squirrel:session')).toEqual(malformed);
+
+    // Serialized lifecycle reads still own fail-closed cleanup.
     expect(await getSession(area)).toBeNull();
     expect(area.store.has('squirrel:session')).toBe(false);
   });

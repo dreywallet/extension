@@ -24,7 +24,6 @@ import { useRpc } from '../../../ui/hooks/use-rpc';
 import { errorMessageKey } from '../../../ui/errors';
 import { Button } from '../../../ui/components/Button';
 import { Field } from '../../../ui/components/Field';
-import { QrCode } from '../../../ui/components/QrCode';
 import styles from '../fullpage.module.css';
 import type { ActiveSessionExpectation } from '../../../ui/hooks/use-session';
 import type { VaultTransportPayload } from './VaultTransportScanner';
@@ -34,6 +33,7 @@ import {
   parseVaultPartialSignatureInput,
 } from '@drey/core/domain/vault/multisig-encoding';
 import type { VaultPsbtApprovalEnvelopeV1 } from '@drey/core/domain/vault/multisig-contracts';
+import { AnimatedQrFrames } from './AnimatedQrFrames';
 
 interface PlanSummary {
   planId: string;
@@ -100,8 +100,6 @@ export function VaultPlanPanel(props: {
   const [busy, setBusy] = useState(false);
   const [approvalFrames, setApprovalFrames] = useState<readonly string[]>([]);
   const [psbtFrames, setPsbtFrames] = useState<readonly string[]>([]);
-  const [approvalFrameIndex, setApprovalFrameIndex] = useState(0);
-  const [psbtFrameIndex, setPsbtFrameIndex] = useState(0);
   const [mobileEnvelope, setMobileEnvelope] = useState<
     Extract<VaultTransportPayload, { kind: 'context' }>['context'] | null
   >(null);
@@ -113,8 +111,6 @@ export function VaultPlanPanel(props: {
   const [mobileResponseFrames, setMobileResponseFrames] = useState<{
     context: readonly string[]; psbt: readonly string[];
   } | null>(null);
-  const [mobileResponseContextIndex, setMobileResponseContextIndex] = useState(0);
-  const [mobileResponsePsbtIndex, setMobileResponsePsbtIndex] = useState(0);
 
   const refresh = useCallback(async (): Promise<void> => {
     const held = await rpc('vaultCoordinator.plan', { ...props.expectation });
@@ -133,8 +129,6 @@ export function VaultPlanPanel(props: {
         context: held.result.mobileResponse.approvalContextQrFrames,
         psbt: held.result.mobileResponse.psbtQrFrames,
       });
-      setMobileResponseContextIndex(0);
-      setMobileResponsePsbtIndex(0);
     }
   }, [rpc, props.expectation]);
 
@@ -194,8 +188,6 @@ export function VaultPlanPanel(props: {
       setPeerPsbtHex('');
       setApprovalFrames([]);
       setPsbtFrames([]);
-      setApprovalFrameIndex(0);
-      setPsbtFrameIndex(0);
       setMobileEnvelope(null);
     });
 
@@ -217,8 +209,6 @@ export function VaultPlanPanel(props: {
       setPeerPsbtHex('');
       setApprovalFrames([]);
       setPsbtFrames([]);
-      setApprovalFrameIndex(0);
-      setPsbtFrameIndex(0);
       setMobileEnvelope(null);
       setSpeedUpOpen(false);
       setSpeedUpFeeRate('');
@@ -239,8 +229,6 @@ export function VaultPlanPanel(props: {
       setPsbtHex(result.result.signedPsbtHex);
       setApprovalFrames(result.result.approvalContextQrFrames);
       setPsbtFrames(result.result.psbtQrFrames);
-      setApprovalFrameIndex(0);
-      setPsbtFrameIndex(0);
       setNotice(t('vault.plan.signed'));
     });
 
@@ -327,8 +315,6 @@ export function VaultPlanPanel(props: {
       context: result.result.approvalContextQrFrames,
       psbt: result.result.psbtQrFrames,
     });
-    setMobileResponseContextIndex(0);
-    setMobileResponsePsbtIndex(0);
     setNotice(t('vault.plan.mobileRequestSigned'));
   });
 
@@ -473,30 +459,26 @@ export function VaultPlanPanel(props: {
                 {t('vault.plan.mobileQrHeading')}
               </h3>
               <p className={styles['rowLabel']}>{t('vault.plan.mobileQrBody')}</p>
-              <QrCode value={approvalFrames[approvalFrameIndex]!} alt={t('vault.plan.mobileContextQr')} />
-              <p>{t('vault.plan.qrPart', { index: approvalFrameIndex + 1, count: approvalFrames.length })}</p>
-              <div className={styles['row']}>
-                <Button variant="secondary" disabled={approvalFrameIndex === 0}
-                  onClick={() => setApprovalFrameIndex((index) => Math.max(0, index - 1))}>
-                  {t('vault.import.challengeQrPrevious')}
-                </Button>
-                <Button variant="secondary" disabled={approvalFrameIndex >= approvalFrames.length - 1}
-                  onClick={() => setApprovalFrameIndex((index) => Math.min(approvalFrames.length - 1, index + 1))}>
-                  {t('vault.import.challengeQrNext')}
-                </Button>
-              </div>
-              <QrCode value={psbtFrames[psbtFrameIndex]!} alt={t('vault.plan.mobilePsbtQr')} />
-              <p>{t('vault.plan.qrPart', { index: psbtFrameIndex + 1, count: psbtFrames.length })}</p>
-              <div className={styles['row']}>
-                <Button variant="secondary" disabled={psbtFrameIndex === 0}
-                  onClick={() => setPsbtFrameIndex((index) => Math.max(0, index - 1))}>
-                  {t('vault.import.challengeQrPrevious')}
-                </Button>
-                <Button variant="secondary" disabled={psbtFrameIndex >= psbtFrames.length - 1}
-                  onClick={() => setPsbtFrameIndex((index) => Math.min(psbtFrames.length - 1, index + 1))}>
-                  {t('vault.import.challengeQrNext')}
-                </Button>
-              </div>
+              <AnimatedQrFrames
+                frames={approvalFrames}
+                alt={t('vault.plan.mobileContextQr')}
+                stepLabel={t('vault.plan.mobileContextStep')}
+                progressLabel={(index, count) => t('vault.plan.qrPart', { index, count })}
+                pauseLabel={t('vault.plan.qrPause')}
+                resumeLabel={t('vault.plan.qrResume')}
+                previousLabel={t('vault.import.challengeQrPrevious')}
+                nextLabel={t('vault.import.challengeQrNext')}
+              />
+              <AnimatedQrFrames
+                frames={psbtFrames}
+                alt={t('vault.plan.mobilePsbtQr')}
+                stepLabel={t('vault.plan.mobilePsbtStep')}
+                progressLabel={(index, count) => t('vault.plan.qrPart', { index, count })}
+                pauseLabel={t('vault.plan.qrPause')}
+                resumeLabel={t('vault.plan.qrResume')}
+                previousLabel={t('vault.import.challengeQrPrevious')}
+                nextLabel={t('vault.import.challengeQrNext')}
+              />
             </section>
           ) : null}
           {/* The same hex-in-a-text-field transport the import ceremony uses. */}
@@ -704,32 +686,26 @@ export function VaultPlanPanel(props: {
           ) : null}
           {mobileResponseFrames !== null ? (
             <>
-              <QrCode value={mobileResponseFrames.context[mobileResponseContextIndex]!}
-                alt={t('vault.plan.mobileResultContextQr')} />
-              <div className={styles['row']}>
-                <Button variant="secondary" disabled={mobileResponseContextIndex === 0}
-                  onClick={() => setMobileResponseContextIndex((index) => Math.max(0, index - 1))}>
-                  {t('vault.import.challengeQrPrevious')}
-                </Button>
-                <Button variant="secondary"
-                  disabled={mobileResponseContextIndex >= mobileResponseFrames.context.length - 1}
-                  onClick={() => setMobileResponseContextIndex((index) => Math.min(mobileResponseFrames.context.length - 1, index + 1))}>
-                  {t('vault.import.challengeQrNext')}
-                </Button>
-              </div>
-              <QrCode value={mobileResponseFrames.psbt[mobileResponsePsbtIndex]!}
-                alt={t('vault.plan.mobileResultPsbtQr')} />
-              <div className={styles['row']}>
-                <Button variant="secondary" disabled={mobileResponsePsbtIndex === 0}
-                  onClick={() => setMobileResponsePsbtIndex((index) => Math.max(0, index - 1))}>
-                  {t('vault.import.challengeQrPrevious')}
-                </Button>
-                <Button variant="secondary"
-                  disabled={mobileResponsePsbtIndex >= mobileResponseFrames.psbt.length - 1}
-                  onClick={() => setMobileResponsePsbtIndex((index) => Math.min(mobileResponseFrames.psbt.length - 1, index + 1))}>
-                  {t('vault.import.challengeQrNext')}
-                </Button>
-              </div>
+              <AnimatedQrFrames
+                frames={mobileResponseFrames.context}
+                alt={t('vault.plan.mobileResultContextQr')}
+                stepLabel={t('vault.plan.mobileResultContextStep')}
+                progressLabel={(index, count) => t('vault.plan.qrPart', { index, count })}
+                pauseLabel={t('vault.plan.qrPause')}
+                resumeLabel={t('vault.plan.qrResume')}
+                previousLabel={t('vault.import.challengeQrPrevious')}
+                nextLabel={t('vault.import.challengeQrNext')}
+              />
+              <AnimatedQrFrames
+                frames={mobileResponseFrames.psbt}
+                alt={t('vault.plan.mobileResultPsbtQr')}
+                stepLabel={t('vault.plan.mobileResultPsbtStep')}
+                progressLabel={(index, count) => t('vault.plan.qrPart', { index, count })}
+                pauseLabel={t('vault.plan.qrPause')}
+                resumeLabel={t('vault.plan.qrResume')}
+                previousLabel={t('vault.import.challengeQrPrevious')}
+                nextLabel={t('vault.import.challengeQrNext')}
+              />
             </>
           ) : null}
         </section>

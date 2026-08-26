@@ -43,6 +43,28 @@ export function WalletAccountSettings(props: {
       setSwitchTarget(null);
       setSwitchPassword('');
       props.session.refresh();
+      props.onBack();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function beginSwitch(vaultId: string): Promise<void> {
+    setSwitchError(null);
+    setBusy(true);
+    try {
+      const result = await rpc('vault.switch', { vaultId });
+      if (!result.ok) {
+        setSwitchTarget(vaultId);
+        if (result.code !== 'ERR_WRONG_PASSWORD') {
+          setSwitchError(t(errorMessageKey(result.code)));
+        }
+        return;
+      }
+      setSwitchTarget(null);
+      setSwitchPassword('');
+      props.session.refresh();
+      props.onBack();
     } finally {
       setBusy(false);
     }
@@ -126,7 +148,7 @@ export function WalletAccountSettings(props: {
               {wallet.vaultId === props.session.activeVaultId ? (
                 <span className={styles['badge']}>{t('settings.vaults.active')}</span>
               ) : (
-                <Button variant="secondary" onClick={() => setSwitchTarget(wallet.vaultId)}>
+                <Button variant="secondary" onClick={() => void beginSwitch(wallet.vaultId)}>
                   {t('settings.vaults.switch')}
                 </Button>
               )}
@@ -156,7 +178,7 @@ export function WalletAccountSettings(props: {
             }}
           >
             <h3>{t('settings.vaults.switchTitle')}</h3>
-            <p className={styles['rowLabel']}>{t('settings.vaults.switchBody')}</p>
+            <p className={styles['rowLabel']}>{t('settings.vaults.linkBody')}</p>
             <Field
               label={t('unlock.password')}
               type="password"

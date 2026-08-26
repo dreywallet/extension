@@ -62,7 +62,7 @@ export const VAULT_STANDALONE_TOOL_DIGEST_UNPUBLISHED = '00'.repeat(32);
  *
  * Reproduce both values from a clean checkout:
  *
- *   git clone --branch v0.7.12 https://github.com/dreywallet/core.git
+ *   git clone --branch v0.17.6 https://github.com/dreywallet/core.git
  *   cd core && pnpm install --frozen-lockfile && pnpm recovery:verify
  *
  * The artifact digest is deliberately the narrower claim. It stayed
@@ -102,14 +102,20 @@ export const VAULT_STANDALONE_TOOL_DIGEST_UNPUBLISHED = '00'.repeat(32);
  * v0.14.4 adds the buyer offer provider handshake. v0.15.1 adds complete-position
  * Community Vault transfers and their provider review envelope. v0.16.0 adds
  * regtest to the shared network and Vault signing boundaries, changing both
- * the reviewed source and standalone personal Vault recovery artifact. v0.16.1
+ * the reviewed source and standalone personal Vault recovery artifact. v0.17.0
  * keeps that artifact byte-identical while binding its source to the activity
- * replacement projection fix.
+ * replacement projection fix. v0.17.1 adds bounded multiple-message signing;
+ * v0.17.2 hardens gateway inputs and generic listing broadcast policy. v0.17.3
+ * binds terminal broadcast results to the exact submitted request and gateway
+ * snapshot before callers may clear recovery evidence. v0.17.5 keeps that
+ * artifact byte-identical while adding the profile credential envelope;
+ * v0.17.6 reissues the same wallet logic under the required annotated release
+ * tag and binds the complete reviewed source snapshot.
  */
 export const VAULT_STANDALONE_TOOL_RELEASE = Object.freeze({
-  coreTag: 'v0.16.1',
-  sourceDigest: 'e355e335de453e6b4a5f9660e3c7696ded4a1e872ea6ab039a0ceb4fa9a7721a',
-  artifactDigest: '55e2d13c09f7a16ff9db416633079dbc78aad071f7f70a85c1d72a589023d86c',
+  coreTag: 'v0.17.6',
+  sourceDigest: '0ac081447d6e89776485bd770f03d9bba348c1aa43d1e5e6cd95cb82fede6332',
+  artifactDigest: '642ad7904dc16fefa81757ca6151d392464b0087de2e5044cbb7b6a66776d432',
 });
 
 /**

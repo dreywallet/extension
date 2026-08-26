@@ -5,7 +5,11 @@ import { createServer } from 'node:http';
 import path from 'node:path';
 
 const HOST = '127.0.0.1';
-const PORT = 4173;
+const PORT_TEXT = process.env.DREY_E2E_DAPP_PORT ?? '4173';
+if (!/^[1-9][0-9]{0,4}$/u.test(PORT_TEXT) || Number(PORT_TEXT) > 65_535) {
+  throw new Error('DREY_E2E_DAPP_PORT must be a valid TCP port');
+}
+const PORT = Number(PORT_TEXT);
 const ROOT = import.meta.dirname;
 const FILES = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],

@@ -15,6 +15,19 @@
   margin: 0;
 }
 
+.backupReminder {
+  background: color-mix(in srgb, var(--color-warning) 12%, var(--color-surface));
+  border: 2px solid var(--color-warning);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+
+.backupReminder p {
+  margin: 0;
+}
+
 .requestHeader {
   display: grid;
   gap: var(--space-1);
@@ -131,6 +144,75 @@
 .walletContext {
   display: grid;
   gap: var(--space-1);
+}
+
+.messageBatch {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.messageBatch > h2 {
+  color: var(--color-text-muted);
+  font-family: var(--font-display);
+  font-size: var(--text-xs);
+  letter-spacing: .06em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.messageBatchItems {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.messageBatchItems article {
+  background: var(--color-surface-subtle);
+  border-top: 1px solid var(--color-border);
+  padding: var(--space-2);
+}
+
+.messageBatchItems article:first-child {
+  border-top: 0;
+}
+
+.messageBatchItems h3 {
+  font-size: 1rem;
+  font-family: var(--font-display);
+  font-weight: 800;
+  margin: 0;
+}
+
+.messageBatchAddress {
+  display: grid;
+  gap: .2rem;
+  margin-top: var(--space-2);
+}
+
+.messageBatchAddress span,
+.messageNote {
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+
+.messageBatchAddress code {
+  overflow-wrap: anywhere;
+}
+
+.messageText {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  line-height: 1.45;
+  margin: var(--space-2) 0 0;
+  overflow-wrap: anywhere;
+  padding: var(--space-2);
+  unicode-bidi: plaintext;
+  white-space: pre-wrap;
+}
+
+.messageNote {
+  margin: var(--space-1) 0 0;
 }
 
 .walletContext dl {

@@ -3,6 +3,137 @@
 Notable user-facing changes to Drey are recorded here. For earlier releases,
 see the production release tags in the repository.
 
+## 0.14.12
+
+### Changed
+
+- Correct the public contributor setup to clone the exact `@drey/core` v0.17.6
+  tag and make approval-window discovery resilient to unrelated transient pages.
+  Wallet behavior and recovery artifact bytes are unchanged from v0.14.11.
+
+## 0.14.11
+
+### Changed
+
+- Consume the corrective annotated `@drey/core` v0.17.6 release and bind its
+  reproducible standalone-recovery source digest. Wallet behavior and recovery
+  artifact bytes are unchanged from v0.14.10.
+
+## 0.14.10
+
+### Security
+
+- Keep recovery words hidden during wallet creation and restoration until the
+  user explicitly chooses to reveal them.
+
+## 0.14.9
+
+### Added
+
+- Add one-unlock wallet profiles with password-free switching and passkey-backed profile sessions.
+- Allow recovery backup to be deferred with persistent reminders until verification.
+
+### Changed
+
+- Move Community Vault into Advanced settings with clearer expert-use guidance.
+- Improve wallet status recovery and synchronize wallet, account, and backup behavior with mobile.
+- Consume `@drey/core` v0.17.5.
+
+## 0.14.8
+
+### Security
+
+- Retain broadcast recovery whenever a gateway result does not match the exact
+  submitted transaction, network, gateway identity, protocol, fee/status
+  snapshot, or successful transaction ID.
+
+### Changed
+
+- Consume `@drey/core` v0.17.3.
+
+## 0.14.7
+
+### Fixed
+
+- Keep a native transaction review usable when independently signed gateway
+  data advances during approval: replace the review once with fresh bounded
+  data, require the user to review it again, and fail closed if the sources do
+  not converge.
+- Release unsigned transaction input reservations when the user leaves Send or
+  closes the review, including when an approval response arrives late.
+- Show wrong app-password feedback directly in website approval windows and
+  allow a safe retry while the original bounded request remains active.
+- Change the app password for the wallet and Community Vault records in one
+  validated storage operation so they cannot end up under different passwords.
+
+### Changed
+
+- Present pending-transaction speed-up guidance as supporting information and
+  keep the recovery-word warning as a quieter safety note.
+- Consume `@drey/core` v0.17.2.
+
+### Security
+
+- Rebind website approval authority after password verification and before any
+  signing work.
+- Retain strict transaction-byte, account, session, source, fee, input, and
+  classification checks across every refreshed review.
+
+## 0.14.2
+
+### Fixed
+
+- Keep sequential website approvals reliable when a completed review window
+  closes or the approval page briefly reconnects, without weakening cancellation
+  when an active review is closed.
+- Use natural singular wording when a site asks to sign one transaction or one
+  message through a batch-compatible request.
+
+### Security
+
+- Expand local regtest coverage for independent PSBT batches to verify exact
+  result ordering, no wallet broadcast, duplicate and conflicting-input
+  rejection, and atomic failure when an input becomes stale during review.
+- Keep linked transaction graphs and linked ord.net batch listings disabled;
+  enabling another marketplace shape still requires an explicit reviewed
+  compile-time policy.
+
+## 0.14.1
+
+### Added
+
+- Add the official Sats Connect multiple-message method for 1–10 bounded
+  BIP322 address proofs, with one complete review and all-or-nothing results in
+  request order.
+
+### Security
+
+- Bind every message, address, origin, browser document, account, network, and
+  wallet session to the approval, and return no signatures after rejection,
+  closure, restart, or stale context.
+
+### Changed
+
+- Consume `@drey/core` v0.17.1.
+
+## 0.14.0
+
+### Added
+
+- Add Sats Connect-compatible independent PSBT batch signing for 1–41
+  transactions, with one complete Advanced review and all-or-nothing ordered
+  results.
+
+### Security
+
+- Bind the complete batch and approval context, reject duplicate, conflicting,
+  or internally linked transactions, and keep marketplace batch activation
+  outside the reviewed ord.net single-inscription allowlist.
+
+### Changed
+
+- Consume `@drey/core` v0.17.0.
+
 ## 0.13.1
 
 ### Added

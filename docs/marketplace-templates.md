@@ -14,7 +14,11 @@ review); every Satflow entry and the ord.net collection/trait funding-parent
 entries remain `fixture_only`, for which the provider resolver returns a stable
 unsupported template result even for an otherwise exact live request.
 Registry integrity hard-fails any enabled entry outside the reviewed ord.net
-inscription scope. `marketplaceContext` is a strict optional
+inscription scope. Each template also carries an explicit single-request
+`signPsbt` or `signMessage` method. The registry cannot represent
+`signMultipleTransactions`; adding any future batch template requires a
+reviewed schema and policy release plus an explicit expansion of both the core
+integrity allowlist and extension audit. `marketplaceContext` is a strict optional
 extension of `signPsbt` and `signMessage`; it binds workflow state and supplies
 review text, but never selects a marketplace by brand name or authorizes a
 sighash. Resolution returns one of:
@@ -99,6 +103,17 @@ yet, ord.net auth requires a payment address holding at least 0.01 BTC
 confirmed, and batch listing preflights (2..20 items) are not represented and
 fail closed. First live trades are manual operator actions with small amounts;
 operator test-wallet procedures exclude inscription movement.
+
+The checked-in ord.net corpus contains the published contract and derived
+metadata, but not sanitized canonical vendor PSBT bytes, authoritative prevout
+classifications, exact signing-index maps, or a complete single-listing
+three-step fixture graph. Consequently it cannot support a genuine
+controller-to-`WalletService` execution test of the vendor ceremony. Existing
+tests prove the controller and signing service separately against synthetic
+PSBTs and prove the template contract, but they must not be described as
+vendor-faithful execution evidence. Closing this gap requires a reviewed,
+non-secret vendor capture containing those exact artifacts; checks must not be
+weakened to manufacture the missing evidence.
 
 The ord.net v2 collection/trait funding-parent design (four-key fill gate,
 zero-fee TRUC parents, enclave co-signer) remains `fixture_only` pending an

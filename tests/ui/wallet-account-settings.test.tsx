@@ -52,6 +52,7 @@ function session(refresh: () => void): SessionView {
       limit: 5, requiresAcknowledgement: true,
     },
     activeRecoveredAddressCount: 0,
+    backupDeferred: false,
     capabilities: {
       canView: true,
       canDeriveAddresses: true,
@@ -106,6 +107,7 @@ describe('WalletAccountSettings', () => {
     const switchPayloads: unknown[] = [];
     const removePayloads: unknown[] = [];
     const refresh = vi.fn();
+    const onBack = vi.fn();
     installFakeChrome({
       'vault.switch': (payload) => {
         switchPayloads.push(payload);
@@ -129,7 +131,7 @@ describe('WalletAccountSettings', () => {
       <UiRoot sender="fullpage">
         <WalletAccountSettings
           session={session(refresh)}
-          onBack={vi.fn()}
+          onBack={onBack}
           onManageAccounts={vi.fn()}
         />
       </UiRoot>,
@@ -143,10 +145,9 @@ describe('WalletAccountSettings', () => {
     const savingsRow = within(wallets!).getByText('Savings').closest('div');
     expect(savingsRow).not.toBeNull();
     await userEvent.click(within(savingsRow!).getByRole('button', { name: 'Switch' }));
-    await userEvent.type(screen.getByLabelText('App password'), 'switch-secret');
-    await userEvent.click(screen.getByRole('button', { name: 'Switch wallet' }));
     await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
-    expect(switchPayloads).toEqual([{ vaultId: 'vault-2', password: 'switch-secret' }]);
+    expect(onBack).toHaveBeenCalledOnce();
+    expect(switchPayloads).toEqual([{ vaultId: 'vault-2' }]);
 
     await userEvent.click(within(savingsRow!).getByRole('button', { name: 'Remove' }));
     const removeButton = screen.getByRole('button', { name: 'Remove Savings' });

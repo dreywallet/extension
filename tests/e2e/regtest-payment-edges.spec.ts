@@ -3,6 +3,7 @@ import { test, expect, type OnboardingPage, type PopupPage } from './fixtures';
 import { fillPrivate } from './pages';
 import { terminateExtensionWorker, wakeExtensionWorker } from './worker';
 import {
+  assertBatchTransactionIntent,
   assertConsolidationTransaction,
   assertRegtestReady,
   assertSendMaxTransaction,
@@ -126,6 +127,136 @@ async function expectPopupBalance(popup: PopupPage, sats: number): Promise<void>
     { timeout: 60_000 },
   );
 }
+
+test('sends a two-recipient high-fee payment after explicit password confirmation', async ({
+  onboarding,
+  popup,
+  extensionContext,
+  extensionId,
+}) => {
+  test.slow();
+  const wallet = await createFundedWallet({
+    onboarding, popup, context: extensionContext, extensionId,
+    name: 'Batch high-fee regtest E2E', amounts: [20_000],
+  });
+  try {
+    const [firstDestination, secondDestination] = await Promise.all([
+      freshExternalAddress(),
+      freshExternalAddress(),
+    ]);
+    await wallet.page.getByRole('button', { name: 'Send', exact: true }).click();
+    await fillPrivate(
+      wallet.page.getByLabel('Recipient address or BIP-321 URI'),
+      firstDestination,
+    );
+    await wallet.page.getByLabel('Amount (BTC)').fill('0.00001001');
+    await wallet.page.getByRole('button', { name: 'Add another recipient' }).click();
+    await fillPrivate(
+      wallet.page.getByLabel('Recipient address', { exact: true }),
+      secondDestination,
+    );
+    await wallet.page.getByLabel('Amount (BTC)').nth(1).fill('0.00001002');
+    await wallet.page.getByRole('radio', { name: 'Custom' }).check();
+    await wallet.page.getByLabel('Fee rate (sat/vB)').fill('2.773');
+    await wallet.page.getByRole('button', { name: 'Review transaction' }).click();
+
+    const reviewHeading = wallet.page.getByRole('heading', { name: 'Review transaction' });
+    await expect(reviewHeading).toBeVisible({ timeout: 45_000 });
+    const review = reviewHeading.locator('xpath=ancestor::section[1]');
+    await expect(review.getByText(firstDestination, { exact: true })).toBeVisible();
+    await expect(review.getByText(secondDestination, { exact: true })).toBeVisible();
+    await expect(review.getByText('1,001 sats', { exact: true })).toBeVisible();
+    await expect(review.getByText('1,002 sats', { exact: true })).toBeVisible();
+    await expect(review.getByText(
+      'The network fee is more than 10% of the amount being sent.',
+      { exact: true },
+    )).toBeVisible();
+    const password = review.getByLabel('Confirm app password');
+    const approve = review.getByRole('button', { name: 'Sign and broadcast' });
+    await expect(password).toBeVisible();
+    await expect(approve).toBeDisabled();
+    await fillPrivate(password, TEST_PASSWORD);
+    await expect(approve).toBeEnabled();
+    await approve.click();
+
+    await expect(wallet.page.getByRole('heading', { name: 'Transaction sent' })).toBeVisible({
+      timeout: 45_000,
+    });
+    const txid = checkedTxid(await wallet.page.locator('a[href*="/tx/"] code').textContent());
+    await transactionInMempool(txid);
+    const broadcast = await assertBatchTransactionIntent(
+      txid,
+      wallet.fundings[0]!,
+      [
+        { destination: firstDestination, sats: 1_001 },
+        { destination: secondDestination, sats: 1_002 },
+      ],
+      { min: 2.77, max: 2.78 },
+    );
+    await confirmTransaction(txid);
+    await expectPopupBalance(popup, wallet.totalSats - 2_003 - broadcast.feeSats);
+  } finally {
+    await wallet.page.close().catch(() => undefined);
+  }
+});
+
+test('releases an unsigned batch review when Send is left', async ({
+  onboarding,
+  popup,
+  extensionContext,
+  extensionId,
+}) => {
+  test.slow();
+  const wallet = await createFundedWallet({
+    onboarding, popup, context: extensionContext, extensionId,
+    name: 'Abandoned batch review regtest E2E', amounts: [20_000],
+  });
+  try {
+    const [firstDestination, secondDestination] = await Promise.all([
+      freshExternalAddress(),
+      freshExternalAddress(),
+    ]);
+    const before = await mempoolTransactionIds();
+    const fillBatch = async (): Promise<void> => {
+      await fillPrivate(
+        wallet.page.getByLabel('Recipient address or BIP-321 URI'),
+        firstDestination,
+      );
+      await wallet.page.getByLabel('Amount (BTC)').fill('0.00001001');
+      await wallet.page.getByRole('button', { name: 'Add another recipient' }).click();
+      await fillPrivate(
+        wallet.page.getByLabel('Recipient address', { exact: true }),
+        secondDestination,
+      );
+      await wallet.page.getByLabel('Amount (BTC)').nth(1).fill('0.00001002');
+      await wallet.page.getByRole('radio', { name: 'Custom' }).check();
+      await wallet.page.getByLabel('Fee rate (sat/vB)').fill('2.773');
+      await wallet.page.getByRole('button', { name: 'Review transaction' }).click();
+      await expect(wallet.page.getByRole('heading', { name: 'Review transaction' }))
+        .toBeVisible({ timeout: 45_000 });
+    };
+
+    await wallet.page.getByRole('button', { name: 'Send', exact: true }).click();
+    await fillBatch();
+    await wallet.page.getByRole('button', { name: 'Activity', exact: true }).click();
+    await expect(wallet.page.getByRole('heading', { name: 'Transaction activity' }))
+      .toBeVisible();
+
+    await wallet.page.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect(wallet.page.getByLabel('Recipient address or BIP-321 URI'))
+      .toHaveValue(firstDestination);
+    await expect(wallet.page.getByLabel('Recipient address', { exact: true }))
+      .toHaveValue(secondDestination);
+    await wallet.page.getByRole('button', { name: 'Review transaction' }).click();
+    await expect(wallet.page.getByRole('heading', { name: 'Review transaction' }))
+      .toBeVisible({ timeout: 45_000 });
+    await wallet.page.getByRole('button', { name: 'Cancel' }).click();
+
+    expect(await mempoolTransactionIds()).toEqual(before);
+  } finally {
+    await wallet.page.close().catch(() => undefined);
+  }
+});
 
 test('@extended sends the exact maximum with no hidden change output', async ({
   onboarding,

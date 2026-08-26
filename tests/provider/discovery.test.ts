@@ -30,6 +30,8 @@ describe('WBIP004 and de-facto provider discovery metadata', () => {
       webUrl: 'https://squirrelsystems.net',
       chromeWebStoreUrl:
         'https://chromewebstore.google.com/detail/drey/kngidlmmbfmnoeimngkajdlbdenlhgof',
+      googlePlayStoreUrl:
+        'https://play.google.com/store/apps/details?id=net.squirrelsystems.drey',
       methods: [...PROVIDER_METHODS],
     }]);
     expect(target.wbip_providers).toEqual([{
@@ -39,10 +41,12 @@ describe('WBIP004 and de-facto provider discovery metadata', () => {
       webUrl: 'https://squirrelsystems.net',
       chromeWebStoreUrl:
         'https://chromewebstore.google.com/detail/drey/kngidlmmbfmnoeimngkajdlbdenlhgof',
+      googlePlayStoreUrl:
+        'https://play.google.com/store/apps/details?id=net.squirrelsystems.drey',
       methods: [...PROVIDER_METHODS],
     }]);
     expect(Object.keys((target.wbip_providers as Record<string, unknown>[])[0]!).sort())
-      .toEqual(['chromeWebStoreUrl', 'icon', 'id', 'methods', 'name', 'webUrl']);
+      .toEqual(['chromeWebStoreUrl', 'googlePlayStoreUrl', 'icon', 'id', 'methods', 'name', 'webUrl']);
   });
 
   it('is idempotent and preserves other wallets', () => {

@@ -76,7 +76,7 @@ sibling core checkout and skip themselves when one is not present; to run them, 
 the core repository next to this one at the pinned tag:
 
 ```bash
-git clone --branch v0.16.1 https://github.com/dreywallet/core.git ../core
+git clone --branch v0.17.6 https://github.com/dreywallet/core.git ../core
 ```
 
 `pnpm test:marketplace-contracts` runs the marketplace contract suite from that sibling

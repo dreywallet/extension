@@ -21,19 +21,29 @@ assert(registry.includes('ORDNET_SALE_PUBLIC_KEY') === false,
   'pinned signing keys belong in the verified adapter, not a remotely replaceable registry field');
 assert(registry.includes(createHash('sha256').update(manifest).digest('hex')),
   'compile-time registry is not bound to the pinned fixture manifest');
-// Reviewed activation scope: ord.net single-inscription templates plus the
-// exact-origin OMB Wiki buyer-only ORD.NET/Satflow contracts.
+const reviewedEnabledTemplates = new Set([
+  'ordnet-auth', 'ordnet-list', 'ordnet-buy', 'ordnet-offer', 'ordnet-counter',
+  'ordnet-accept-offer', 'ordnet-accept-counter', 'omb-wiki-ordnet-buy',
+  'omb-wiki-satflow-secure-buy',
+]);
+const enabledTemplates = new Set();
+assert(registry.includes("providerMethod: input.steps.length === 0 ? 'signMessage' : 'signPsbt'"),
+  'marketplace templates do not bind an explicit single-request provider method');
+assert(!registry.includes("providerMethod: 'signMultipleTransactions'"),
+  'batch marketplace activation requires an explicit reviewed policy expansion');
+assert(!registry.includes("providerMethod: 'signMultipleMessages'"),
+  'message-batch marketplace activation requires an explicit reviewed policy expansion');
+// Reviewed activation scope is an exact ID set, not a broad marketplace category.
 for (const block of registry.split(/template\(\{/u).slice(1)) {
   if (!block.includes("activation: 'enabled'")) continue;
-  const nativeOrdnet = block.includes("marketplaceId: 'ordnet'") &&
-    block.includes("assetKind: 'inscription'");
-  const ombBuyer = block.includes('origins: OMB_WIKI_ORIGIN') &&
-    block.includes("role: 'buyer'") && block.includes("assetKind: 'inscription'") &&
-    block.includes("broadcaster: 'site'") &&
-    (block.includes("action: 'buy'") || block.includes("action: 'secure_buy'"));
-  assert(nativeOrdnet || ombBuyer,
-    'marketplace template enabled outside the reviewed ord.net/OMB buyer scope');
+  const id = /templateId:\s*'([^']+)'/u.exec(block)?.[1];
+  assert(id !== undefined && reviewedEnabledTemplates.has(id),
+    `marketplace template enabled outside the exact reviewed set: ${id ?? 'unknown'}`);
+  if (id !== undefined) enabledTemplates.add(id);
 }
+assert(enabledTemplates.size === reviewedEnabledTemplates.size &&
+  [...reviewedEnabledTemplates].every((id) => enabledTemplates.has(id)),
+'reviewed marketplace activation set is incomplete or changed');
 
 if (failures.length) {
   console.error(failures.map((failure) => `FAIL: ${failure}`).join('\n'));

@@ -241,6 +241,7 @@ export interface VaultMeta {
   /** Compatibility projection for the existing usage gate. */
   backupVerified: boolean;
   metadata: BackupMetadataV1;
+  deferredUseAcknowledgedAt: number | null;
 }
 
 export type VaultMetaMap = Record<string, VaultMeta>;
@@ -249,6 +250,7 @@ const legacyVaultMetaSchema = z.object({ backupVerified: z.boolean() }).strict()
 const currentVaultMetaSchema = z.object({
   backupVerified: z.boolean(),
   metadata: backupMetadataSchema,
+  deferredUseAcknowledgedAt: z.number().int().nonnegative().nullable().optional(),
 }).strict();
 const vaultMetaSchema = z.record(z.union([legacyVaultMetaSchema, currentVaultMetaSchema]));
 
@@ -258,11 +260,15 @@ export async function loadVaultMeta(area: StorageArea): Promise<VaultMetaMap> {
   let migrated = false;
   const result = Object.fromEntries(Object.entries(parsed.data).map(([vaultId, entry]) => [
     vaultId,
-    'metadata' in entry ? entry : (() => {
+    'metadata' in entry ? {
+      ...entry,
+      deferredUseAcknowledgedAt: entry.deferredUseAcknowledgedAt ?? null,
+    } : (() => {
       migrated = true;
       return {
         backupVerified: entry.backupVerified,
         metadata: migrateLegacyBackupMetadata(entry.backupVerified),
+        deferredUseAcknowledgedAt: null,
       };
     })(),
   ])) as VaultMetaMap;

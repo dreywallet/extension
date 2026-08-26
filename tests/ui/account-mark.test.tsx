@@ -103,6 +103,7 @@ describe('placement: marks disambiguate, never decorate', () => {
     accountSummaries,
     accountAddState: null,
     activeRecoveredAddressCount: 0,
+    backupDeferred: false,
     capabilities: {
       signMethod: 'software', canView: true, canDeriveAddresses: true,
       canPlanTransactions: true, canSignTransactions: true, canSignMessages: true,

@@ -2,6 +2,7 @@ import { createHash, createPublicKey, randomBytes, verify } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { SigHash, Transaction } from '@scure/btc-signer';
 import type { Page } from '@playwright/test';
 
 const gatewayRoot = path.resolve(import.meta.dirname, '../../../gateway');
@@ -9,6 +10,12 @@ const gatewayState = path.join(gatewayRoot, 'regtest/.state');
 const regtestControllerPath = path.join(gatewayRoot, 'regtest/control.mjs');
 const rpcAuthPath = path.join(gatewayState, 'secrets/core-rpc.auth');
 const gatewayPublicKeyPath = path.join(gatewayState, 'response-signing.pub');
+const regtestProject = process.env.DREY_REGTEST_PROJECT;
+if (regtestProject !== undefined && !/^[a-z0-9][a-z0-9_-]{0,48}$/u.test(regtestProject)) {
+  throw new Error('DREY_REGTEST_PROJECT must name a valid isolated project');
+}
+const regtestProjectArgs = regtestProject === undefined ? [] : ['--project', regtestProject];
+const regtestConfirmation = regtestProject ?? 'drey-regtest';
 const rpcOrigin = 'http://127.0.0.1:18443';
 const gatewayOrigin = 'http://127.0.0.1:18480';
 const ordinalRecipientWallet = 'drey-regtest-ordinal-recipient';
@@ -38,6 +45,22 @@ export interface FundingOutpoint {
   txid: string;
   vout: number;
   sats: number;
+}
+
+export interface ProviderPsbtFixture {
+  psbtBase64: string;
+  unsignedTxid: string;
+  funding: FundingOutpoint;
+  walletAddress: string;
+  destination: string;
+  sendSats: number;
+  changeSats: number;
+  feeSats: number;
+}
+
+export interface FinalizedProviderTransaction {
+  hex: string;
+  txid: string;
 }
 
 export interface TransactionIntentResult {
@@ -87,6 +110,11 @@ function validTxid(value: unknown): value is string {
 
 function validRegtestAddress(value: unknown): value is string {
   return typeof value === 'string' && /^bcrt1[ac-hj-np-z02-9]{8,87}$/u.test(value);
+}
+
+function unsignedTransactionId(transaction: Transaction): string {
+  const first = createHash('sha256').update(transaction.unsignedTx).digest();
+  return Buffer.from(createHash('sha256').update(first).digest()).reverse().toString('hex');
 }
 
 function btcToSats(value: unknown, label: string): number {
@@ -453,6 +481,152 @@ export async function freshExternalOrdinalAddress(): Promise<string> {
   return address;
 }
 
+export async function createProviderPsbtFixture(input: {
+  funding: FundingOutpoint;
+  walletAddress: string;
+  destination: string;
+  sendSats: number;
+  feeSats?: number;
+}): Promise<ProviderPsbtFixture> {
+  const feeSats = input.feeSats ?? 500;
+  if (!validTxid(input.funding.txid) || !Number.isSafeInteger(input.funding.vout) ||
+      input.funding.vout < 0 || !Number.isSafeInteger(input.funding.sats) ||
+      input.funding.sats <= 0 || !validRegtestAddress(input.walletAddress) ||
+      !validRegtestAddress(input.destination) || !Number.isSafeInteger(input.sendSats) ||
+      input.sendSats <= 0 || !Number.isSafeInteger(feeSats) || feeSats <= 0) {
+    throw new Error('provider PSBT fixture received malformed intent');
+  }
+  const changeSats = input.funding.sats - input.sendSats - feeSats;
+  if (changeSats <= 546) throw new Error('provider PSBT fixture requires non-dust change');
+  const bare = await coreRpc<string>('createpsbt', [
+    [{ txid: input.funding.txid, vout: input.funding.vout, sequence: 0xfffffffd }],
+    [
+      { [input.destination]: input.sendSats / 100_000_000 },
+      { [input.walletAddress]: changeSats / 100_000_000 },
+    ],
+    0,
+    true,
+  ]);
+  const enrichedBase64 = await coreRpc<string>('utxoupdatepsbt', [bare]);
+  const enriched = Transaction.fromPSBT(Buffer.from(enrichedBase64, 'base64'));
+  const sourceInput = enriched.getInput(0);
+  if (!sourceInput.txid || sourceInput.index === undefined || !sourceInput.witnessUtxo) {
+    throw new Error('Bitcoin Core did not populate the provider PSBT witness UTXO');
+  }
+  const normalized = new Transaction({
+    lowR: true,
+    version: enriched.version,
+    lockTime: enriched.lockTime,
+  });
+  normalized.addInput({
+    txid: sourceInput.txid,
+    index: sourceInput.index,
+    ...(sourceInput.sequence === undefined ? {} : { sequence: sourceInput.sequence }),
+    witnessUtxo: sourceInput.witnessUtxo,
+    sighashType: SigHash.ALL,
+  });
+  for (let index = 0; index < enriched.outputsLength; index += 1) {
+    const output = enriched.getOutput(index);
+    if (!output.script || output.amount === undefined) {
+      throw new Error('Bitcoin Core returned a malformed provider PSBT output');
+    }
+    normalized.addOutput({ script: output.script, amount: output.amount });
+  }
+  const psbtBase64 = Buffer.from(normalized.toPSBT()).toString('base64');
+  const decoded = await coreRpc<{
+    tx?: DecodedTransaction;
+    inputs?: Array<{
+      witness_utxo?: { amount?: unknown; scriptPubKey?: { address?: unknown } };
+    }>;
+    fee?: unknown;
+  }>('decodepsbt', [psbtBase64]);
+  const source = decoded.inputs?.[0]?.witness_utxo;
+  const outputs = decoded.tx?.vout ?? [];
+  if (!validTxid(decoded.tx?.txid) || decoded.tx?.vin?.length !== 1 ||
+      decoded.tx.vin[0]?.txid !== input.funding.txid ||
+      decoded.tx.vin[0]?.vout !== input.funding.vout || decoded.inputs?.length !== 1 ||
+      source?.scriptPubKey?.address !== input.walletAddress ||
+      btcToSats(source.amount, 'provider PSBT source') !== input.funding.sats ||
+      outputs.length !== 2 || outputs[0]?.scriptPubKey?.address !== input.destination ||
+      btcToSats(outputs[0]?.value, 'provider PSBT destination') !== input.sendSats ||
+      outputs[1]?.scriptPubKey?.address !== input.walletAddress ||
+      btcToSats(outputs[1]?.value, 'provider PSBT change') !== changeSats ||
+      btcToSats(decoded.fee, 'provider PSBT fee') !== feeSats) {
+    throw new Error('Bitcoin Core did not construct the exact provider PSBT fixture');
+  }
+  // Parse independently from Core as well. This catches malformed PSBT bytes
+  // before a browser ever receives the fixture.
+  const parsed = Transaction.fromPSBT(Buffer.from(psbtBase64, 'base64'));
+  if (unsignedTransactionId(parsed) !== decoded.tx.txid ||
+      parsed.inputsLength !== 1 || parsed.outputsLength !== 2) {
+    throw new Error('provider PSBT fixture did not round-trip through the wallet signer parser');
+  }
+  return {
+    psbtBase64,
+    unsignedTxid: decoded.tx.txid,
+    funding: input.funding,
+    walletAddress: input.walletAddress,
+    destination: input.destination,
+    sendSats: input.sendSats,
+    changeSats,
+    feeSats,
+  };
+}
+
+export async function verifySignedProviderBatch(
+  signedPsbts: readonly string[],
+  fixtures: readonly ProviderPsbtFixture[],
+): Promise<FinalizedProviderTransaction[]> {
+  if (signedPsbts.length !== fixtures.length || signedPsbts.length === 0) {
+    throw new Error('signed provider batch result count changed');
+  }
+  const finalized: FinalizedProviderTransaction[] = [];
+  for (let index = 0; index < fixtures.length; index += 1) {
+    const fixture = fixtures[index]!;
+    const psbtBase64 = signedPsbts[index]!;
+    const decoded = await coreRpc<{
+      tx?: DecodedTransaction;
+      inputs?: Array<{ partial_signatures?: Record<string, unknown> }>;
+    }>('decodepsbt', [psbtBase64]);
+    const signatures = decoded.inputs?.[0]?.partial_signatures;
+    if (decoded.tx?.txid !== fixture.unsignedTxid || signatures === undefined ||
+        Object.keys(signatures).length !== 1) {
+      throw new Error('signed provider batch result changed order or signature scope');
+    }
+    const result = await coreRpc<{ hex?: unknown; complete?: unknown }>('finalizepsbt', [psbtBase64, true]);
+    if (result.complete !== true || typeof result.hex !== 'string' ||
+        !/^[0-9a-f]+$/u.test(result.hex)) {
+      throw new Error('Bitcoin Core could not finalize a signed provider batch result');
+    }
+    const raw = await coreRpc<DecodedTransaction>('decoderawtransaction', [result.hex]);
+    if (raw.txid !== fixture.unsignedTxid) {
+      throw new Error('finalized provider transaction identity changed');
+    }
+    finalized.push({ hex: result.hex, txid: fixture.unsignedTxid });
+  }
+  const acceptance = await coreRpc<Array<{ txid?: unknown; allowed?: unknown }>>(
+    'testmempoolaccept',
+    [finalized.map((item) => item.hex)],
+  );
+  if (acceptance.length !== finalized.length || acceptance.some((item, index) =>
+    item.allowed !== true || item.txid !== finalized[index]?.txid)) {
+    throw new Error('Bitcoin Core rejected a finalized provider batch result');
+  }
+  return finalized;
+}
+
+export async function broadcastFinalizedProviderBatch(
+  transactions: readonly FinalizedProviderTransaction[],
+): Promise<string[]> {
+  const txids: string[] = [];
+  for (const transaction of transactions) {
+    const txid = await coreRpc<string>('sendrawtransaction', [transaction.hex]);
+    if (txid !== transaction.txid) throw new Error('Bitcoin Core returned a changed provider txid');
+    txids.push(txid);
+  }
+  return txids;
+}
+
 interface OrdInscriptionRecord {
   address?: unknown;
   content_length?: unknown;
@@ -491,7 +665,8 @@ export async function createOrdinalFixture(
     'inscribe',
     '--destination', destination,
     '--destination-lane', destinationLane,
-    '--confirm', 'drey-regtest',
+    '--confirm', regtestConfirmation,
+    ...regtestProjectArgs,
   ], {
     cwd: gatewayRoot,
     encoding: 'utf8',
@@ -1036,6 +1211,93 @@ export async function assertTransactionIntent(
     throw new Error('broadcast change did not conserve the funded satoshi value');
   }
   return { feeSats, feeRate, changeSats: change.sats };
+}
+
+export async function assertBatchTransactionIntent(
+  txid: string,
+  funding: FundingOutpoint | readonly FundingOutpoint[],
+  recipients: readonly { destination: string; sats: number }[],
+  expectedFeeRate: { min: number; max?: number },
+): Promise<TransactionIntentResult> {
+  const fundings = Array.isArray(funding) ? funding : [funding];
+  if (!validTxid(txid) || fundings.length === 0 || recipients.length < 2 ||
+      recipients.length > 20 || fundings.some((entry) =>
+        !validTxid(entry.txid) || !Number.isSafeInteger(entry.vout) || entry.vout < 0 ||
+        !Number.isSafeInteger(entry.sats) || entry.sats <= 0) ||
+      recipients.some((entry) => !validRegtestAddress(entry.destination) ||
+        !Number.isSafeInteger(entry.sats) || entry.sats <= 0) ||
+      new Set(recipients.map((entry) => entry.destination)).size !== recipients.length ||
+      !Number.isFinite(expectedFeeRate.min) || expectedFeeRate.min <= 0 ||
+      (expectedFeeRate.max !== undefined &&
+        (!Number.isFinite(expectedFeeRate.max) || expectedFeeRate.max < expectedFeeRate.min))) {
+    throw new Error('batch transaction intent assertion received invalid inputs');
+  }
+  const fundingSats = fundings.reduce((sum, entry) => sum + entry.sats, 0);
+  const sendSats = recipients.reduce((sum, entry) => sum + entry.sats, 0);
+  if (!Number.isSafeInteger(fundingSats) || !Number.isSafeInteger(sendSats) ||
+      sendSats >= fundingSats) {
+    throw new Error('batch transaction funding did not safely cover the intended send');
+  }
+
+  const [transaction, mempool, destinationInfo] = await Promise.all([
+    coreRpc<DecodedTransaction>('getrawtransaction', [txid, true]),
+    coreRpc<{ vsize?: unknown; fees?: { base?: unknown } }>('getmempoolentry', [txid]),
+    Promise.all(recipients.map((entry) => coreRpc<{ ismine?: unknown }>(
+      'getaddressinfo', [entry.destination], 'drey-regtest-miner',
+    ))),
+  ]);
+  const expectedInputs = new Set(fundings.map((entry) => `${entry.txid}:${entry.vout}`));
+  const actualInputs = Array.isArray(transaction.vin)
+    ? transaction.vin.map((input) => `${String(input.txid)}:${String(input.vout)}`)
+    : [];
+  if (transaction.txid !== txid || actualInputs.length !== expectedInputs.size ||
+      new Set(actualInputs).size !== actualInputs.length ||
+      actualInputs.some((input) => !expectedInputs.has(input))) {
+    throw new Error('batch transaction did not spend the exact funded extension outpoints');
+  }
+  if (destinationInfo.some((info) => info.ismine !== true)) {
+    throw new Error('a batch destination is not controlled by the disposable regtest miner');
+  }
+  if (!Array.isArray(transaction.vout) || transaction.vout.length !== recipients.length + 1) {
+    throw new Error('batch transaction did not contain every recipient plus one change output');
+  }
+
+  const outputs = transaction.vout.map((output) => ({
+    address: output.scriptPubKey?.address,
+    sats: btcToSats(output.value, 'batch broadcast output'),
+  }));
+  if (outputs.some((output) => !validRegtestAddress(output.address))) {
+    throw new Error('batch transaction contained a non-regtest or non-address output');
+  }
+  for (const recipient of recipients) {
+    if (outputs.filter((output) => output.address === recipient.destination &&
+      output.sats === recipient.sats).length !== 1) {
+      throw new Error('batch transaction did not pay an exact intended recipient amount');
+    }
+  }
+  const recipientAddresses = new Set(recipients.map((entry) => entry.destination));
+  const changeOutputs = outputs.filter((output) =>
+    typeof output.address === 'string' && !recipientAddresses.has(output.address));
+  if (changeOutputs.length !== 1 || changeOutputs[0]!.sats <= 0) {
+    throw new Error('batch transaction did not contain one distinct positive change output');
+  }
+
+  const feeSats = fundingSats - outputs.reduce((sum, output) => sum + output.sats, 0);
+  const reportedFeeSats = btcToSats(mempool.fees?.base, 'batch mempool fee');
+  if (!Number.isSafeInteger(mempool.vsize) || Number(mempool.vsize) <= 0 ||
+      feeSats !== reportedFeeSats || feeSats <= 0) {
+    throw new Error('batch transaction fee did not match the independently decoded value');
+  }
+  const feeRate = feeSats / Number(mempool.vsize);
+  if (feeRate < expectedFeeRate.min ||
+      (expectedFeeRate.max !== undefined && feeRate > expectedFeeRate.max)) {
+    throw new Error('batch transaction did not honor the requested fee-rate range');
+  }
+  const changeSats = changeOutputs[0]!.sats;
+  if (changeSats !== fundingSats - sendSats - feeSats) {
+    throw new Error('batch transaction change did not conserve the funded satoshi value');
+  }
+  return { feeSats, feeRate, changeSats };
 }
 
 export async function confirmTransaction(txid: string): Promise<number> {

@@ -41,6 +41,27 @@ const QUOTE = {
   expiresAt: '2026-07-21T12:02:00.000Z',
 };
 
+function batchReauthReview() {
+  return {
+    kind: 'native_batch_send', network: 'mainnet', accountId: ACCOUNT_ID,
+    recipients: [
+      { address: 'bc1qrecipientone', valueSats: '1001', role: 'recipient' },
+      { address: 'bc1qrecipienttwo', valueSats: '1002', role: 'recipient' },
+    ],
+    inputs: [{
+      txid: 'b'.repeat(64), vout: 0, valueSats: '10000',
+      classification: 'cardinal_clean', path: "m/84'/0'/0'/0/0",
+    }],
+    change: [{ address: 'bc1qchange', valueSats: '7520', role: 'payment_change' }],
+    amountSats: '2003', feeSats: '477', totalSats: '2480',
+    vsize: '172', feeRateSatPerKvB: '2773', feeRateSatPerVb: '2.773',
+    urgency: 'recommended', rbf: true, psbtHash: 'c'.repeat(64),
+    standardModeMissingProtections: [], requiresReauth: true,
+    reauthReasons: ['high_relative_fee'], effectCount: 0,
+    requiresPreviewAcknowledgement: false, inscriptions: [], ordinalAction: null,
+  };
+}
+
 function homeWithActivity(activity: WalletHomeResult['activity']): WalletHomeResult {
   return {
     accountId: ACCOUNT_ID,
@@ -270,6 +291,245 @@ describe('transaction screen orchestration', () => {
     expect(screen.getByText('~1–2 blocks')).toBeInTheDocument();
     expect(screen.queryByText(/best effort/iu)).not.toBeInTheDocument();
     expect(screen.queryByText(/about/iu)).not.toBeInTheDocument();
+  });
+
+  it('keeps an approval failure inside the transaction review where the user submitted it', async () => {
+    const approvals: unknown[] = [];
+    installFakeChrome({
+      'fees.quote': () => ({ ok: true, result: QUOTE }),
+      'transaction.plan': () => ({
+        ok: true,
+        result: {
+          planId: 'batch-reauth-plan', planHash: 'a'.repeat(64),
+          expiresAt: Date.now() + 60_000,
+          review: batchReauthReview(),
+        },
+      }),
+      'transaction.approve': (payload) => {
+        approvals.push(payload);
+        return { ok: false, code: 'ERR_WRONG_PASSWORD' };
+      },
+    });
+
+    render(view('send'));
+    fireEvent.change(await screen.findByLabelText('Recipient address or BIP-321 URI'), {
+      target: { value: 'bc1qrecipientone' },
+    });
+    fireEvent.click(screen.getByRole('radio', { name: 'sats' }));
+    fireEvent.change(screen.getByLabelText('Amount (sats)'), { target: { value: '1001' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add another recipient' }));
+    fireEvent.change(screen.getByLabelText('Recipient address'), {
+      target: { value: 'bc1qrecipienttwo' },
+    });
+    fireEvent.change(screen.getAllByLabelText('Amount (sats)')[1]!, {
+      target: { value: '1002' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Review transaction' }));
+
+    const heading = await screen.findByRole('heading', { name: 'Review transaction' });
+    const review = heading.closest('section');
+    expect(review).not.toBeNull();
+    fireEvent.change(screen.getByLabelText('Confirm app password'), {
+      target: { value: 'incorrect password' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign and broadcast' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Wrong password. Try again.');
+    expect(review).toContainElement(alert);
+    expect(approvals).toHaveLength(1);
+  });
+
+  it('explains when approval refreshes the transaction and requires another review', async () => {
+    const cancellations: unknown[] = [];
+    installFakeChrome({
+      'fees.quote': () => ({ ok: true, result: QUOTE }),
+      'transaction.plan': () => ({
+        ok: true,
+        result: {
+          planId: 'batch-reauth-plan', planHash: 'a'.repeat(64),
+          expiresAt: Date.now() + 60_000, review: batchReauthReview(),
+        },
+      }),
+      'transaction.approve': () => ({
+        ok: true,
+        result: {
+          planId: 'batch-replacement-plan', txid: null, status: 'review_required',
+          detail: 'Transaction data changed. Review the replacement before signing.',
+          replacement: {
+            planId: 'batch-replacement-plan', planHash: 'd'.repeat(64),
+            expiresAt: Date.now() + 60_000,
+            review: {
+              ...batchReauthReview(), feeSats: '516', totalSats: '2519',
+              feeRateSatPerKvB: '3000', feeRateSatPerVb: '3',
+              psbtHash: 'e'.repeat(64),
+            },
+          },
+        },
+      }),
+      'transaction.cancel': (payload) => {
+        cancellations.push(payload);
+        return { ok: true, result: { cancelled: true } };
+      },
+    });
+
+    const rendered = render(view('send'));
+    fireEvent.change(await screen.findByLabelText('Recipient address or BIP-321 URI'), {
+      target: { value: 'bc1qrecipientone' },
+    });
+    fireEvent.click(screen.getByRole('radio', { name: 'sats' }));
+    fireEvent.change(screen.getByLabelText('Amount (sats)'), { target: { value: '1001' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add another recipient' }));
+    fireEvent.change(screen.getByLabelText('Recipient address'), {
+      target: { value: 'bc1qrecipienttwo' },
+    });
+    fireEvent.change(screen.getAllByLabelText('Amount (sats)')[1]!, {
+      target: { value: '1002' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Review transaction' }));
+    const firstReview = await screen.findByRole('heading', { name: 'Review transaction' });
+    fireEvent.change(screen.getByLabelText('Confirm app password'), {
+      target: { value: 'correct password' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign and broadcast' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(
+      'Transaction data changed during review. Review a fresh transaction before signing.',
+    );
+    expect(firstReview.closest('section')).toContainElement(alert);
+    expect(screen.getByText('516 sats')).toBeInTheDocument();
+    expect(screen.getByLabelText('Confirm app password')).toHaveValue('');
+
+    rendered.unmount();
+    await waitFor(() => expect(cancellations).toEqual([
+      expect.objectContaining({
+        planId: 'batch-replacement-plan',
+        accountId: ACCOUNT_ID,
+        expectedVaultId: 'vault-1',
+        expectedSessionId: SESSION_1,
+      }),
+    ]));
+  });
+
+  it('cancels a plan that finishes after the send screen has been left', async () => {
+    let finishPlan: ((response: unknown) => void) | undefined;
+    const cancellations: unknown[] = [];
+    installFakeChrome({
+      'fees.quote': () => ({ ok: true, result: QUOTE }),
+      'transaction.plan': () => new Promise((resolve) => { finishPlan = resolve; }),
+      'transaction.cancel': (payload) => {
+        cancellations.push(payload);
+        return { ok: true, result: { cancelled: true } };
+      },
+    });
+
+    const rendered = render(view('send'));
+    fireEvent.change(await screen.findByLabelText('Recipient address or BIP-321 URI'), {
+      target: { value: 'bc1qrecipientone' },
+    });
+    fireEvent.click(screen.getByRole('radio', { name: 'sats' }));
+    fireEvent.change(screen.getByLabelText('Amount (sats)'), { target: { value: '1001' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review transaction' }));
+    await waitFor(() => expect(finishPlan).toBeTypeOf('function'));
+    rendered.unmount();
+
+    act(() => finishPlan?.({
+      ok: true,
+      result: {
+        planId: 'late-plan', planHash: 'a'.repeat(64),
+        expiresAt: Date.now() + 60_000, review: batchReauthReview(),
+      },
+    }));
+
+    await waitFor(() => expect(cancellations).toEqual([
+      expect.objectContaining({ planId: 'late-plan', accountId: ACCOUNT_ID }),
+    ]));
+  });
+
+  it('cancels a replacement review that finishes after the screen has been left', async () => {
+    let finishApproval: ((response: unknown) => void) | undefined;
+    const cancellations: unknown[] = [];
+    installFakeChrome({
+      'fees.quote': () => ({ ok: true, result: QUOTE }),
+      'transaction.plan': () => ({
+        ok: true,
+        result: {
+          planId: 'original-plan', planHash: 'a'.repeat(64),
+          expiresAt: Date.now() + 60_000, review: batchReauthReview(),
+        },
+      }),
+      'transaction.approve': () => new Promise((resolve) => { finishApproval = resolve; }),
+      'transaction.cancel': (payload) => {
+        cancellations.push(payload);
+        return { ok: true, result: { cancelled: true } };
+      },
+    });
+
+    const rendered = render(view('send'));
+    fireEvent.change(await screen.findByLabelText('Recipient address or BIP-321 URI'), {
+      target: { value: 'bc1qrecipientone' },
+    });
+    fireEvent.click(screen.getByRole('radio', { name: 'sats' }));
+    fireEvent.change(screen.getByLabelText('Amount (sats)'), { target: { value: '1001' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review transaction' }));
+    await screen.findByRole('heading', { name: 'Review transaction' });
+    fireEvent.change(screen.getByLabelText('Confirm app password'), {
+      target: { value: 'correct password' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign and broadcast' }));
+    await waitFor(() => expect(finishApproval).toBeTypeOf('function'));
+    rendered.unmount();
+
+    act(() => finishApproval?.({
+      ok: true,
+      result: {
+        planId: 'replacement-plan', txid: null, status: 'review_required',
+        detail: 'Transaction data changed. Review the replacement before signing.',
+        replacement: {
+          planId: 'replacement-plan', planHash: 'd'.repeat(64),
+          expiresAt: Date.now() + 60_000, review: batchReauthReview(),
+        },
+      },
+    }));
+
+    await waitFor(() => expect(cancellations).toEqual([
+      expect.objectContaining({ planId: 'replacement-plan', accountId: ACCOUNT_ID }),
+    ]));
+  });
+
+  it('cancels a review when full-page navigation leaves Send', async () => {
+    const cancellations: unknown[] = [];
+    installFakeChrome({
+      'fees.quote': () => ({ ok: true, result: QUOTE }),
+      'transaction.plan': () => ({
+        ok: true,
+        result: {
+          planId: 'fullpage-plan', planHash: 'a'.repeat(64),
+          expiresAt: Date.now() + 60_000, review: batchReauthReview(),
+        },
+      }),
+      'transaction.cancel': (payload) => {
+        cancellations.push(payload);
+        return { ok: true, result: { cancelled: true } };
+      },
+    });
+
+    const rendered = render(view('send'));
+    fireEvent.change(await screen.findByLabelText('Recipient address or BIP-321 URI'), {
+      target: { value: 'bc1qrecipientone' },
+    });
+    fireEvent.click(screen.getByRole('radio', { name: 'sats' }));
+    fireEvent.change(screen.getByLabelText('Amount (sats)'), { target: { value: '1001' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review transaction' }));
+    await screen.findByRole('heading', { name: 'Review transaction' });
+
+    rendered.rerender(view('activity'));
+
+    await waitFor(() => expect(cancellations).toEqual([
+      expect.objectContaining({ planId: 'fullpage-plan', accountId: ACCOUNT_ID }),
+    ]));
+    expect(screen.queryByRole('heading', { name: 'Review transaction' })).not.toBeInTheDocument();
   });
 
   it('shows fee refresh progress in a reserved legend slot without inserting flow content', async () => {
@@ -1507,9 +1767,14 @@ describe('transaction screen orchestration', () => {
     expect(sentSummary).toHaveTextContent('234 sats network fee');
     fireEvent.click(sentSummary!);
     expect(screen.getByText('Want it confirmed sooner?')).toBeInTheDocument();
-    expect(screen.getByText(
+    const speedUpExplanation = screen.getByText(
       'Your recipient and amount stay unchanged. You’ll review the new network fee before signing.',
-    )).toBeInTheDocument();
+    );
+    expect(speedUpExplanation.className).toContain('actionHelp');
+    const pendingSafety = screen.getByText(
+      'Use Drey’s in-app Speed Up controls or wait for confirmation. Drey support will never ask for your recovery words or tell you to enter them on a website.',
+    );
+    expect(pendingSafety.className).toContain('safetyNote');
     const speedUp = screen.getByRole('button', { name: 'Speed up transaction' });
     expect(screen.queryByText(/\bRBF\b|\bCPFP\b/u)).not.toBeInTheDocument();
     expect(screen.queryByText('Your transaction history will appear here.'))

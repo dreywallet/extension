@@ -29,6 +29,18 @@ pnpm test:e2e:headed
 pnpm audit:e2e-artifacts
 ```
 
+The provider dapp uses loopback port `4173` by default. If another local service
+already owns that port, select an unused loopback port for the entire command:
+
+```bash
+DREY_E2E_DAPP_PORT=4174 pnpm test:e2e
+DREY_E2E_DAPP_PORT=4174 pnpm test:e2e:headed
+```
+
+The harness validates the override and applies it consistently to the server,
+browser configuration, request allowlist, and toolbar-popup checks. The gateway
+fixture remains fixed to loopback port `18080`.
+
 For interactive diagnosis only:
 
 ```bash
@@ -197,7 +209,10 @@ pnpm test:e2e:regtest:ordinals
 ```
 
 The smoke profile retains the original six lifecycle, incoming-payment,
-multi-input, RBF, BIP-321, and reorg journeys. The extended profile covers
+multi-input, RBF, BIP-321, and reorg journeys. The regtest configuration also
+starts the dependency-free provider dapp on `127.0.0.1:4173` by default (or the
+validated `DREY_E2E_DAPP_PORT` override); it is available only for the duration
+of the run. The extended profile covers
 Send Max with no hidden change output, exact manual coin selection, exact
 two-input consolidation while a third coin remains untouched, and an
 underfunded manual send that must not change the real mempool. It also restores
@@ -207,8 +222,13 @@ requires all five accounts and the exact inscription to be visible, and signs a
 real payment from the recovered keys. Additional recovery cases exercise a
 wrong and correct BIP39 passphrase, the explicit Extended-scan prompt through
 receive index 59 and change index 39, and delete-and-restore behavior for local
-coin labels and freeze choices. The unqualified command runs both payment
-profiles plus the real-Ordinals journey.
+coin labels and freeze choices. It also submits two independent real P2WPKH
+PSBTs through `signMultipleTransactions`, requires one complete batch review,
+checks result order and signatures with Bitcoin Core, and proves that the wallet
+does not broadcast. Separate real-outpoint cases reject duplicate or conflicting
+inputs before approval and return no result when an approved input is spent
+during review. The unqualified command runs both payment profiles plus the
+real-Ordinals journey.
 
 This command rebuilds the loopback-only development extension and refuses to
 run unless its manifest targets only `127.0.0.1:18480`, its network is regtest,

@@ -39,6 +39,17 @@ describe('approval gallery', () => {
     expect(screen.getByText(/bc1pcquvhrqv0q68t4m0hfq6tpn006qrskyc7yrqnp2uyrf2emg3wynsdjyk38/iu))
       .toBeInTheDocument();
 
+    await userEvent.click(screen.getByRole('button', { name: /Message batch/iu }));
+    expect(await screen.findByRole('heading', { name: 'Sign 2 messages?' }))
+      .toBeInTheDocument();
+    expect(screen.getByText('Messages can sign you in or confirm an action. They cannot spend bitcoin.'))
+      .toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Message 1 of 2' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Message 2 of 2' })).toBeInTheDocument();
+    expect(screen.getByText(/Purpose: payment address/iu)).toBeInTheDocument();
+    expect(screen.getByText(/Purpose: Ordinals address/iu)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sign messages' })).toBeEnabled();
+
     await userEvent.click(screen.getByRole('button', { name: /Marketplace sale/iu }));
     expect(await screen.findByRole('heading', { name: 'List inscription?' }))
       .toBeInTheDocument();

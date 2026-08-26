@@ -19,7 +19,8 @@ import { deriveAccountNode, deriveAddress } from '@drey/core/domain/keys/derivat
 import { mnemonicToSeed } from '@drey/core/domain/keys/mnemonic';
 import { publicAccountFromSeed } from '@drey/core/domain/accounts/public-account';
 import { scriptPubKeyHex } from '@drey/core/domain/keys/script-hash';
-import { base64ToBytes } from '@drey/core/domain/vault/encoding';
+import { base64ToBytes, bytesToBase64, hexToBytes } from '@drey/core/domain/vault/encoding';
+import { SigHash, Transaction } from '@scure/btc-signer';
 import { installTestCryptoProvider } from '../helpers/install-crypto-provider';
 import { signAndValidatePlan, validateSignedTransactionHex } from '@drey/core/domain/transactions/signing';
 import type { TransactionPlanRequest } from '@drey/core/messaging/ops';
@@ -40,6 +41,9 @@ describe('M7 indeterminate broadcast recovery', () => {
     const broadcasts: string[] = [];
     let fail = true;
     let feeRate = fees.tiers[0].effectiveSatPerKvB;
+    let currentStatus = status;
+    let classificationStatus = status;
+    let advanceStatusAfterRequest = false;
     const walletChanges: string[] = [];
     const seed = mnemonicToSeed(MNEMONIC);
     const inputAddress = deriveAddress(deriveAccountNode(seed, 'payment', 'signet', 0), 'payment', 'signet', 0, 0);
@@ -55,11 +59,17 @@ describe('M7 indeterminate broadcast recovery', () => {
     const now = Date.parse(status.timestamp) + 15_000;
     let statusRequests = 0;
     let feeRequests = 0;
+    let classificationRequests = 0;
     const gateway = {
       endpoint: 'http://fixture-gateway',
       fetchStatus: async () => {
         statusRequests += 1;
-        return { ok: true as const, status, verifiedAtMs: now };
+        const returnedStatus = currentStatus;
+        if (advanceStatusAfterRequest) {
+          currentStatus = classificationStatus;
+          advanceStatusAfterRequest = false;
+        }
+        return { ok: true as const, status: returnedStatus, verifiedAtMs: now };
       },
       fetchFees: async () => {
         feeRequests += 1;
@@ -70,9 +80,14 @@ describe('M7 indeterminate broadcast recovery', () => {
           tiers: [{ ...fees.tiers[0], rawSatPerKvB: feeRate, effectiveSatPerKvB: feeRate }, fees.tiers[1], fees.tiers[2]],
         }, verifiedAtMs: now };
       },
-      classifyOutpoints: async () => ({ ok: true as const, value: {
-        ...status, classifications: [classification], unknownOutpoints: [],
-      }, verifiedAtMs: now }),
+      classifyOutpoints: async () => {
+        classificationRequests += 1;
+        return { ok: true as const, value: {
+          ...classificationStatus,
+          classifications: [{ ...classification, classifiedTip: classificationStatus.coreTip }],
+          unknownOutpoints: [],
+        }, verifiedAtMs: now };
+      },
       broadcastTransaction: async (request: { transactionHex: string; txid: string }) => {
         broadcasts.push(request.transactionHex);
         if (fail) return { ok: false as const, reason: 'network_error' as const };
@@ -193,14 +208,45 @@ describe('M7 indeterminate broadcast recovery', () => {
     expect(storedPlan.outputs.find(({ role }) => role === 'payment_change')?.derivation)
       .toMatchObject({ account: 0, lane: 'payment', chain: 1, index: 3 });
     feeRate += 1000;
+    const statusBeforeFeeReview = statusRequests;
+    const classificationsBeforeFeeReview = classificationRequests;
     const changed = await harness.service.approveTransaction({ planId: planned.planId,
       planHash: planned.planHash, ...expectation });
     expect(changed.status).toBe('review_required');
     if (changed.status !== 'review_required') throw new Error('expected replacement review');
     expect(changed.replacement.review.feeRateSatPerKvB).toBe(String(feeRate));
+    expect(statusRequests).toBe(statusBeforeFeeReview + 1);
+    expect(classificationRequests).toBe(classificationsBeforeFeeReview + 1);
     expect(broadcasts).toHaveLength(0);
-    const replacement = changed.replacement;
+    const feeReplacement = changed.replacement;
     feeRate -= 1000;
+    const advancedTip = { height: status.coreTip.height + 1, hash: 'b'.repeat(64) };
+    classificationStatus = {
+      ...status,
+      timestamp: new Date(now + 2_000).toISOString(),
+      serverTime: new Date(now + 2_000).toISOString(),
+      mempoolObservedAt: new Date(now + 1_000).toISOString(),
+      coreTip: advancedTip,
+      indexTip: advancedTip,
+      historyTip: advancedTip,
+      ordTip: advancedTip,
+    };
+    // Model the production ordering that previously caused a repeat loop: the
+    // classification response has advanced, while the concurrently requested
+    // status response returns the prior tip once before catching up.
+    advanceStatusAfterRequest = true;
+    const statusBeforeSourceReview = statusRequests;
+    const classificationsBeforeSourceReview = classificationRequests;
+    const sourceChanged = await harness.service.approveTransaction({
+      planId: feeReplacement.planId,
+      planHash: feeReplacement.planHash,
+      ...expectation,
+    });
+    expect(sourceChanged.status).toBe('review_required');
+    if (sourceChanged.status !== 'review_required') throw new Error('expected source replacement review');
+    expect(statusRequests).toBe(statusBeforeSourceReview + 2);
+    expect(classificationRequests).toBe(classificationsBeforeSourceReview + 1);
+    const replacement = sourceChanged.replacement;
     const approval = harness.service.approveTransaction({ planId: replacement.planId,
       planHash: replacement.planHash, ...expectation });
     await expect(harness.service.approveTransaction({
@@ -539,6 +585,121 @@ describe('M8 provider indeterminate broadcast recovery', () => {
     await restarted.retryProviderBroadcasts();
     expect(broadcasts).toHaveLength(1);
     await expect(cache.listKeys(vaultId, 'signet', 'providerBroadcastRecovery')).resolves.toEqual([plan.planId]);
+  });
+});
+
+describe('independent provider PSBT batch execution', () => {
+  it('prepares every item, signs once atomically, and matches independent single-item results', async () => {
+    const cache = new MemoryWalletCache();
+    const now = Date.parse(status.timestamp) + 15_000;
+    const derivedSeed = mnemonicToSeed(MNEMONIC);
+    const input = deriveAddress(
+      deriveAccountNode(derivedSeed, 'payment', 'signet', 0), 'payment', 'signet', 0, 0,
+    );
+    const recipient = deriveAddress(
+      deriveAccountNode(derivedSeed, 'payment', 'signet', 1), 'payment', 'signet', 0, 0,
+    );
+    derivedSeed.fill(0);
+    const inputScript = scriptPubKeyHex(input.publicKeyHex, 'payment', 'signet');
+    const recipientScript = scriptPubKeyHex(recipient.publicKeyHex, 'payment', 'signet');
+    const classifications: UtxoClassification[] = [0, 1].map((index) => ({
+      txid: String(index + 1).repeat(64), vout: 0, valueSats: String(100_000 + index * 10_000),
+      scriptPubKey: inputScript, confirmations: 10, primaryClass: 'cardinal_clean',
+      inscriptions: [], satRanges: null, unsupportedAssetDetected: false,
+      confidence: 'authoritative', classifiedTip: status.coreTip,
+      classificationRevision: status.activeRevision,
+    }));
+    const gateway = {
+      endpoint: 'http://fixture-gateway',
+      fetchStatus: async () => ({ ok: true as const, status, verifiedAtMs: now }),
+      classifyOutpoints: async (request: { outpoints: Array<{ txid: string; vout: number }> }) => ({
+        ok: true as const,
+        value: {
+          ...status,
+          classifications: request.outpoints.map((outpoint) => classifications.find((item) =>
+            item.txid === outpoint.txid && item.vout === outpoint.vout)!),
+          unknownOutpoints: [],
+        },
+        verifiedAtMs: now,
+      }),
+    } as unknown as GatewayClient;
+    const harness = makeHarness(now, { network: 'signet', gateway, walletCache: cache });
+    const { vaultId } = await harness.service.restore({
+      name: 'batch signing', password: PASSWORD, mnemonic: MNEMONIC,
+    });
+    const unlocked = await harness.service.unlock({ vaultId, password: PASSWORD });
+    const session = await getSession(harness.session);
+    if (!session) throw new Error('missing session');
+    const dek = base64ToBytes(session.dekB64);
+    const walletUtxos: WalletUtxo[] = classifications.map((classification) => ({
+      accountId: ACCOUNT_ID,
+      outpoint: { txid: classification.txid, vout: classification.vout },
+      valueSats: BigInt(classification.valueSats), scriptPubKey: classification.scriptPubKey,
+      account: 0, lane: 'payment', chain: 0, addressIndex: 0,
+      height: 249_991, walletCreatedChange: false,
+      facts: {
+        primaryClass: 'cardinal_clean', inscriptions: [], satRanges: null,
+        unsupportedAssetDetected: false, confidence: 'authoritative',
+        classifiedTip: status.coreTip, classificationRevision: status.activeRevision,
+      },
+      flags: { userFrozen: false, dustQuarantined: false },
+    }));
+    await cache.put(sealRecord(dek, walletUtxos, {
+      vaultId, network: 'signet', type: 'utxos', key: 'a0:payment',
+    }, new Uint8Array(24).fill(12), now));
+    dek.fill(0);
+    const psbts = classifications.map((classification, index) => {
+      const tx = new Transaction({ lowR: true });
+      tx.addInput({
+        txid: classification.txid, index: 0, sighashType: SigHash.ALL,
+        witnessUtxo: { script: hexToBytes(inputScript), amount: BigInt(classification.valueSats) },
+      });
+      tx.addOutput({
+        script: hexToBytes(recipientScript),
+        amount: BigInt(classification.valueSats) - BigInt(2_000 + index * 100),
+      });
+      return bytesToBase64(tx.toPSBT());
+    });
+    const batchRequest = {
+      items: psbts.map((psbtBase64) => ({
+        psbtBase64,
+        inputsToSign: [{ address: input.address, signingIndexes: [0], sigHash: 1 as const }],
+      })),
+      binding: {
+        origin: 'https://app.example', tabId: 1, frameId: 0,
+        documentId: '123e4567-e89b-42d3-a456-426614174000',
+        requestNonce: '123e4567-e89b-42d3-a456-426614174009',
+        providerMethod: 'signMultipleTransactions' as const,
+      },
+      approvalGeneration: 9,
+    };
+    await expect(harness.service.providerPreparePsbtBatch(batchRequest))
+      .rejects.toMatchObject({ code: 'ERR_UNSAFE_TRANSACTION' });
+    await harness.service.setConfig({
+      expectedVaultId: vaultId,
+      expectedSessionId: unlocked.sessionId,
+      advancedPsbtSigning: true,
+    });
+    const batch = await harness.service.providerPreparePsbtBatch(batchRequest);
+    expect(batch.items).toHaveLength(2);
+    expect(batch.aggregate).toMatchObject({ inputs: 2, outputs: 2 });
+
+    let staleChecks = 0;
+    await expect(harness.service.providerSignPreparedPsbtBatch(batch, () => {
+      staleChecks += 1;
+      if (staleChecks === 3) throw new Error('batch approval became stale');
+    })).rejects.toThrow(/batch approval became stale/u);
+    expect(staleChecks).toBe(3);
+
+    const signed = await harness.service.providerSignPreparedPsbtBatch(batch);
+    expect(signed).toHaveLength(2);
+    expect(signed.every((item) =>
+      Transaction.fromPSBT(base64ToBytes(item.psbtBase64)).getInput(0).partialSig?.length === 1)).toBe(true);
+    const independent = [];
+    for (const item of batch.items) {
+      independent.push(await harness.service.providerSignPreparedPsbt(item.plan, item.requestedInputIndexes));
+    }
+    expect(signed.map((item) => item.psbtBase64)).toEqual(independent.map((item) => item.psbtBase64));
   });
 });
 

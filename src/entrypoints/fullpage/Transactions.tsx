@@ -241,7 +241,12 @@ export function Transactions(props: {
   const [quote, setQuote] = useState<OpResult<'fees.quote'> | null>(null);
   const [quoteUnavailable, setQuoteUnavailable] = useState(false);
   const [quoteLoading, setQuoteLoading] = useState(true);
-  const [plan, setPlan] = useState<PlanResult | null>(null);
+  const [plan, setPlanState] = useState<PlanResult | null>(null);
+  const planRef = useRef<PlanResult | null>(null);
+  const setPlan = useCallback((next: PlanResult | null): void => {
+    planRef.current = next;
+    setPlanState(next);
+  }, []);
   const [password, setPassword] = useState('');
   const [previewUnavailableAcknowledged, setPreviewUnavailableAcknowledged] = useState(false);
   const [nonTaprootDestinationAcknowledged, setNonTaprootDestinationAcknowledged] = useState(false);
@@ -282,6 +287,14 @@ export function Transactions(props: {
     : utxos.find((utxo) => `${utxo.txid}:${utxo.vout}` === postageDraftOutpoint)?.valueSats ?? null;
 
   const { expectedVaultId, expectedSessionId } = props;
+  const cancelDetachedPlan = useCallback((planId: string): void => {
+    void rpc('transaction.cancel', {
+      planId,
+      accountId: props.accountId,
+      expectedVaultId,
+      expectedSessionId,
+    });
+  }, [expectedSessionId, expectedVaultId, props.accountId, rpc]);
   const inscriptionPreviewScope = `${expectedVaultId}:${expectedSessionId}:${props.accountId}`;
   alignInscriptionThumbnailScope(inscriptionPreviewScope);
   const accountActivity = useAccountActivity(
@@ -380,6 +393,9 @@ export function Transactions(props: {
   }, [expectedSessionId, expectedVaultId, rpc]);
 
   useEffect(() => () => {
+    const abandonedPlan = planRef.current;
+    planRef.current = null;
+    const commandWasInFlight = commandInFlight.current !== null;
     quoteGeneration.current += 1;
     utxoGeneration.current += 1;
     activityGeneration.current += 1;
@@ -388,7 +404,34 @@ export function Transactions(props: {
     paymentImportGeneration.current += 1;
     scanRefreshInFlight.current = false;
     resumeScheduled.current = false;
-  }, [expectedSessionId, expectedVaultId]);
+    // Reviews are ephemeral UI drafts. Leaving the screen must release their
+    // input reservation instead of making the same bitcoin appear owned but
+    // unavailable until the ten-minute plan expiry. If signing or planning is
+    // already in flight, its late response is responsible for cleanup below.
+    if (abandonedPlan !== null && !commandWasInFlight) {
+      cancelDetachedPlan(abandonedPlan.planId);
+    }
+  }, [cancelDetachedPlan, expectedSessionId, expectedVaultId]);
+
+  const previousSection = useRef(props.initialSection);
+  useEffect(() => {
+    const leftSend = previousSection.current === 'send' && props.initialSection !== 'send';
+    previousSection.current = props.initialSection;
+    if (!leftSend) return;
+    const abandonedPlan = planRef.current;
+    planRef.current = null;
+    const commandWasInFlight = commandInFlight.current !== null;
+    commandGeneration.current += 1;
+    commandInFlight.current = null;
+    setPlanState(null);
+    setBusy(false);
+    setPassword('');
+    setPreviewUnavailableAcknowledged(false);
+    setNonTaprootDestinationAcknowledged(false);
+    if (abandonedPlan !== null && !commandWasInFlight) {
+      cancelDetachedPlan(abandonedPlan.planId);
+    }
+  }, [cancelDetachedPlan, props.initialSection]);
 
   useEffect(() => {
     setTransactions([]);
@@ -540,7 +583,13 @@ export function Transactions(props: {
         if (commandInFlight.current === command) commandInFlight.current = null;
       }
     })();
-    if (generation !== commandGeneration.current) return;
+    if (generation !== commandGeneration.current) {
+      // The user left while the worker was creating the draft. The worker has
+      // persisted it already, so release it even though this component can no
+      // longer display the review.
+      if (response.ok) cancelDetachedPlan(response.result.planId);
+      return;
+    }
     setBusy(false);
     if (!response.ok) {
       setError(t(intent['kind'] === 'ordinal_postage_manage' &&
@@ -785,7 +834,15 @@ export function Transactions(props: {
         if (commandInFlight.current === command) commandInFlight.current = null;
       }
     })();
-    if (generation !== commandGeneration.current) return;
+    if (generation !== commandGeneration.current) {
+      // A fee/source refresh can replace the old draft after this screen has
+      // gone away. Cancel that otherwise-orphaned replacement, but never touch
+      // a signed/broadcast result or its recovery journal.
+      if (response.ok && response.result.status === 'review_required') {
+        cancelDetachedPlan(response.result.replacement.planId);
+      }
+      return;
+    }
     setBusy(false);
     if (!response.ok) {
       setError(t(errorMessageKey(response.code)));
@@ -793,6 +850,7 @@ export function Transactions(props: {
     }
     if (response.result.status === 'review_required') {
       setPlan(response.result.replacement);
+      setError(t('send.error.changed'));
       setPassword('');
       setPreviewUnavailableAcknowledged(false);
       setNonTaprootDestinationAcknowledged(false);
@@ -823,7 +881,8 @@ export function Transactions(props: {
     setPreviewUnavailableAcknowledged(false);
     setNonTaprootDestinationAcknowledged(false);
     setSelected(new Set());
-  }, [expectedSessionId, expectedVaultId, nonTaprootDestinationAcknowledged, password, plan,
+  }, [cancelDetachedPlan, expectedSessionId, expectedVaultId,
+    nonTaprootDestinationAcknowledged, password, plan,
     previewUnavailableAcknowledged,
     props.accountId, props.capabilities.canSignPsbt, rpc, t]);
 
@@ -1107,7 +1166,7 @@ export function Transactions(props: {
         />
       ) : null}
 
-      {error ? <p role="alert" className={styles['error']}>{error}</p> : null}
+      {error && plan === null ? <p role="alert" className={styles['error']}>{error}</p> : null}
 
       {props.initialSection === 'send' ? (
         result ? (
@@ -1509,6 +1568,7 @@ export function Transactions(props: {
             {!props.capabilities.canSignTransactions ? (
               <p className={styles['advisory']} role="note">{t('send.watchOnlyReview')}</p>
             ) : null}
+            {error ? <p role="alert" className={styles['error']}>{error}</p> : null}
             <div className={styles['row']}>
               <Button variant="secondary" onClick={() => void cancelPlan()} disabled={busy}>{t('common.cancel')}</Button>
               {props.capabilities.canSignTransactions ? (

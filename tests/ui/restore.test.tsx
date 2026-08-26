@@ -25,7 +25,7 @@ describe('RestoreFlow phrase paste', () => {
 
     expect(screen.getByRole('radio', { name: '24 words' })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByLabelText('Word 24')).toHaveValue('zone');
-    expect(screen.getAllByRole('textbox')).toHaveLength(24);
+    expect(screen.getAllByLabelText(/^Word \d+$/u)).toHaveLength(24);
   });
 
   it('rejects an unsupported overflowing paste without changing the phrase', () => {
@@ -46,13 +46,13 @@ describe('RestoreFlow phrase paste', () => {
     expect(screen.getByRole('radio', { name: '15 words' })).toHaveFocus();
   });
 
-  it('keeps entry visible by default and masks all word fields with one control', () => {
+  it('keeps entry masked until explicitly shown and can mask it again', () => {
     setup();
-    expect(screen.getByLabelText('Word 1')).toHaveAttribute('type', 'text');
-    fireEvent.click(screen.getByRole('button', { name: 'Hide words' }));
     expect(screen.getByLabelText('Word 1')).toHaveAttribute('type', 'password');
     fireEvent.click(screen.getByRole('button', { name: 'Show words' }));
     expect(screen.getByLabelText('Word 1')).toHaveAttribute('type', 'text');
+    fireEvent.click(screen.getByRole('button', { name: 'Hide words' }));
+    expect(screen.getByLabelText('Word 1')).toHaveAttribute('type', 'password');
   });
 
   it('masks the optional passphrase unless the user explicitly shows it', () => {
@@ -80,5 +80,22 @@ describe('RestoreFlow phrase paste', () => {
       target: { value: 'a-long-password' },
     });
     expect(continueButton).toBeEnabled();
+  });
+
+  it('asks only for the wallet name when restoring into an unlocked profile', () => {
+    installFakeChrome({});
+    render(
+      <Providers>
+        <RestoreFlow existingProfile defaultWalletName="Wallet 2"
+          onDone={() => undefined} onBack={() => undefined} />
+      </Providers>,
+    );
+    fireEvent.change(screen.getByLabelText('Word 1'), { target: { value: FULL_24 } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+
+    expect(screen.getByRole('heading', { name: 'Name this wallet' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Wallet name')).toHaveValue('Wallet 2');
+    expect(screen.queryByLabelText('App password')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled();
   });
 });

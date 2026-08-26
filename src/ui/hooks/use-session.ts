@@ -33,6 +33,7 @@ export interface SessionView {
   }[];
   accountAddState: AccountAddState | null;
   activeRecoveredAddressCount: number;
+  backupDeferred: boolean;
   capabilities: AccountCapabilities;
   refresh: () => void;
 }
@@ -53,6 +54,7 @@ const INITIAL_VIEW: StoredView = {
   accountSummaries: [],
   accountAddState: null,
   activeRecoveredAddressCount: 0,
+  backupDeferred: false,
   capabilities: {
     canView: false, canDeriveAddresses: false, canPlanTransactions: false,
     canSignTransactions: false, canSignMessages: false, canBroadcast: false,
@@ -76,7 +78,8 @@ export function useSession(): SessionView {
     void Promise.all([
       rpc('session.snapshot', {}),
       loadActiveVaultId(chrome.storage.local).catch(() => null),
-    ]).then(([snapshot, storedActiveVaultId]) => {
+      rpc('backup.deferralStatus', {}),
+    ]).then(([snapshot, storedActiveVaultId, deferral]) => {
       if (requestGeneration !== generation.current) return;
       if (!snapshot.ok) {
         setView((previous) => ({ ...previous, state: 'error', expectation: null, deadline: null }));
@@ -103,6 +106,7 @@ export function useSession(): SessionView {
           accountSummaries: result.accountSummaries,
           accountAddState: result.accountAddState,
           activeRecoveredAddressCount: result.activeRecoveredAddressCount,
+          backupDeferred: false,
           capabilities: result.capabilities,
         });
         return;
@@ -122,6 +126,7 @@ export function useSession(): SessionView {
           accountSummaries: result.accountSummaries,
           accountAddState: result.accountAddState,
           activeRecoveredAddressCount: result.activeRecoveredAddressCount,
+          backupDeferred: false,
           capabilities: result.capabilities,
         });
         return;
@@ -133,7 +138,8 @@ export function useSession(): SessionView {
         // account has no seed to reveal or acknowledge, so it remains usable
         // for its read-only capabilities even when the containing vault's
         // software account is still awaiting backup verification.
-        state: result.backupVerified || result.capabilities.signMethod === 'none'
+        state: result.backupVerified || (deferral.ok && deferral.result.deferred) ||
+          result.capabilities.signMethod === 'none'
           ? 'ready'
           : 'unverified',
         activeVaultId,
@@ -158,6 +164,7 @@ export function useSession(): SessionView {
         accountSummaries: result.accountSummaries,
         accountAddState: result.accountAddState,
         activeRecoveredAddressCount: result.activeRecoveredAddressCount,
+        backupDeferred: deferral.ok && deferral.result.deferred,
         capabilities: result.capabilities,
       }));
     });

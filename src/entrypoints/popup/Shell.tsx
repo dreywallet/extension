@@ -5,6 +5,7 @@ import { clearGalleryDataStore } from '../../ui/hooks/use-gallery-data';
 import { useRpc } from '../../ui/hooks/use-rpc';
 import type { SessionView } from '../../ui/hooks/use-session';
 import { GatewayBadge } from '../../ui/components/GatewayBadge';
+import { Button } from '../../ui/components/Button';
 import { AccountSelector } from '../../ui/components/AccountSelector';
 import { Activity } from './Activity';
 import { Home } from './Home';
@@ -100,6 +101,15 @@ export function Shell(props: {
       </header>
 
       <main className={styles['main']}>
+        {props.session.backupDeferred ? (
+          <div role="alert" className={styles['surfaceError']} data-testid="backup-reminder">
+            <strong>{t('backup.reminder.title')}</strong>
+            <p>{t('backup.reminder.message')}</p>
+            <Button onClick={() => void chrome.tabs.create({
+              url: chrome.runtime.getURL('/onboarding.html'),
+            })}>{t('backup.action.now')}</Button>
+          </div>
+        ) : null}
         {props.sidePanelError ? (
           <p className={styles['surfaceError']} role="alert">{props.sidePanelError}</p>
         ) : null}

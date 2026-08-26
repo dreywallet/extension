@@ -2,7 +2,15 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { installTestCryptoProvider } from '../helpers/install-crypto-provider';
 import { getSession } from '../../src/adapters/session/session-store';
 import { loadActiveVaultId, saveActiveVaultId } from '../../src/adapters/storage/vault-store';
-import { ACTIVE_VAULT_KEY, VAULTS_KEY } from '../../src/adapters/storage/keys';
+import {
+  ACTIVE_VAULT_KEY,
+  PROFILE_CREDENTIAL_KEY,
+  VAULTS_KEY,
+} from '../../src/adapters/storage/keys';
+import {
+  loadProfileCredential,
+  profileWalletSecret,
+} from '../../src/adapters/storage/profile-credential-store';
 import { PASSWORD } from '@drey/core/testing/vault-helpers';
 import { DEFAULT_IDLE_MS, makeHarness } from './service-helpers';
 
@@ -108,6 +116,20 @@ describe('WalletService state machine', () => {
       code: 'wrong-password',
     });
     await expect(h.service.unlock({ vaultId, password: NEW_PASSWORD })).resolves.toMatchObject({ vaultId });
+  });
+
+  it('changes the app password while locked when the old password proves access', async () => {
+    const h = makeHarness();
+    const { vaultId } = await h.service.create({ name: 'Main', password: PASSWORD });
+
+    await expect(h.service.changePassword({ oldPassword: PASSWORD, newPassword: NEW_PASSWORD }))
+      .resolves.toEqual({ ok: true });
+    expect((await h.service.sessionStatus()).locked).toBe(true);
+    await expect(h.service.unlock({ vaultId, password: PASSWORD })).rejects.toMatchObject({
+      code: 'wrong-password',
+    });
+    await expect(h.service.unlock({ vaultId, password: NEW_PASSWORD }))
+      .resolves.toMatchObject({ vaultId });
   });
 
   it('rehydrates an unexpired session across a worker restart (§24.4)', async () => {
@@ -255,6 +277,27 @@ describe('WalletService state machine', () => {
     ).rejects.toMatchObject({ code: 'ERR_INVALID_PAYLOAD' });
   });
 
+  it('repairs a missing first-wallet profile link on an idempotent retry', async () => {
+    const h = makeHarness();
+    const operationId = '33333333-3333-4333-8333-333333333333';
+    const vaultId = `operation:create:${operationId}`;
+    h.local.failOnSetKey = PROFILE_CREDENTIAL_KEY;
+
+    await expect(
+      h.service.create({ name: 'Main', password: PASSWORD, operationId }),
+    ).rejects.toThrow(`simulated crash writing ${PROFILE_CREDENTIAL_KEY}`);
+    expect((await h.service.list()).vaults).toHaveLength(1);
+
+    h.local.failOnSetKey = null;
+    await expect(
+      h.service.create({ name: 'Main', password: PASSWORD, operationId }),
+    ).resolves.toEqual({ vaultId });
+    expect((await h.service.list()).vaults).toHaveLength(1);
+    const profile = await loadProfileCredential(h.local);
+    expect(profile).not.toBeNull();
+    expect(profile === null ? null : profileWalletSecret(profile, vaultId)).not.toBeNull();
+  });
+
   it('rejects restore operation-ID reuse with a different recovery input', async () => {
     const h = makeHarness();
     const operationId = '22222222-2222-4222-8222-222222222222';
@@ -288,6 +331,18 @@ describe('WalletService state machine', () => {
     });
 
     expect((await h.service.list()).vaults.map((vault) => vault.vaultId)).toEqual([healthy.vaultId]);
+    expect((await h.service.sessionSnapshot()).quarantinedVaultCount).toBe(1);
+    await expect(h.service.create({ name: 'Blocked', password: PASSWORD })).rejects.toMatchObject({
+      code: 'ERR_VAULT_TAMPERED',
+    });
+  });
+
+  it('blocks profile mutation after preserving a malformed vault-store root', async () => {
+    const h = makeHarness();
+    const malformedRoot = ['preserve', { schemaVersion: 99 }];
+    h.local.store.set(VAULTS_KEY, malformedRoot);
+
+    expect((await h.service.list()).vaults).toEqual([]);
     expect((await h.service.sessionSnapshot()).quarantinedVaultCount).toBe(1);
     await expect(h.service.create({ name: 'Blocked', password: PASSWORD })).rejects.toMatchObject({
       code: 'ERR_VAULT_TAMPERED',
@@ -369,17 +424,16 @@ describe('WalletService state machine', () => {
     expect(session?.vaultId).toBe(await loadActiveVaultId(h.local));
   });
 
-  it('a mistyped switch password leaves the current vault unlocked (§7.3)', async () => {
+  it('switches linked wallets without asking for another password (§7.3)', async () => {
     const h = makeHarness();
     const a = await h.service.create({ name: 'A', password: PASSWORD });
     const b = await h.service.create({ name: 'B', password: PASSWORD });
     await h.service.unlock({ vaultId: a.vaultId, password: PASSWORD });
 
-    await expect(h.service.switchVault({ vaultId: b.vaultId, password: 'wrong-password-x' })).rejects.toMatchObject({
-      code: 'wrong-password',
+    await expect(h.service.switchVault({ vaultId: b.vaultId })).resolves.toMatchObject({
+      vaultId: b.vaultId,
     });
 
-    // A stays active and unlocked — the failed reauth did not lock the wallet.
-    expect(await h.service.sessionStatus()).toMatchObject({ locked: false, activeVaultId: a.vaultId });
+    expect(await h.service.sessionStatus()).toMatchObject({ locked: false, activeVaultId: b.vaultId });
   });
 });

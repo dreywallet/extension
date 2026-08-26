@@ -4,6 +4,8 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApprovalApp } from '../../src/entrypoints/approval/ApprovalApp';
 import { I18nProvider } from '../../src/ui/i18n';
+import { bip322MessageHash } from '@drey/core/domain/transactions/bip322';
+import { bytesToHex } from '@drey/core/domain/vault/encoding';
 
 afterEach(() => {
   cleanup();
@@ -12,6 +14,10 @@ afterEach(() => {
 
 function renderApproval(): void {
   render(<I18nProvider initial="en"><ApprovalApp /></I18nProvider>);
+}
+
+function messageHash(message: string): string {
+  return bytesToHex(bip322MessageHash(new TextEncoder().encode(message)));
 }
 
 function transactionReview(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -40,6 +46,184 @@ function transactionReview(overrides: Record<string, unknown> = {}): Record<stri
 }
 
 describe('provider approval window', () => {
+  it('shows a calm complete message-batch review without extra approval friction', async () => {
+    const posted: unknown[] = [];
+    let listener: ((message: unknown) => void) | null = null;
+    const port = {
+      postMessage: (message: unknown) => posted.push(message), disconnect: vi.fn(),
+      onMessage: {
+        addListener: (next: (message: unknown) => void) => { listener = next; },
+        removeListener: vi.fn(),
+      },
+      onDisconnect: { addListener: vi.fn(), removeListener: vi.fn() },
+    };
+    (globalThis as { chrome?: unknown }).chrome = { runtime: { connect: () => port } };
+    renderApproval();
+    (listener as unknown as (message: unknown) => void)({
+      type: 'drey:approval:snapshot', protocolVersion: 1,
+      request: {
+        requestNonce: '123e4567-e89b-42d3-a456-426614174200',
+        method: 'signMultipleMessages', origin: 'https://market.example',
+        unicodeOrigin: 'https://market.example', warnings: [], createdAt: 1,
+        expiresAt: 300_001, approveAfter: 1,
+        review: {
+          kind: 'message_batch', walletName: 'Primary wallet', account: 0, network: 'signet',
+          messageCount: 2, totalMessageBytes: 26,
+          messages: [
+            {
+              index: 0, address: 'tb1qpaymentaddress', addressKind: 'payment',
+              message: 'Payment proof', messageBytes: 13, messageHash: messageHash('Payment proof'),
+              protocol: 'BIP322',
+            },
+            {
+              index: 1, address: 'tb1pordinaladdress', addressKind: 'ordinals',
+              message: 'Ordinal proof', messageBytes: 13, messageHash: messageHash('Ordinal proof'),
+              protocol: 'BIP322',
+            },
+          ],
+        },
+        details: { messageBatch: { messageCount: 2, batchHash: '33'.repeat(32) } },
+        requiresPassword: false, confirmationPhrase: null, approvalError: null,
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: 'Sign 2 messages?' })).toBeInTheDocument();
+    expect(screen.getByText('Messages can sign you in or confirm an action. They cannot spend bitcoin.'))
+      .toBeInTheDocument();
+    expect(screen.getByText('2 messages from this site')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Message 1 of 2' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Message 2 of 2' })).toBeInTheDocument();
+    expect(screen.getByText('Payment proof')).toBeInTheDocument();
+    expect(screen.getByText('Ordinal proof')).toBeInTheDocument();
+    expect(screen.queryByLabelText('App password')).toBeNull();
+    expect(screen.queryByText('Hidden formatting is shown as U+ codes.'))
+      .toBeNull();
+    expect(screen.getByText('Reject affects this request. Closing the window cancels all pending requests.'))
+      .toBeInTheDocument();
+    const approve = screen.getByRole('button', { name: 'Sign messages' });
+    expect(approve).toBeEnabled();
+    await userEvent.click(approve);
+    expect(posted.at(-1)).toMatchObject({ command: 'resolve', approved: true });
+  });
+
+  it('adds a short note only to a message containing hidden text formatting', async () => {
+    let listener: ((message: unknown) => void) | null = null;
+    const port = {
+      postMessage: vi.fn(), disconnect: vi.fn(),
+      onMessage: {
+        addListener: (next: (message: unknown) => void) => { listener = next; },
+        removeListener: vi.fn(),
+      },
+      onDisconnect: { addListener: vi.fn(), removeListener: vi.fn() },
+    };
+    (globalThis as { chrome?: unknown }).chrome = { runtime: { connect: () => port } };
+    renderApproval();
+    const message = 'Review \u202ethis';
+    (listener as unknown as (message: unknown) => void)({
+      type: 'drey:approval:snapshot', protocolVersion: 1,
+      request: {
+        requestNonce: '123e4567-e89b-42d3-a456-426614174199',
+        method: 'signMultipleMessages', origin: 'https://market.example',
+        unicodeOrigin: 'https://market.example', warnings: [], createdAt: 1,
+        expiresAt: 300_001, approveAfter: 1,
+        review: {
+          kind: 'message_batch', walletName: 'Primary wallet', account: 0, network: 'signet',
+          messageCount: 1, totalMessageBytes: new TextEncoder().encode(message).length,
+          messages: [{
+            index: 0, address: 'tb1pordinaladdress', addressKind: 'ordinals',
+            message, messageBytes: new TextEncoder().encode(message).length,
+            messageHash: messageHash(message), protocol: 'BIP322',
+          }],
+        },
+        details: {}, requiresPassword: false, confirmationPhrase: null, approvalError: null,
+      },
+    });
+    expect(await screen.findByText('Hidden formatting is shown as U+ codes.'))
+      .toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Sign this message?' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sign message' })).toBeInTheDocument();
+    expect(screen.getByText('Review ⟦U+202E⟧this')).toBeInTheDocument();
+    expect(screen.queryByText(message)).toBeNull();
+  });
+
+  it('shows aggregate exposure and a complete expandable review for every batch item', async () => {
+    const posted: unknown[] = [];
+    let listener: ((message: unknown) => void) | null = null;
+    const port = {
+      postMessage: (message: unknown) => posted.push(message), disconnect: vi.fn(),
+      onMessage: {
+        addListener: (next: (message: unknown) => void) => { listener = next; },
+        removeListener: vi.fn(),
+      },
+      onDisconnect: { addListener: vi.fn(), removeListener: vi.fn() },
+    };
+    (globalThis as { chrome?: unknown }).chrome = { runtime: { connect: () => port } };
+    renderApproval();
+    const itemReview = (index: number, address: string) => ({
+      index,
+      authorization: 'complete',
+      feeSats: '500',
+      walletInputSats: '10500',
+      walletOutputSats: '0',
+      externalOutputSats: '10000',
+      netWalletDebitSats: '10500',
+      economicClaims: [],
+      outputs: [{
+        index: 0, address, valueSats: '10000', ownership: 'external',
+        role: 'recipient', committed: true,
+      }],
+    });
+    const itemDetails = (index: number) => ({
+      feeSats: '500', feeRateSatPerVb: '5', vsize: '100', rbf: false,
+      security: {
+        requiresAdvanced: true,
+        protectedValueExposedToFees: '0',
+        planHash: String(index + 1).repeat(64),
+        rawPsbtHex: `70736274ff0${index}`,
+      },
+      inputs: [{ index: 0, outpoint: `${String(index + 1).repeat(64)}:0` }],
+      outputs: [], warnings: [], effectCount: 0, inscriptions: [],
+      requiresPreviewAcknowledgement: false,
+    });
+    (listener as unknown as (message: unknown) => void)({
+      type: 'drey:approval:snapshot', protocolVersion: 1,
+      request: {
+        requestNonce: '123e4567-e89b-42d3-a456-426614174201',
+        method: 'signMultipleTransactions', origin: 'https://app.example',
+        unicodeOrigin: 'https://app.example', warnings: [], createdAt: 1,
+        expiresAt: 300_001, approveAfter: 1,
+        review: {
+          kind: 'batch', walletName: 'Primary wallet', account: 0, network: 'signet',
+          transactionCount: 2, walletInputSats: '21000', walletOutputSats: '0',
+          netWalletDebitSats: '21000', feeExposureSats: '1000',
+          transactions: [itemReview(0, 'tb1qfirstrecipient'), itemReview(1, 'tb1qsecondrecipient')],
+        },
+        details: {
+          batch: { transactionCount: 2, batchHash: '99'.repeat(32) },
+          transactions: [itemDetails(0), itemDetails(1)],
+        },
+        requiresPassword: true, confirmationPhrase: 'SIGN PSBT', approvalError: null,
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: 'Sign 2 transactions?' })).toBeInTheDocument();
+    expect(screen.getByText('2 independent transactions')).toBeInTheDocument();
+    expect(screen.getByText('1,000 sats')).toBeInTheDocument();
+    expect(screen.getByText('Transaction 1 of 2')).toBeInTheDocument();
+    expect(screen.getByText('Transaction 2 of 2')).toBeInTheDocument();
+    expect(screen.getByText('tb1qfirstrecipient')).toBeInTheDocument();
+    expect(screen.getByText('tb1qsecondrecipient')).toBeInTheDocument();
+    expect(screen.getByText(/70736274ff00/u)).toBeInTheDocument();
+    expect(screen.getByText(/70736274ff01/u)).toBeInTheDocument();
+    const approve = screen.getByRole('button', { name: 'Sign transaction' });
+    expect(approve).toBeDisabled();
+    await userEvent.type(screen.getByLabelText('App password'), 'password');
+    await userEvent.type(screen.getByLabelText('Type SIGN PSBT to continue'), 'SIGN PSBT');
+    expect(approve).toBeEnabled();
+    await userEvent.click(approve);
+    expect(posted.at(-1)).toMatchObject({ command: 'resolve', approved: true });
+  });
+
   it('resets and focuses a queued request while honoring its approval timestamp', () => {
     vi.useFakeTimers({ now: 10_000 });
     const posted: unknown[] = [];
@@ -435,11 +619,59 @@ describe('provider approval window', () => {
     expect(within(transactionSummary).queryByText('Creator royalty')).toBeNull();
     expect(within(transactionSummary).queryByText('Miner fee')).toBeNull();
     const warnings = screen.getAllByRole('alert').map((element) => element.textContent).join(' ');
-    expect(warnings).toContain('may add funding');
+    expect(warnings).toContain('marketplace may add funding');
     expect(warnings).toContain('cannot take back the signature');
     expect(warnings).toContain('Some outputs can change');
     expect(screen.getByText('Can change')).toBeInTheDocument();
     expect(screen.queryByText('All outputs are fixed')).toBeNull();
+  });
+
+  it('presents a proven generic listing as a listing with guaranteed proceeds', async () => {
+    let listener: ((message: unknown) => void) | null = null;
+    const port = {
+      postMessage: vi.fn(), disconnect: vi.fn(),
+      onMessage: {
+        addListener: (next: (message: unknown) => void) => { listener = next; },
+        removeListener: vi.fn(),
+      },
+      onDisconnect: { addListener: vi.fn(), removeListener: vi.fn() },
+    };
+    (globalThis as { chrome?: unknown }).chrome = { runtime: { connect: () => port } };
+    renderApproval();
+    (listener as unknown as (message: unknown) => void)({
+      type: 'drey:approval:snapshot', protocolVersion: 1,
+      request: {
+        requestNonce: '123e4567-e89b-42d3-a456-426614174273', method: 'signPsbt',
+        origin: 'https://list.example', unicodeOrigin: 'https://list.example',
+        warnings: [], createdAt: 1, expiresAt: 300_001, approveAfter: 1,
+        review: transactionReview({
+          network: 'mainnet', authorization: 'partial', feeSats: '0',
+          walletInputSats: '10000', walletOutputSats: '25000',
+          externalOutputSats: '0', netWalletDebitSats: '-15000',
+          economicClaims: [{ kind: 'guaranteed_proceeds', valueSats: '25000' }],
+          outputs: [{
+            index: 0, address: 'bc1qseller', valueSats: '25000',
+            ownership: 'wallet', role: 'recipient', committed: false,
+          }],
+        }),
+        details: {
+          account: 0, network: 'mainnet', feeSats: '0',
+          security: { requiresAdvanced: false, rawPsbtHex: '70736274ff' },
+          inputs: [], outputs: [],
+          genericListing: { guaranteedProceedsSats: '25000', flexible: true },
+        },
+        requiresPassword: false, confirmationPhrase: null, approvalError: null,
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: 'List inscription?' })).toBeInTheDocument();
+    const summary = screen.getByRole('region', { name: 'Transaction summary' });
+    expect(within(summary).getByText('Guaranteed proceeds')).toBeInTheDocument();
+    expect(within(summary).getByText('25,000 sats')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sign listing' })).toBeInTheDocument();
+    const warnings = screen.getAllByRole('alert').map((element) => element.textContent).join(' ');
+    expect(warnings).toContain('site may add funding');
+    expect(screen.queryByText('Verified marketplace request')).toBeNull();
   });
 
   it('shows every co-located inscription with its full ID and requires the signed-placeholder acknowledgement', async () => {
@@ -654,7 +886,7 @@ describe('provider approval window', () => {
     expect(screen.queryByText('All outputs are fixed')).toBeNull();
     expect(within(transactionSummary).getByText(/exact fee for this transaction/iu)).toBeInTheDocument();
     expect(screen.queryByText('Fixed')).toBeNull();
-    expect(screen.getByText(/Reject this request only/iu)).toBeInTheDocument();
+    expect(screen.getByText(/Reject affects this request/iu)).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Sat flow' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Sign and send' })).toBeEnabled();
   });

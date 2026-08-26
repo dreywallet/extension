@@ -22,6 +22,8 @@ The discovery entry has this shape:
   webUrl: 'https://squirrelsystems.net',
   chromeWebStoreUrl:
     'https://chromewebstore.google.com/detail/drey/kngidlmmbfmnoeimngkajdlbdenlhgof',
+  googlePlayStoreUrl:
+    'https://play.google.com/store/apps/details?id=net.squirrelsystems.drey',
   methods: ['getInfo', 'wallet_connect', /* ... */],
 }
 ```
@@ -84,10 +86,13 @@ unsubscribe();
 | Capability | Method | Notes |
 | --- | --- | --- |
 | Provider information | `getInfo` | Available while locked |
+| Wallet type | `wallet_getWalletType` | Returns `software`; available while locked |
 | Connection and permissions | `wallet_connect`, `wallet_disconnect`, `wallet_renouncePermissions`, `wallet_getCurrentPermissions`, `wallet_requestPermissions` | Origin- and document-bound |
 | Account and network reads | `wallet_getAccount`, `wallet_getNetwork`, `getAddresses`, `getAccounts`, `getBalance` | Bitcoin payment and Ordinals addresses only |
 | Message signing | `signMessage` | BIP322 simple only; fresh approval required |
+| Multiple message signing | `signMultipleMessages` | Official Sats Connect shape; one approval, 1–10 ordered BIP322 results |
 | PSBT signing | `signPsbt` | Returns the signed PSBT and optional broadcast txid |
+| Independent PSBT batch signing | `signMultipleTransactions` | Sats Connect-compatible, one atomic review, 1–41 results in request order, never broadcasts |
 | BTC transfer | `sendTransfer` | Fresh transaction review required |
 | Ordinals | `ord_getInscriptions`, `ord_sendInscriptions` | Single inscription transfer |
 
@@ -109,6 +114,45 @@ check Drey Activity before starting another payment.
 Drey does not expose Stacks, Spark, Starknet, Runes, ECDSA message signing, or
 another wallet's legacy namespace. Requests for unsupported methods or address
 purposes return a JSON-RPC error.
+
+### Multiple message signing
+
+`signMultipleMessages` accepts the official Sats Connect ordered array. Drey
+supports 1–10 messages and at most 32 KiB of UTF-8 message text. Payment-address
+items must explicitly request `BIP322`; an omitted Taproot protocol resolves to
+BIP322 as specified by Sats Connect. Every address must belong to the active
+account, and exact duplicate address/message pairs are rejected.
+
+The complete ordered request, origin and browser document, active account,
+network, vault session, approval generation, and expiration are hash-bound
+before one approval is shown. The review opens the first message and keeps every
+other full message one click away. Signing returns every verified result in
+request order or no result; it never spends or broadcasts bitcoin.
+
+### Independent PSBT batches
+
+`signMultipleTransactions` accepts the official Sats Connect request and result
+shape. Drey also exposes the callback-era Sats Connect entry point. Its unsigned
+`alg:none` token is treated only as a size-bounded data envelope: the header,
+encoding, empty signature, and payload are parsed strictly, then the decoded
+request enters Drey's normal structured provider bridge. The token never grants
+authority.
+
+A batch contains 1–41 independent PSBTs and is bounded by the existing
+single-request aggregate budget: at most 1,500,000 base64 characters, 200 total
+inputs, 2,000 total outputs, and 200 explicitly selected inputs. Every item is
+fully analyzed under the existing Advanced PSBT rules before one approval is
+shown. The approval exposes aggregate wallet input/output and fee exposure and
+keeps every transaction's complete input, output, warning, asset-flow, and raw
+PSBT review available.
+
+The exact ordered PSBTs, requested indexes and sighashes, analyses, origin and
+browser document, active account, network, vault session, approval generation,
+and expiration are hash-bound. Duplicate PSBTs or unsigned transactions,
+reused inputs, and a PSBT spending an output created by any other item are
+rejected. Signing returns every result in request order only after all items
+succeed. It never broadcasts, skips, partially returns, retries, persists a
+signed batch for replay, or resumes after a stale or restarted approval.
 
 ## Privacy and lifecycle boundaries
 
@@ -162,6 +206,8 @@ accept offer, accept counter) is enabled from the published ORD.NET Trading API
 preflight handle (anchor/purchase-anchor UUID) and, for settlement-bearing
 actions, the preflight's expected txids, or they fail closed. Batch listing
 preflights and the v2 collection/trait funding-parent offers are not supported.
+The generic batch method is deliberately excluded from marketplace templates;
+in particular, ord.net's shared recovery graph is linked and therefore rejected.
 Satflow templates remain fixture-backed and must not be represented as live
 integrations until their independent vendor and contract gates pass.
 

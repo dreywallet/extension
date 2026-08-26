@@ -7,8 +7,16 @@ import { installTestCryptoProvider } from '../helpers/install-crypto-provider';
 import { restoreMnemonic } from '@drey/core/domain/keys/mnemonic';
 import { stableExternalAddress } from '@drey/core/domain/keys/derivation';
 import { verifyBip322Simple } from '@drey/core/domain/transactions/bip322';
+import { assertProviderMessageBatchResults } from '@drey/core/domain/transactions/provider-message-batch';
 import { getSession } from '../../src/adapters/session/session-store';
-import { loadVaultMeta } from '../../src/adapters/storage/vault-store';
+import { loadVaultMeta, loadVaults, saveVaults } from '../../src/adapters/storage/vault-store';
+import {
+  loadProfileCredential,
+  profileWalletSecret,
+  saveProfileCredential,
+} from '../../src/adapters/storage/profile-credential-store';
+import { changePassword as changeVaultPassword } from '@drey/core/domain/vault/vault';
+import { randomBytes } from 'node:crypto';
 import { PASSWORD } from '@drey/core/testing/vault-helpers';
 import { makeHarness, type Harness } from './service-helpers';
 
@@ -37,6 +45,60 @@ async function createdUnlocked(): Promise<{ h: Harness; vaultId: string; active:
     active: { expectedVaultId: vaultId, expectedSessionId: sessionId, accountId },
   };
 }
+
+describe('profile credential lifecycle', () => {
+  it('persists the profile credential and wallet wrapper during first creation', async () => {
+    const h = makeHarness();
+    const created = await h.service.create({ name: 'Main', password: PASSWORD });
+    const profile = await loadProfileCredential(h.local);
+    expect(profile).not.toBeNull();
+    expect(profile === null ? null : profileWalletSecret(profile, created.vaultId)).not.toBeNull();
+  });
+
+  it('adds and switches wallets without another password, then unlocks after lock', async () => {
+    const { h } = await createdUnlocked();
+    const second = await h.service.create({ name: 'Savings' });
+    const switched = await h.service.switchVault({ vaultId: second.vaultId });
+    expect(switched.vaultId).toBe(second.vaultId);
+    expect((await getSession(h.session))?.profileKeyB64).toEqual(expect.any(String));
+
+    await h.service.lock();
+    expect(await getSession(h.session)).toBeNull();
+    await expect(h.service.unlock({ vaultId: second.vaultId, password: PASSWORD }))
+      .resolves.toMatchObject({ vaultId: second.vaultId });
+  });
+
+  it('keeps a different-password legacy wallet intact until it is linked once', async () => {
+    const h = makeHarness();
+    const first = await h.service.create({ name: 'Legacy', password: PASSWORD });
+    const second = await h.service.create({ name: 'Profile', password: PASSWORD });
+    const map = await loadVaults(h.local);
+    const legacyPassword = 'another correct horse battery staple';
+    const changed = await changeVaultPassword(
+      [map[first.vaultId]!],
+      PASSWORD,
+      legacyPassword,
+      {
+        random: (length) => new Uint8Array(randomBytes(length)),
+        now: () => h.clock.now,
+      },
+    );
+    await saveVaults(h.local, { ...map, [first.vaultId]: changed[0]! });
+    const profile = await loadProfileCredential(h.local);
+    if (profile === null) throw new Error('missing profile credential');
+    await saveProfileCredential(h.local, {
+      ...profile,
+      secrets: profile.secrets.filter((secret) => secret.secretId !== first.vaultId),
+    });
+
+    await h.service.unlock({ vaultId: second.vaultId, password: PASSWORD });
+    await expect(h.service.switchVault({ vaultId: first.vaultId }))
+      .rejects.toMatchObject({ code: 'ERR_WRONG_PASSWORD' });
+    await expect(h.service.switchVault({ vaultId: first.vaultId, password: legacyPassword }))
+      .resolves.toMatchObject({ vaultId: first.vaultId });
+    expect((await loadVaults(h.local))[first.vaultId]).toEqual(changed[0]);
+  });
+});
 
 describe('revealMnemonic (§7.6)', () => {
   it('returns the generated mnemonic after password reauth', async () => {
@@ -148,6 +210,22 @@ describe('verifyBackup + backupStatus (§7.1)', () => {
     expect(await loadVaultMeta(h.local)).toEqual({});
   });
 
+  it('keeps verification truthful while an explicit deferral opens normal wallet use', async () => {
+    const { h, vaultId, active } = await createdUnlocked();
+
+    await expect(h.service.deferBackup(active)).resolves.toEqual({ deferred: true });
+    await expect(h.service.backupDeferralStatus()).resolves.toEqual({ deferred: true });
+    expect(await loadVaultMeta(h.local)).toMatchObject({
+      [vaultId]: {
+        backupVerified: false,
+        deferredUseAcknowledgedAt: expect.any(Number),
+        metadata: { usageGatePassed: false },
+      },
+    });
+    await expect(h.service.receiveAddress({ kind: 'payment', ...active }))
+      .resolves.toMatchObject({ kind: 'payment', accountId: active.accountId });
+  });
+
   it('performs an aggregate full recovery rehearsal and records only success metadata', async () => {
     const { h, active } = await createdUnlocked();
     const mnemonic = (await h.service.revealMnemonic({ password: PASSWORD, ...active })).mnemonic;
@@ -229,6 +307,63 @@ describe('manual BIP-322 signing', () => {
 
     await expect(h.service.signMessage({ ...input, password: 'wrong-password-value' }))
       .rejects.toMatchObject({ code: 'wrong-password' });
+  });
+});
+
+describe('provider multiple-message signing', () => {
+  it('prepares one immutable account-bound plan and returns a complete ordered result', async () => {
+    const h = makeHarness();
+    const { vaultId } = await h.service.restore({
+      name: 'R', password: PASSWORD, mnemonic: VALID_MNEMONIC,
+    });
+    await h.service.unlock({ vaultId, password: PASSWORD });
+    const account = await h.service.providerAccountView();
+    const plan = await h.service.providerPrepareMessageBatch({
+      requests: [
+        { address: account.payment.address, message: 'Payment proof', protocol: 'BIP322' },
+        { address: account.ordinals.address, message: 'Ordinal proof' },
+      ],
+      provider: {
+        origin: 'https://market.example', tabId: 7, frameId: 0, documentId: 'document-a',
+        requestNonce: '123e4567-e89b-42d3-a456-426614174250',
+        providerMethod: 'signMultipleMessages',
+      },
+      approvalGeneration: 3,
+    });
+    await expect(h.service.providerRevalidatePreparedMessageBatch(plan)).resolves.toBeUndefined();
+    const results = await h.service.providerSignPreparedMessageBatch(plan);
+    expect(results.map((result) => result.message)).toEqual(['Payment proof', 'Ordinal proof']);
+    expect(results.map((result) => result.address)).toEqual([
+      account.payment.address, account.ordinals.address,
+    ]);
+    expect(() => assertProviderMessageBatchResults(plan, results)).not.toThrow();
+  });
+
+  it('returns no partial result when authority changes between signatures', async () => {
+    const h = makeHarness();
+    const { vaultId } = await h.service.restore({
+      name: 'R', password: PASSWORD, mnemonic: VALID_MNEMONIC,
+    });
+    await h.service.unlock({ vaultId, password: PASSWORD });
+    const account = await h.service.providerAccountView();
+    const plan = await h.service.providerPrepareMessageBatch({
+      requests: [
+        { address: account.ordinals.address, message: 'First' },
+        { address: account.ordinals.address, message: 'Second' },
+      ],
+      provider: {
+        origin: 'https://market.example', tabId: 7, frameId: 0, documentId: 'document-a',
+        requestNonce: '123e4567-e89b-42d3-a456-426614174251',
+        providerMethod: 'signMultipleMessages',
+      },
+      approvalGeneration: 3,
+    });
+    let checks = 0;
+    await expect(h.service.providerSignPreparedMessageBatch(plan, () => {
+      checks += 1;
+      if (checks === 2) throw new Error('approval closed');
+    })).rejects.toMatchObject({ code: 'ERR_UNSAFE_TRANSACTION' });
+    expect(checks).toBe(2);
   });
 });
 

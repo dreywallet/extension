@@ -36,6 +36,8 @@ import {
   type DataCategory,
   type ProviderConnectParams,
   type ProviderMethod,
+  type SignMultipleMessagesParams,
+  type SignMultipleTransactionsParams,
 } from '@drey/core/provider/registry';
 import type { ProviderAuthority } from '../provider/authority';
 import type { ApprovalCommand, ApprovalSnapshot } from '../provider/approval';
@@ -43,6 +45,8 @@ import {
   providerPsbtPlanPreviews,
   type ProviderPsbtPlanV3,
 } from '@drey/core/domain/transactions/provider-psbt';
+import type { ProviderPsbtBatchPlanV1 } from '@drey/core/domain/transactions/provider-psbt-batch';
+import type { ProviderMessageBatchPlanV1 } from '@drey/core/domain/transactions/provider-message-batch';
 import {
   approvalInscriptionItems,
   assertPreviewAcknowledged,
@@ -126,6 +130,8 @@ interface PendingApproval {
   approvalGeneration: number;
   contextGeneration: number;
   preparedPsbt?: ProviderPsbtPlanV3;
+  preparedBatch?: ProviderPsbtBatchPlanV1;
+  preparedMessageBatch?: ProviderMessageBatchPlanV1;
   marketplace?: {
     context: MarketplaceContext;
     resolution: MarketplaceResolution;
@@ -230,6 +236,95 @@ function providerAddresses(
   ];
 }
 
+function providerOutputCommitted(plan: ProviderPsbtPlanV3, index: number): boolean {
+  return plan.analysis.inputs.length > 0 && plan.analysis.inputs.every((input) =>
+    input.sighash.validEncoding &&
+    (input.sighash.committedOutputIndexes === 'all' ||
+      input.sighash.committedOutputIndexes.includes(index)));
+}
+
+function providerTransactionReview(plan: ProviderPsbtPlanV3) {
+  const walletInputSats = plan.analysis.inputs
+    .filter((item) => item.ownership === 'wallet')
+    .reduce((total, item) => total + item.valueSats, 0n);
+  const walletOutputSats = plan.analysis.outputs
+    .filter((item) => item.ownership === 'wallet')
+    .reduce((total, item) => total + item.valueSats, 0n);
+  const externalOutputSats = plan.analysis.outputs
+    .filter((item) => item.ownership === 'external')
+    .reduce((total, item) => total + item.valueSats, 0n);
+  const outputs = plan.analysis.outputs.map((item) => ({
+    index: item.index,
+    address: item.address,
+    valueSats: item.valueSats.toString(),
+    ownership: item.ownership,
+    role: item.role,
+    committed: providerOutputCommitted(plan, item.index),
+  }));
+  return {
+    authorization: outputs.every((output) => output.committed) ? 'complete' as const : 'partial' as const,
+    feeSats: plan.feeSats.toString(),
+    walletInputSats: walletInputSats.toString(),
+    walletOutputSats: walletOutputSats.toString(),
+    externalOutputSats: externalOutputSats.toString(),
+    netWalletDebitSats: (walletInputSats - walletOutputSats).toString(),
+    economicClaims: [],
+    outputs,
+  };
+}
+
+function providerTransactionDetails(
+  plan: ProviderPsbtPlanV3,
+  authority: ProviderAuthority,
+) {
+  const previews = providerPsbtPlanPreviews(plan);
+  const inscriptions = approvalInscriptionItems(plan.analysis, previews);
+  return {
+    account: plan.account,
+    network: plan.network,
+    authority: {
+      tabId: authority.tabId,
+      frameId: authority.frameId,
+      documentId: authority.documentId,
+    },
+    feeSats: plan.feeSats.toString(),
+    feeRateSatPerVb: (Number(plan.feeRateSatPerKvB) / 1000).toString(),
+    vsize: plan.vsize.toString(),
+    rbf: plan.rbf,
+    security: {
+      broadcast: plan.broadcast,
+      requiresAdvanced: plan.requiresAdvanced,
+      planHash: plan.planHash,
+      analysisHash: plan.analysisHash,
+      psbtHash: plan.psbtHash,
+      hardViolations: plan.analysis.hardViolations,
+      protectedInputIndexes: plan.analysis.assetEffects.protectedInputIndexes,
+      protectedValueExposedToFees: plan.analysis.assetEffects.protectedValueExposedToFees.toString(),
+      rawPsbtHex: plan.psbtHex,
+    },
+    inputs: plan.analysis.inputs.map((item) => ({
+      index: item.index,
+      outpoint: `${item.txid}:${item.vout}`,
+      valueSats: item.valueSats.toString(),
+      ownership: item.ownership,
+      classification: item.classification.primaryClass,
+      sighash: item.sighash,
+    })),
+    outputs: plan.analysis.outputs.map((item) => ({
+      index: item.index,
+      address: item.address,
+      valueSats: item.valueSats.toString(),
+      ownership: item.ownership,
+      role: item.role,
+      committed: providerOutputCommitted(plan, item.index),
+    })),
+    warnings: plan.analysis.warnings,
+    effectCount: inscriptions.length,
+    inscriptions,
+    requiresPreviewAcknowledgement: requiresPreviewAcknowledgement(previews),
+  };
+}
+
 type ConnectParams = ProviderConnectParams;
 
 export class ProviderController {
@@ -247,7 +342,10 @@ export class ProviderController {
   private contextGeneration = 0;
 
   constructor(private readonly deps: ProviderControllerDeps) {
-    this.ready = this.loadConnections();
+    // A transient session-storage read failure must not strand the provider
+    // worker. Treat it as an empty connection journal; every restored grant is
+    // revalidated against the live wallet identity before use anyway.
+    this.ready = this.loadConnections().catch(() => undefined);
   }
 
   attach(
@@ -320,14 +418,26 @@ export class ProviderController {
           throw new RpcError('ERR_UNSAFE_TRANSACTION', (error as Error).message);
         }
       }
+      if (pending.preparedBatch) {
+        for (const item of pending.preparedBatch.items) {
+          const previews = providerPsbtPlanPreviews(item.plan);
+          try {
+            assertPreviewAcknowledged(previews, command.previewUnavailableAcknowledged);
+          } catch (error) {
+            throw new RpcError('ERR_UNSAFE_TRANSACTION', (error as Error).message);
+          }
+        }
+      }
       const passwordRequired = pending.preparedPsbt?.requiresAdvanced === true ||
+        pending.preparedBatch?.requiresAdvanced === true ||
         pending.communityVaultSale !== undefined ||
         pending.communityVaultPositionTransfer?.review.role === 'owner';
       if (passwordRequired) {
         // Unreachable from the approval surface, which disables Approve until
         // both fields validate. A command that arrives without them did not come
         // from that surface, so it stays terminal.
-        if ((pending.preparedPsbt?.requiresAdvanced === true && command.confirmation !== 'SIGN PSBT') || !command.password) {
+        if (((pending.preparedPsbt?.requiresAdvanced === true || pending.preparedBatch?.requiresAdvanced === true) &&
+            command.confirmation !== 'SIGN PSBT') || !command.password) {
           throw new RpcError('ERR_WRONG_PASSWORD', 'Transaction password confirmation required');
         }
         try {
@@ -473,7 +583,16 @@ export class ProviderController {
     if (!parsed.success || !state.alive) return;
     const request = parsed.data;
     if (state.nonces.has(request.requestNonce)) {
-      this.postError(state, request.requestNonce, providerError('ERR_STALE_CONTEXT'));
+      // Do not let a duplicate remove the original in-flight nonce. The bridge
+      // generates nonces itself, but preserving the reservation keeps this
+      // boundary correct even if an isolated-world caller is compromised.
+      this.safePost(state, {
+        type: 'drey:provider:response',
+        protocolVersion: PROVIDER_BRIDGE_VERSION,
+        requestNonce: request.requestNonce,
+        ok: false,
+        error: providerError('ERR_STALE_CONTEXT'),
+      } satisfies RuntimeProviderResponse);
       return;
     }
     state.nonces.add(request.requestNonce);
@@ -518,7 +637,7 @@ export class ProviderController {
           connected && account ? await this.permissionResults(state.authority.origin, account) : []);
         return;
       }
-      if (method === 'getInfo') {
+      if (method === 'getInfo' || method === 'wallet_getWalletType') {
         this.postResult(state, request.requestNonce, await this.executeRead(method, params.data, state));
         return;
       }
@@ -531,18 +650,21 @@ export class ProviderController {
         const unlockRequestedAt = this.deps.now();
         this.reservePreparation(state.authority.origin);
         preparationReserved = true;
-        const unlocked = await this.deps.requestUnlock();
-        if (!state.alive) return;
-        if (this.deps.now() >= unlockRequestedAt + REQUEST_TTL_MS) {
-          this.postError(state, request.requestNonce, providerError('ERR_REQUEST_EXPIRED'));
-          return;
+        try {
+          const unlocked = await this.deps.requestUnlock();
+          if (!state.alive) return;
+          if (this.deps.now() >= unlockRequestedAt + REQUEST_TTL_MS) {
+            this.postError(state, request.requestNonce, providerError('ERR_REQUEST_EXPIRED'));
+            return;
+          }
+          if (!unlocked) {
+            this.postError(state, request.requestNonce, providerError('ERR_USER_REJECTED'));
+            return;
+          }
+        } finally {
+          this.releasePreparation(state.authority.origin);
+          preparationReserved = false;
         }
-        if (!unlocked) {
-          this.postError(state, request.requestNonce, providerError('ERR_USER_REJECTED'));
-          return;
-        }
-        this.releasePreparation(state.authority.origin);
-        preparationReserved = false;
       }
       // Unconnected read methods must not become a wallet lock-state oracle.
       // Check the exact browser document binding before touching live account
@@ -553,6 +675,18 @@ export class ProviderController {
         return;
       }
       const account = await this.deps.service.providerAccountView();
+      if (method === 'signMultipleTransactions') {
+        const batch = params.data as SignMultipleTransactionsParams;
+        const expected = account.network === 'mainnet' ? 'Mainnet' :
+          account.network === 'signet' ? 'Signet' : 'Regtest';
+        if (batch.network.type !== expected ||
+            (batch.network.address !== undefined &&
+              batch.network.address !== account.payment.address &&
+              batch.network.address !== account.ordinals.address)) {
+          this.postError(state, request.requestNonce, providerError('ERR_UNSUPPORTED_BY_ACCOUNT'));
+          return;
+        }
+      }
       if (method === 'wallet_connect') {
         const requestedNetwork = (params.data as ConnectParams)?.network;
         if (requestedNetwork !== undefined && requestedNetwork !== providerNetwork(account.network)) {
@@ -630,6 +764,7 @@ export class ProviderController {
         const psbtParams = params.data as {
           psbt: string;
           signInputs?: Record<string, number[]>;
+          broadcast?: boolean;
           marketplaceContext?: MarketplaceContext;
           communityVaultAcquisitionContext?: CommunityVaultAcquisitionProviderContextV1;
           communityVaultSaleContext?: CommunityVaultSaleProviderContextV1;
@@ -754,6 +889,12 @@ export class ProviderController {
           );
         }
         if (resolution.status !== 'recognized' && selectedFlexible) {
+          if (psbtParams.broadcast === true) {
+            throw new RpcError(
+              'ERR_UNSAFE_TRANSACTION',
+              'generic listing may not request wallet broadcast',
+            );
+          }
           // §21.1 generic listing: without marketplace context, a flexible
           // request proceeds to core analysis, which rejects every flexible
           // shape except the proven listing invariants (wallet-owned payout at
@@ -788,6 +929,26 @@ export class ProviderController {
           }
           pending.marketplace = { context: messageParams.marketplaceContext, resolution };
         }
+      } else if (method === 'signMultipleMessages') {
+        const authority = pending.state.authority;
+        pending.preparedMessageBatch = await this.deps.service.providerPrepareMessageBatch({
+          requests: (params.data as SignMultipleMessagesParams).map((item) => ({
+            address: item.address,
+            message: item.message,
+            ...(item.protocol === undefined ? {} : { protocol: item.protocol }),
+          })),
+          provider: {
+            origin: authority.origin,
+            tabId: authority.tabId,
+            frameId: authority.frameId,
+            documentId: authority.documentId,
+            requestNonce: pending.request.requestNonce,
+            providerMethod: 'signMultipleMessages',
+          },
+          approvalGeneration: pending.approvalGeneration,
+          guard: () => this.assertPreparationLive(pending),
+        });
+        this.assertPreparationLive(pending);
       }
       if (method === 'sendTransfer') {
         this.assertPreparationLive(pending);
@@ -801,6 +962,27 @@ export class ProviderController {
       }
       if (method === 'signPsbt' || method === 'sendTransfer' || method === 'ord_sendInscriptions') {
         pending.preparedPsbt = await this.prepareTransaction(pending);
+        this.assertPreparationLive(pending);
+      }
+      if (method === 'signMultipleTransactions') {
+        const batch = params.data as SignMultipleTransactionsParams;
+        const authority = pending.state.authority;
+        pending.preparedBatch = await this.deps.service.providerPreparePsbtBatch({
+          items: batch.psbts.map((item) => ({
+            psbtBase64: item.psbtBase64,
+            ...(item.inputsToSign === undefined ? {} : { inputsToSign: item.inputsToSign }),
+          })),
+          binding: {
+            origin: authority.origin,
+            tabId: authority.tabId,
+            frameId: authority.frameId,
+            documentId: authority.documentId,
+            requestNonce: pending.request.requestNonce,
+            providerMethod: 'signMultipleTransactions',
+          },
+          approvalGeneration: pending.approvalGeneration,
+          guard: () => this.assertPreparationLive(pending),
+        });
         this.assertPreparationLive(pending);
       }
       await this.withApprovalLock(async () => {
@@ -835,6 +1017,7 @@ export class ProviderController {
   }
 
   private async executeRead(method: ProviderMethod, params: unknown, state: PortState): Promise<unknown> {
+    if (method === 'wallet_getWalletType') return 'software';
     if (method === 'getInfo') {
       return {
         version: __EXTENSION_VERSION__,
@@ -948,6 +1131,15 @@ export class ProviderController {
         protocol: 'BIP322',
       };
     }
+    if (pending.method === 'signMultipleMessages') {
+      if (!pending.preparedMessageBatch) {
+        throw new RpcError('ERR_PLAN_CHANGED', 'prepared message batch missing');
+      }
+      return this.deps.service.providerSignPreparedMessageBatch(
+        pending.preparedMessageBatch,
+        () => this.assertPendingLive(pending),
+      );
+    }
     if (pending.method === 'signPsbt') {
       if (!pending.preparedPsbt) throw new RpcError('ERR_PLAN_CHANGED', 'prepared PSBT missing');
       const params = pending.params as { signInputs?: Record<string, number[]>; broadcast?: boolean };
@@ -1000,6 +1192,14 @@ export class ProviderController {
       );
       return { psbt: signed.psbtBase64 };
     }
+    if (pending.method === 'signMultipleTransactions') {
+      if (!pending.preparedBatch) throw new RpcError('ERR_PLAN_CHANGED', 'prepared PSBT batch missing');
+      const signed = await this.deps.service.providerSignPreparedPsbtBatch(
+        pending.preparedBatch,
+        () => this.assertPendingLive(pending),
+      );
+      return signed.map((item) => ({ psbtBase64: item.psbtBase64 }));
+    }
     if (pending.method === 'sendTransfer') {
       if (!pending.preparedPsbt) throw new RpcError('ERR_PLAN_CHANGED', 'prepared transfer missing');
       const broadcast = await this.deps.service.providerBroadcastPreparedPsbt(
@@ -1049,6 +1249,20 @@ export class ProviderController {
       await this.deps.service.providerRevalidatePreparedPsbt(pending.preparedPsbt);
       this.assertPendingLive(pending);
     }
+    if (pending.preparedBatch) {
+      if (pending.preparedBatch.approvalGeneration !== pending.approvalGeneration) {
+        throw new RpcError('ERR_PLAN_CHANGED', 'provider batch approval changed');
+      }
+      await this.deps.service.providerRevalidatePreparedPsbtBatch(pending.preparedBatch);
+      this.assertPendingLive(pending);
+    }
+    if (pending.preparedMessageBatch) {
+      if (pending.preparedMessageBatch.approvalGeneration !== pending.approvalGeneration) {
+        throw new RpcError('ERR_PLAN_CHANGED', 'provider message batch approval changed');
+      }
+      await this.deps.service.providerRevalidatePreparedMessageBatch(pending.preparedMessageBatch);
+      this.assertPendingLive(pending);
+    }
   }
 
   /** Synchronous guard used while work is not yet visible in the approval queue. */
@@ -1080,6 +1294,15 @@ export class ProviderController {
 
   private snapshot(): ApprovalSnapshot {
     const pending = this.active;
+    let batchDetails: Array<ReturnType<typeof providerTransactionDetails>> | null = null;
+    if (pending?.preparedBatch) {
+      try {
+        batchDetails = pending.preparedBatch.items.map((item) =>
+          providerTransactionDetails(item.plan, pending.state.authority));
+      } catch {
+        pending.approvalError = 'Signed inscription previews are unavailable.';
+      }
+    }
     let inscriptionReview: {
       effectCount: number;
       inscriptions: ReturnType<typeof approvalInscriptionItems>;
@@ -1116,7 +1339,42 @@ export class ProviderController {
         input.sighash.validEncoding &&
         (input.sighash.committedOutputIndexes === 'all' ||
           input.sighash.committedOutputIndexes.includes(index)));
-    const review = pending?.preparedPsbt
+    const review = pending?.preparedMessageBatch
+      ? {
+          kind: 'message_batch' as const,
+          walletName: pending.expectedWalletName,
+          account: pending.expectedAccount,
+          network: pending.expectedNetwork,
+          messageCount: pending.preparedMessageBatch.items.length,
+          totalMessageBytes: pending.preparedMessageBatch.totalMessageBytes,
+          messages: pending.preparedMessageBatch.items.map((item) => ({
+            index: item.index,
+            address: item.address,
+            addressKind: item.addressKind,
+            message: item.message,
+            messageBytes: item.messageBytes,
+            messageHash: item.messageHash,
+            protocol: item.protocol,
+          })),
+        }
+      : pending?.preparedBatch
+      ? {
+          kind: 'batch' as const,
+          walletName: pending.expectedWalletName,
+          account: pending.expectedAccount,
+          network: pending.expectedNetwork,
+          transactionCount: pending.preparedBatch.items.length,
+          walletInputSats: pending.preparedBatch.aggregate.walletInputSats.toString(),
+          walletOutputSats: pending.preparedBatch.aggregate.walletOutputSats.toString(),
+          netWalletDebitSats: (pending.preparedBatch.aggregate.walletInputSats -
+            pending.preparedBatch.aggregate.walletOutputSats).toString(),
+          feeExposureSats: pending.preparedBatch.aggregate.feeExposureSats.toString(),
+          transactions: pending.preparedBatch.items.map((item, index) => ({
+            index,
+            ...providerTransactionReview(item.plan),
+          })),
+        }
+      : pending?.preparedPsbt
       ? (() => {
           const walletInputSats = pending.preparedPsbt.analysis.inputs
             .filter((item) => item.ownership === 'wallet')
@@ -1136,8 +1394,14 @@ export class ProviderController {
             committed: outputCommitted(item.index),
           }));
           const economics = pending.marketplace?.context.economics;
+          const genericListing = pending.preparedPsbt.genericListing;
           const economicClaims = economics === undefined
-            ? pending.preparedPsbt.communityVaultAcquisition
+            ? genericListing
+              ? [{
+                  kind: 'guaranteed_proceeds' as const,
+                  valueSats: genericListing.commitment.guaranteedProceedsSats.toString(),
+                }]
+              : pending.preparedPsbt.communityVaultAcquisition
               ? [{
                   kind: 'buyer_total' as const,
                   valueSats: pending.preparedPsbt.communityVaultAcquisition.cashDueSats,
@@ -1254,7 +1518,55 @@ export class ProviderController {
         expiresAt: pending.createdAt + REQUEST_TTL_MS,
         approveAfter: pending.approveAfter,
         review: review!,
-        details: pending.preparedPsbt
+        details: pending.preparedMessageBatch
+          ? {
+              account: pending.preparedMessageBatch.account,
+              network: pending.preparedMessageBatch.network,
+              authority: {
+                tabId: pending.state.authority.tabId,
+                frameId: pending.state.authority.frameId,
+                documentId: pending.state.authority.documentId,
+              },
+              messageBatch: {
+                messageCount: pending.preparedMessageBatch.items.length,
+                totalMessageBytes: pending.preparedMessageBatch.totalMessageBytes,
+                batchHash: pending.preparedMessageBatch.batchHash,
+                approvalGeneration: pending.preparedMessageBatch.approvalGeneration,
+                items: pending.preparedMessageBatch.items.map((item) => ({
+                  index: item.index,
+                  address: item.address,
+                  addressKind: item.addressKind,
+                  messageBytes: item.messageBytes,
+                  messageHash: item.messageHash,
+                  protocol: item.protocol,
+                })),
+              },
+            }
+          : pending.preparedBatch
+          ? {
+              account: pending.preparedBatch.account,
+              network: pending.preparedBatch.network,
+              authority: {
+                tabId: pending.state.authority.tabId,
+                frameId: pending.state.authority.frameId,
+                documentId: pending.state.authority.documentId,
+              },
+              batch: {
+                transactionCount: pending.preparedBatch.items.length,
+                batchHash: pending.preparedBatch.batchHash,
+                approvalGeneration: pending.preparedBatch.approvalGeneration,
+                aggregate: {
+                  encodedPsbtChars: pending.preparedBatch.aggregate.encodedPsbtChars,
+                  inputs: pending.preparedBatch.aggregate.inputs,
+                  outputs: pending.preparedBatch.aggregate.outputs,
+                  walletInputSats: pending.preparedBatch.aggregate.walletInputSats.toString(),
+                  walletOutputSats: pending.preparedBatch.aggregate.walletOutputSats.toString(),
+                  feeExposureSats: pending.preparedBatch.aggregate.feeExposureSats.toString(),
+                },
+              },
+              transactions: batchDetails ?? [],
+            }
+          : pending.preparedPsbt
           ? {
               account: pending.preparedPsbt.account,
               network: pending.preparedPsbt.network,
@@ -1301,6 +1613,11 @@ export class ProviderController {
                 inscriptions: [],
                 requiresPreviewAcknowledgement: false,
               }),
+              ...(pending.preparedPsbt.genericListing ? { genericListing: {
+                guaranteedProceedsSats:
+                  pending.preparedPsbt.genericListing.commitment.guaranteedProceedsSats.toString(),
+                flexible: true,
+              } } : {}),
               ...(pending.marketplace ? { marketplace: {
                 status: pending.marketplace.resolution.status,
                 id: pending.marketplace.resolution.marketplaceId,
@@ -1363,9 +1680,11 @@ export class ProviderController {
               } } : {}),
             },
         requiresPassword: pending.preparedPsbt?.requiresAdvanced === true ||
+          pending.preparedBatch?.requiresAdvanced === true ||
           pending.communityVaultSale !== undefined ||
           pending.communityVaultPositionTransfer?.review.role === 'owner',
-        confirmationPhrase: pending.preparedPsbt?.requiresAdvanced === true ? 'SIGN PSBT' : null,
+        confirmationPhrase: pending.preparedPsbt?.requiresAdvanced === true ||
+          pending.preparedBatch?.requiresAdvanced === true ? 'SIGN PSBT' : null,
         approvalError: pending.approvalError ?? null,
       } : null,
     };

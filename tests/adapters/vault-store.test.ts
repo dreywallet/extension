@@ -114,6 +114,30 @@ describe('vault-store', () => {
     });
   });
 
+  it('preserves a malformed vault-store root and keeps quarantine visible', async () => {
+    const area = makeFakeArea();
+    const malformedRoot = ['not', 'a', 'vault', 'map'];
+    area.store.set(VAULTS_KEY, malformedRoot);
+
+    const loaded = await loadVaults(area);
+
+    expect(loaded).toEqual({});
+    expect(area.store.get(VAULTS_KEY)).toEqual({});
+    expect(area.store.get(VAULTS_QUARANTINE_KEY)).toEqual({
+      version: 1,
+      records: {},
+      malformedRoot,
+    });
+    expect(await countQuarantinedVaults(area)).toBe(1);
+
+    await saveVaults(area, loaded);
+    expect(area.store.get(VAULTS_QUARANTINE_KEY)).toEqual({
+      version: 1,
+      records: {},
+      malformedRoot,
+    });
+  });
+
   it('persists the active vault id and clears it', async () => {
     const area = makeFakeArea();
     await saveActiveVaultId(area, 'v-1');
@@ -184,8 +208,12 @@ describe('vault meta (§7.1 backup gate)', () => {
     const area = makeFakeArea();
     expect(await loadVaultMeta(area)).toEqual({});
     const metadata = migrateLegacyBackupMetadata(true);
-    await saveVaultMeta(area, { 'vault-1': { backupVerified: true, metadata } });
-    expect(await loadVaultMeta(area)).toEqual({ 'vault-1': { backupVerified: true, metadata } });
+    await saveVaultMeta(area, {
+      'vault-1': { backupVerified: true, deferredUseAcknowledgedAt: null, metadata },
+    });
+    expect(await loadVaultMeta(area)).toEqual({
+      'vault-1': { backupVerified: true, deferredUseAcknowledgedAt: null, metadata },
+    });
   });
 
   it('migrates the legacy usage flag without inventing phrase provenance', async () => {
@@ -194,6 +222,7 @@ describe('vault meta (§7.1 backup gate)', () => {
     expect(await loadVaultMeta(area)).toEqual({
       'vault-1': {
         backupVerified: true,
+        deferredUseAcknowledgedAt: null,
         metadata: migrateLegacyBackupMetadata(true),
       },
     });

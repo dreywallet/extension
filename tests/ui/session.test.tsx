@@ -56,6 +56,7 @@ function Probe(): ReactNode {
       <span data-testid="preferred">{session.preferredUnlockVaultId ?? 'none'}</span>
       <span data-testid="account">{session.activeAccount}</span>
       <span data-testid="recovered">{session.activeRecoveredAddressCount}</span>
+      <span data-testid="backup-deferred">{String(session.backupDeferred)}</span>
     </div>
   );
 }
@@ -112,6 +113,19 @@ describe('useSession', () => {
     });
     render(<Providers><Probe /></Providers>);
     expect(await screen.findByTestId('state')).toHaveTextContent('ready');
+  });
+
+  it('routes an explicitly deferred software wallet to normal use without claiming verification', async () => {
+    installFakeChrome({
+      'session.snapshot': () => ({
+        ok: true,
+        result: { ...READY, backupVerified: false },
+      }),
+      'backup.deferralStatus': () => ({ ok: true, result: { deferred: true } }),
+    });
+    render(<Providers><Probe /></Providers>);
+    expect(await screen.findByTestId('state')).toHaveTextContent('ready');
+    expect(screen.getByTestId('backup-deferred')).toHaveTextContent('true');
   });
 
   it('shows an error rather than treating an RPC failure as an empty profile', async () => {

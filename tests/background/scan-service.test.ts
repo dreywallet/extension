@@ -2640,6 +2640,46 @@ describe('Ordinals gallery paint-ahead cache', () => {
       .rejects.toMatchObject({ code: 'ERR_LOCKED' });
   });
 
+  it('does not let an expired detached cache read clear a concurrent unlock', async () => {
+    const { harness, service, expectation } = await warmed();
+    const expired = await getSession(harness.session);
+    if (expired === null) throw new Error('missing initial session');
+    harness.clock.now = expired.deadline;
+
+    const originalGet = harness.session.get.bind(harness.session);
+    let releaseRead!: () => void;
+    let announceRead!: () => void;
+    const readStarted = new Promise<void>((resolve) => { announceRead = resolve; });
+    const resumeRead = new Promise<void>((resolve) => { releaseRead = resolve; });
+    let intercept = true;
+    harness.session.get = async (keys: string | string[]): Promise<Record<string, unknown>> => {
+      const list = Array.isArray(keys) ? keys : [keys];
+      if (intercept && list.includes('squirrel:session')) {
+        intercept = false;
+        const snapshot = await originalGet(keys);
+        announceRead();
+        await resumeRead;
+        return snapshot;
+      }
+      return originalGet(keys);
+    };
+
+    const staleRead = service.galleryCached({ ...expectation });
+    await readStarted;
+    const unlocked = await service.unlock({
+      vaultId: expectation.expectedVaultId,
+      password: PASSWORD,
+    });
+    releaseRead();
+
+    await expect(staleRead).rejects.toMatchObject({ code: 'ERR_LOCKED' });
+    expect((await getSession(harness.session))?.sessionId).toBe(unlocked.sessionId);
+    await expect(service.sessionStatus()).resolves.toMatchObject({
+      locked: false,
+      sessionId: unlocked.sessionId,
+    });
+  });
+
   it('keeps Home responsive and coalesces reopen requests while gallery I/O drains', async () => {
     const { service, expectation, batches, waitForHang, releaseBatch } =
       await warmed({ hangBatches: true });

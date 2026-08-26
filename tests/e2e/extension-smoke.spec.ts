@@ -1,5 +1,6 @@
 import type { CDPSession } from '@playwright/test';
 import { test, expect } from './fixtures';
+import { DAPP_ORIGIN } from './pages';
 import { terminateExtensionWorker, wakeExtensionWorker } from './worker';
 
 const TEST_EXTENSION_ID = 'lgcnmmbgabemdkgacjpcdebbjmmblbmn';
@@ -88,11 +89,11 @@ test('opens at the intended size from the browser toolbar', async ({
     // A persistent headed context can start with no focused normal window even
     // though a service worker is live. Give chrome.action an explicit active
     // tab/window before asking it to create the toolbar popup.
-    await controlPage.goto('http://127.0.0.1:4173/');
+    await controlPage.goto(`${DAPP_ORIGIN}/`);
     await controlPage.bringToFront();
     await expect(controlPage.getByRole('heading', { name: 'Drey local E2E dapp' })).toBeVisible();
     await cdp.send('Target.setDiscoverTargets', { discover: true });
-    const toolbarWindow = await extensionWorker.evaluate(async () => {
+    const toolbarWindow = await extensionWorker.evaluate(async (dappOrigin) => {
       const windows = await chrome.windows.getAll({ windowTypes: ['normal'] });
       const existing = windows.find((candidate) => candidate.focused) ?? windows[0];
       if (existing?.id === undefined) throw new Error('No normal browser window is available');
@@ -104,35 +105,53 @@ test('opens at the intended size from the browser toolbar', async ({
         const created = await chrome.windows.create({
           focused: true,
           type: 'normal',
-          url: 'http://127.0.0.1:4173/',
+          url: `${dappOrigin}/`,
         });
         if (created?.id === undefined) throw new Error('Focused browser window creation failed');
         targetId = created.id;
         createdWindowId = created.id;
         await new Promise((resolve) => setTimeout(resolve, 100));
         if (!(await chrome.windows.get(targetId)).focused) {
-          return { createdWindowId, focused: false };
+          return { createdWindowId, focused: false, targetWindowId: targetId };
         }
       }
       await chrome.action.openPopup({ windowId: targetId });
-      return { createdWindowId, focused: true };
-    });
+      return { createdWindowId, focused: true, targetWindowId: targetId };
+    }, DAPP_ORIGIN);
     createdWindowId = toolbarWindow.createdWindowId;
     testInfo.skip(
       !toolbarWindow.focused,
       'Host desktop policy prevents Chromium from exposing a focused toolbar window',
     );
+    let popupSessionId: string | undefined;
     await expect.poll(async () => {
       const { targetInfos } = await cdp.send('Target.getTargets');
       popupTargetId = targetInfos.find((target) =>
         target.url === `chrome-extension://${extensionId}/popup.html`,
       )?.targetId;
-      return popupTargetId;
+      if (!popupTargetId) {
+        await extensionWorker.evaluate(async (windowId) => {
+          await chrome.windows.update(windowId, { focused: true });
+          await chrome.action.openPopup({ windowId });
+        }, toolbarWindow.targetWindowId).catch(() => undefined);
+        return undefined;
+      }
+      try {
+        const attached = await cdp.send('Target.attachToTarget', {
+          targetId: popupTargetId,
+          flatten: false,
+        });
+        popupSessionId = attached.sessionId;
+        return popupSessionId;
+      } catch {
+        // Browser-action popups close immediately when their window briefly
+        // loses focus. The next poll refocuses the same window and opens a new
+        // popup target instead of attaching to the now-stale target ID.
+        popupTargetId = undefined;
+        return undefined;
+      }
     }).toBeTruthy();
-    const { sessionId } = await cdp.send('Target.attachToTarget', {
-      targetId: popupTargetId!,
-      flatten: false,
-    });
+    const sessionId = popupSessionId!;
     await expect.poll(() => evaluateTarget<string | undefined>(
       cdp,
       sessionId,
@@ -279,7 +298,7 @@ test('injects the frozen provider facade into the top page and iframe', async ({
   });
   expect(facade.methods).toEqual(expect.arrayContaining([
     'drey_openCommunityVault', 'wallet_connect', 'wallet_disconnect', 'getAddresses', 'signMessage',
-    'sendTransfer',
+    'signMultipleMessages', 'wallet_getWalletType', 'sendTransfer',
   ]));
 
   await dapp.invoke('Permissions');

@@ -62,7 +62,7 @@ const home: WalletHomeResult = {
   },
 };
 
-function session(refresh: () => void): SessionView {
+function session(refresh: () => void, overrides: Partial<SessionView> = {}): SessionView {
   return {
     state: 'ready',
     activeVaultId: 'vault-1',
@@ -82,6 +82,7 @@ function session(refresh: () => void): SessionView {
     }],
     accountAddState: null,
     activeRecoveredAddressCount: 0,
+    backupDeferred: false,
     refresh,
     capabilities: {
       canView: true,
@@ -100,10 +101,26 @@ function session(refresh: () => void): SessionView {
       canExportPublicAccount: false,
       canVerifyAddress: false,
     },
+    ...overrides,
   };
 }
 
 describe('popup shell navigation', () => {
+  it('keeps the deferred-backup warning visible with a direct backup action', async () => {
+    installFakeChrome({
+      'gateway.status': () => ({ ok: true, result: gateway }),
+      'wallet.home': () => ({ ok: true, result: home }),
+    });
+    render(
+      <Providers>
+        <Shell session={session(() => undefined, { backupDeferred: true })} />
+      </Providers>,
+    );
+    expect(await screen.findByTestId('backup-reminder')).toHaveTextContent('Recovery phrase not backed up');
+    expect(within(screen.getByTestId('backup-reminder')).getByRole('button', { name: 'Back up now' }))
+      .toBeInTheDocument();
+  });
+
   it('offers docking only from stable popup navigation and never inside the panel', async () => {
     installFakeChrome({
       'gateway.status': () => ({ ok: true, result: gateway }),

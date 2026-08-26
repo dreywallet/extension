@@ -1,10 +1,12 @@
 import {
   AddressPurpose,
   BitcoinNetworkType,
+  MessageSigningProtocols,
   addListener as addSatsConnectListener,
   getProviderById,
   getProviders,
   request as satsConnectRequest,
+  signMultipleTransactions as satsConnectSignMultipleTransactions,
 } from '@sats-connect/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerProviderDiscovery, type ProviderDiscoveryWindow } from '../../src/provider/discovery';
@@ -77,6 +79,27 @@ describe('Sats Connect Core 0.16.0 conformance', () => {
             result: { psbt: 'cHNidP8=', txid: '11'.repeat(32) },
           };
         }
+        if (method === 'signMultipleTransactions') {
+          return {
+            id: `request-${requestIndex}`,
+            result: [{ psbtBase64: 'cHNidP8=' }, { psbtBase64: 'cHNidP8=' }],
+          };
+        }
+        if (method === 'signMultipleMessages') {
+          return {
+            id: `request-${requestIndex}`,
+            result: [{
+              signature: 'bip322-signature',
+              message: 'Authenticate',
+              messageHash: '11'.repeat(32),
+              address: 'tb1qpaymentaddress',
+              protocol: 'BIP322',
+            }],
+          };
+        }
+        if (method === 'wallet_getWalletType') {
+          return { id: `request-${requestIndex}`, result: 'software' };
+        }
         if (method === 'wallet_renouncePermissions') {
           return { id: `request-${requestIndex}`, result: null };
         }
@@ -119,6 +142,24 @@ describe('Sats Connect Core 0.16.0 conformance', () => {
       status: 'success',
       result: NETWORK,
     });
+    await expect(satsConnectRequest('wallet_getWalletType', undefined, 'drey')).resolves.toEqual({
+      status: 'success',
+      result: 'software',
+    });
+    await expect(satsConnectRequest('signMultipleMessages', [{
+      address: 'tb1qpaymentaddress',
+      message: 'Authenticate',
+      protocol: MessageSigningProtocols.BIP322,
+    }], 'drey')).resolves.toEqual({
+      status: 'success',
+      result: [{
+        signature: 'bip322-signature',
+        message: 'Authenticate',
+        messageHash: '11'.repeat(32),
+        address: 'tb1qpaymentaddress',
+        protocol: 'BIP322',
+      }],
+    });
     await expect(satsConnectRequest('signPsbt', {
       psbt: 'cHNidP8=',
       broadcast: true,
@@ -126,6 +167,20 @@ describe('Sats Connect Core 0.16.0 conformance', () => {
       status: 'success',
       result: { psbt: 'cHNidP8=', txid: '11'.repeat(32) },
     });
+    const onFinish = vi.fn();
+    await satsConnectSignMultipleTransactions({
+      payload: {
+        network: { type: BitcoinNetworkType.Signet },
+        message: 'Sign transactions',
+        psbts: [{ psbtBase64: 'cHNidP8=' }, { psbtBase64: 'cHNidP8=' }],
+      },
+      onFinish,
+      onCancel: vi.fn(),
+      getProvider: async () => drey as never,
+    });
+    expect(onFinish).toHaveBeenCalledWith([
+      { psbtBase64: 'cHNidP8=' }, { psbtBase64: 'cHNidP8=' },
+    ]);
     await expect(satsConnectRequest(
       'wallet_renouncePermissions',
       undefined,

@@ -21,6 +21,7 @@
  * coordinator network (see WalletServiceDeps.vaultCoordinatorNetwork).
  */
 import { z } from 'zod';
+import { validateMnemonic } from '@drey/core/domain/keys/mnemonic';
 import { ErrorCode } from '@drey/core/messaging/envelope';
 import { OP_SCHEMAS, type OpSpec } from '@drey/core/messaging/ops';
 import { PASSKEY_ERROR_CODES, PASSKEY_OP_SCHEMAS, type PasskeyErrorCode } from './passkey-ops';
@@ -43,6 +44,34 @@ const EXTENSION_ERROR_CODES = [
   // the popup can safely synchronize instead of retrying every outage.
   'ERR_GATEWAY_UNAVAILABLE',
 ] as const;
+
+const coreOpOverrides = {
+  'vault.create': {
+    ...OP_SCHEMAS['vault.create'],
+    request: z.object({
+      name: z.string().min(1),
+      password: z.string().min(1).optional(),
+      operationId: z.string().uuid(),
+    }).strict(),
+  },
+  'vault.restore': {
+    ...OP_SCHEMAS['vault.restore'],
+    request: z.object({
+      name: z.string().min(1),
+      password: z.string().min(1).optional(),
+      mnemonic: z.string().refine(validateMnemonic, { message: 'invalid BIP39 mnemonic' }),
+      passphrase: z.string().optional(),
+      operationId: z.string().uuid(),
+    }).strict(),
+  },
+  'vault.switch': {
+    ...OP_SCHEMAS['vault.switch'],
+    request: z.object({
+      vaultId: z.string().min(1),
+      password: z.string().min(1).optional(),
+    }).strict(),
+  },
+} satisfies Partial<Record<keyof typeof OP_SCHEMAS, OpSpec>>;
 
 const extensionLocalOpSchemas = {
   'wallet.home.snapshot': {
@@ -80,11 +109,28 @@ const extensionLocalOpSchemas = {
     requiresUnlock: true,
     handlerEnforcesUnlock: true,
   },
+  'backup.deferralStatus': {
+    request: z.object({}).strict(),
+    response: z.object({ deferred: z.boolean() }).strict(),
+    allowedSenders: ['popup', 'sidepanel', 'fullpage', 'onboarding', 'approval'],
+    requiresUnlock: false,
+    handlerEnforcesUnlock: true,
+  },
+  'backup.defer': {
+    request: z.object({
+      expectedVaultId: z.string().min(1),
+      expectedSessionId: z.string().uuid(),
+    }).strict(),
+    response: z.object({ deferred: z.literal(true) }).strict(),
+    allowedSenders: ['popup', 'sidepanel', 'fullpage', 'onboarding'],
+    requiresUnlock: true,
+  },
 } satisfies Record<string, OpSpec>;
 
 /** Core registry plus every extension-local surface. */
 export const EXTENSION_OP_SCHEMAS = {
   ...OP_SCHEMAS,
+  ...coreOpOverrides,
   ...extensionLocalOpSchemas,
   ...PASSKEY_OP_SCHEMAS,
   ...VAULT_COORDINATOR_OP_SCHEMAS,

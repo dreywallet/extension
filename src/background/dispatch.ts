@@ -304,9 +304,9 @@ async function handle(op: string, payload: unknown, service: WalletService): Pro
     case 'passkey.remove':
       return service.passkeyRemove(payload as PasskeyRemoveRequest);
     case 'vault.create':
-      return service.create(payload as VaultCreateRequest);
+      return service.create(payload as Omit<VaultCreateRequest, 'password'> & { password?: string });
     case 'vault.restore':
-      return service.restore(payload as VaultRestoreRequest);
+      return service.restore(payload as Omit<VaultRestoreRequest, 'password'> & { password?: string });
     case 'vault.unlock':
       return service.unlock(payload as VaultUnlockRequest);
     case 'vault.lock':
@@ -314,7 +314,7 @@ async function handle(op: string, payload: unknown, service: WalletService): Pro
     case 'vault.list':
       return service.list();
     case 'vault.switch':
-      return service.switchVault(payload as VaultUnlockRequest);
+      return service.switchVault(payload as { vaultId: string; password?: string });
     case 'vault.remove':
       return service.removeVault(payload as VaultRemoveRequest);
     case 'vault.changePassword':
@@ -328,6 +328,10 @@ async function handle(op: string, payload: unknown, service: WalletService): Pro
       if (deadline === null) throw new RpcError('ERR_LOCKED', 'wallet session expired');
       return { deadline };
     }
+    case 'backup.deferralStatus':
+      return service.backupDeferralStatus();
+    case 'backup.defer':
+      return service.deferBackup(payload as ActiveSessionRequest);
     case 'vault.revealMnemonic':
       return service.revealMnemonic(payload as VaultRevealMnemonicRequest);
     case 'vault.verifyBackup':

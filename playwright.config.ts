@@ -3,6 +3,10 @@ import path from 'node:path';
 
 const extensionRoot = path.resolve(import.meta.dirname);
 const secretSafeReport = process.env['DREY_E2E_REPORT_MODE'] === 'secret-safe';
+const dappPort = process.env['DREY_E2E_DAPP_PORT'] ?? '4173';
+if (!/^[1-9][0-9]{0,4}$/u.test(dappPort) || Number(dappPort) > 65_535) {
+  throw new Error('DREY_E2E_DAPP_PORT must be a valid TCP port');
+}
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -62,7 +66,7 @@ export default defineConfig({
     {
       command: 'node tests/e2e/dapp/server.mjs',
       cwd: extensionRoot,
-      url: 'http://127.0.0.1:4173/health',
+      url: `http://127.0.0.1:${dappPort}/health`,
       reuseExistingServer: false,
       timeout: 10_000,
       stdout: 'pipe',

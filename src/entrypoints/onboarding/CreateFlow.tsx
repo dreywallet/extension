@@ -14,7 +14,7 @@ import styles from './onboarding.module.css';
 import { passkeySettingsAvailable } from '../../ui/passkey/availability';
 import { PasskeyOffer } from './PasskeyOffer';
 
-type Step = 'password' | 'reveal' | 'verify' | 'reauth' | 'passkey';
+type Step = 'password' | 'backupChoice' | 'deferWarning' | 'reveal' | 'verify' | 'reauth' | 'passkey';
 
 export function CreateFlow(props: {
   existingProfile?: boolean;
@@ -35,14 +35,16 @@ export function CreateFlow(props: {
   const [busy, setBusy] = useState(false);
   const operationId = useRef(globalThis.crypto.randomUUID()).current;
   const [sessionExpectation, setSessionExpectation] = useState<ActiveSessionExpectation | null>(null);
+  const backupPassword = useRef('');
+  const reauthReturn = useRef<'backupChoice' | 'verify'>('verify');
   const passwordStepReady = props.existingProfile
-    ? password !== ''
+    ? true
     : checkPasswordPolicy(password).ok && confirm !== '' && password === confirm;
 
   // -- reveal step state (mnemonic confined here; cleared before verify) ------
   const words = useRef<string[] | null>(null);
   const [wordsReady, setWordsReady] = useState(false);
-  const [wordsHidden, setWordsHidden] = useState(false);
+  const [wordsHidden, setWordsHidden] = useState(true);
 
   // -- verify step state ------------------------------------------------------
   const [positions, setPositions] = useState<[number, number, number]>(() => pickPositions());
@@ -62,13 +64,17 @@ export function CreateFlow(props: {
     setBusy(true);
     try {
       const created = await rpc('vault.create', {
-        name: name.trim() || props.defaultWalletName || 'Wallet 1', password, operationId,
+        name: name.trim() || props.defaultWalletName || 'Wallet 1',
+        ...(props.existingProfile ? {} : { password }),
+        operationId,
       });
       if (!created.ok) {
         setError(t(errorMessageKey(created.code)));
         return;
       }
-      const unlocked = await rpc('vault.unlock', { vaultId: created.result.vaultId, password });
+      const unlocked = props.existingProfile
+        ? await rpc('vault.switch', { vaultId: created.result.vaultId })
+        : await rpc('vault.unlock', { vaultId: created.result.vaultId, password });
       if (!unlocked.ok) {
         setError(t(errorMessageKey(unlocked.code)));
         return;
@@ -78,17 +84,56 @@ export function CreateFlow(props: {
         expectedSessionId: unlocked.result.sessionId,
       };
       setSessionExpectation(expectation);
-      const revealed = await rpc('vault.revealMnemonic', { password, ...expectation });
+      backupPassword.current = props.existingProfile ? '' : password;
+      setPassword('');
+      setConfirm('');
+      setStep('backupChoice');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function beginBackupNow(): Promise<void> {
+    if (sessionExpectation === null) return;
+    if (backupPassword.current === '') {
+      setPassword('');
+      reauthReturn.current = 'backupChoice';
+      setStep('reauth');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const revealed = await rpc('vault.revealMnemonic', {
+        password: backupPassword.current,
+        ...sessionExpectation,
+      });
       if (!revealed.ok) {
         setError(t(errorMessageKey(revealed.code)));
         return;
       }
+      backupPassword.current = '';
       words.current = revealed.result.mnemonic.split(' ');
       setWordsReady(true);
-      // The password's job is done; drop it from React state now.
-      setPassword('');
-      setConfirm('');
       setStep('reveal');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deferBackup(): Promise<void> {
+    if (sessionExpectation === null) return;
+    setBusy(true);
+    setError(null);
+    backupPassword.current = '';
+    try {
+      const result = await rpc('backup.defer', sessionExpectation);
+      if (!result.ok) {
+        setError(t(errorMessageKey(result.code)));
+        return;
+      }
+      if (passkeySettingsAvailable()) setStep('passkey');
+      else props.onDone();
     } finally {
       setBusy(false);
     }
@@ -112,6 +157,7 @@ export function CreateFlow(props: {
     setTyped(['', '', '']);
     setError(null);
     setPassword('');
+    reauthReturn.current = 'verify';
     setStep('reauth');
   }
 
@@ -174,6 +220,7 @@ export function CreateFlow(props: {
   useEffect(() => () => {
     words.current?.fill('');
     words.current = null;
+    backupPassword.current = '';
   }, []);
 
   if (step === 'passkey' && sessionExpectation !== null) {
@@ -195,7 +242,7 @@ export function CreateFlow(props: {
         <p className={styles['subtitle']}>
           {t(props.existingProfile ? 'onboarding.password.existing.body' : 'onboarding.password.body')}
         </p>
-        {passkeySettingsAvailable() ? (
+        {passkeySettingsAvailable() && !props.existingProfile ? (
           <p className={styles['hint']}>{t('passkey.onboarding.passwordNote')}</p>
         ) : null}
         <Field
@@ -203,13 +250,13 @@ export function CreateFlow(props: {
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
-        <Field
+        {!props.existingProfile ? <Field
           label={t('onboarding.password.password')}
           type={showPasswords ? 'text' : 'password'}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          autoComplete={props.existingProfile ? 'current-password' : 'new-password'}
-        />
+          autoComplete="new-password"
+        /> : null}
         {!props.existingProfile ? (
           <Field
             label={t('onboarding.password.confirm')}
@@ -219,14 +266,14 @@ export function CreateFlow(props: {
             autoComplete="new-password"
           />
         ) : null}
-        <label className={styles['hint']}>
+        {props.existingProfile ? null : <label className={styles['hint']}>
           <input
             type="checkbox"
             checked={showPasswords}
             onChange={(event) => setShowPasswords(event.target.checked)}
           />{' '}
           {t('onboarding.password.show')}
-        </label>
+        </label>}
         <div className={styles['feedbackSlot']} aria-live="polite">
           {error !== null ? (
             <p role="alert" className={styles['error']}>{error}</p>
@@ -253,6 +300,44 @@ export function CreateFlow(props: {
           </Button>
         </div>
       </form>
+    );
+  }
+
+  if (step === 'backupChoice') {
+    return (
+      <div className={styles['form']}>
+        <h1 className={styles['title']}>{t('backup.defer.title')}</h1>
+        <p className={styles['subtitle']}>{t('backup.defer.body')}</p>
+        {error !== null ? <p role="alert" className={styles['error']}>{error}</p> : null}
+        <div className={styles['actions']}>
+          <Button variant="secondary" onClick={() => setStep('deferWarning')} disabled={busy}>
+            {t('backup.action.later')}
+          </Button>
+          <Button onClick={() => void beginBackupNow()} disabled={busy}>
+            {t('backup.action.now')}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (step === 'deferWarning') {
+    return (
+      <div className={styles['form']}>
+        <h1 className={styles['title']}>{t('backup.defer.warningTitle')}</h1>
+        <p className={`${styles['warning']} ${styles['danger']}`} role="alert">
+          {t('backup.defer.warningBody')}
+        </p>
+        {error !== null ? <p role="alert" className={styles['error']}>{error}</p> : null}
+        <div className={styles['actions']}>
+          <Button variant="secondary" onClick={() => setStep('backupChoice')} disabled={busy}>
+            {t('common.back')}
+          </Button>
+          <Button onClick={() => void deferBackup()} disabled={busy}>
+            {t('backup.defer.acknowledge')}
+          </Button>
+        </div>
+      </div>
     );
   }
 
@@ -309,7 +394,7 @@ export function CreateFlow(props: {
         />
         {error !== null ? <p role="alert" className={styles['error']}>{error}</p> : null}
         <div className={styles['actions']}>
-          <Button variant="secondary" onClick={() => setStep('verify')} disabled={busy}>
+          <Button variant="secondary" onClick={() => setStep(reauthReturn.current)} disabled={busy}>
             {t('common.cancel')}
           </Button>
           <Button type="submit" disabled={busy || password === ''}>

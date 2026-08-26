@@ -2,6 +2,7 @@
 const output = document.querySelector('#output');
 const discovery = document.querySelector('#discovery');
 let paymentAddress = null;
+let ordinalAddress = null;
 
 const M9P_RECEIVED_PSBT = 'cHNidP8BAKYCAAAAAqMG59qVP38rU0zeSJ4ZA2vVOu5iGaYGCKOH35Jqlp5UAAAAAAD/////+S5wT717AnMQC/FCusMPJ6XCiENO3VLAbFA4t7SokcoAAAAAAP3///8CECcAAAAAAAAiUSA7grKyqRhTFdpvgNpfBtBEDYpeFFf6kzh8LZGchuyHhnjmAAAAAAAAFgAU0MSj7wnpl7bpnjl+UY/j5BoRjKEAAAAAAAEBHxAnAAAAAAAAFgAUEREREREREREREREREREREREREREAAQEfYOoAAAAAAAAWABTQxKPvCemXtumeOX5Rj+PkGhGMoQAAAA==';
 
@@ -53,6 +54,7 @@ async function request(operation) {
         ],
       });
       paymentAddress = result.addresses.find((entry) => entry.purpose === 'payment')?.address ?? null;
+      ordinalAddress = result.addresses.find((entry) => entry.purpose === 'ordinals')?.address ?? null;
       return result;
     }
     case 'permissions': return providerRequest('wallet_getCurrentPermissions');
@@ -68,6 +70,27 @@ async function request(operation) {
       return providerRequest('signMessage', {
         address: paymentAddress, message: 'Drey M8T local BIP322 proof', protocol: 'BIP322',
       });
+    }
+    case 'sign-batch': {
+      if (!paymentAddress || !ordinalAddress) {
+        const addresses = await providerRequest('getAddresses', { purposes: ['payment', 'ordinals'] });
+        paymentAddress = addresses.addresses.find((entry) => entry.purpose === 'payment')?.address ?? null;
+        ordinalAddress = addresses.addresses.find((entry) => entry.purpose === 'ordinals')?.address ?? null;
+      }
+      if (!paymentAddress || !ordinalAddress) throw new Error('Signing addresses unavailable');
+      const expectedAddresses = [paymentAddress, ordinalAddress];
+      const results = await providerRequest('signMultipleMessages', [
+        { address: paymentAddress, message: 'Drey local payment address proof', protocol: 'BIP322' },
+        { address: ordinalAddress, message: 'Drey local Ordinals address proof' },
+      ]);
+      return { expectedAddresses, results };
+    }
+    case 'sign-transaction-batch': {
+      const configured = window.__dreyE2eTransactionBatch;
+      if (typeof configured !== 'object' || configured === null) {
+        throw new Error('Transaction batch fixture unavailable');
+      }
+      return providerRequest('signMultipleTransactions', configured);
     }
     case 'send': return providerRequest('sendTransfer', {
       recipients: [{ address: 'tb1q053ptqlv0ugz8fcc3njw355rdluk4tqnhf0g0j', amount: 1000 }],
@@ -96,6 +119,7 @@ async function request(operation) {
     case 'disconnect': {
       const result = await providerRequest('wallet_disconnect');
       paymentAddress = null;
+      ordinalAddress = null;
       return result;
     }
     default: throw new Error(`Unknown operation: ${operation}`);

@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@drey/core':
-        specifier: git+https://github.com/dreywallet/core.git#v0.16.1
-        version: git+https://github.com/dreywallet/core.git#e2c70025012b7104b3a2d2e1a6c8b2397d38036d
+        specifier: git+https://github.com/dreywallet/core.git#v0.17.6
+        version: git+https://github.com/dreywallet/core.git#ced3ce64be5fdbd60129d1e3baafaa5832dd4ba9
       '@ngraveio/bc-ur':
         specifier: 1.1.13
         version: 1.1.13
@@ -169,6 +169,10 @@ packages:
     resolution: {integrity: sha512-KHp2IflsnGywDjBWDkR9iEqiWSpc8GIi0lgTT3mOElT0PP1tG26P4tmFI2YvAdzgq9RGyoHZQEIEdZy6Ec5xCA==}
     engines: {node: '>=6.9.0'}
 
+  '@babel/runtime@7.29.7':
+    resolution: {integrity: sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==}
+    engines: {node: '>=6.9.0'}
+
   '@babel/types@7.29.7':
     resolution: {integrity: sha512-4zBIxpPzowiZpusoFkyGVwakdRJUyuH5PxQ/PrqghfdFWWasvnCdPfQXHrenDai+gyLARulZjZowCOj6fjT4pA==}
     engines: {node: '>=6.9.0'}
@@ -226,9 +230,9 @@ packages:
     engines: {node: '>= 0.10.4'}
     hasBin: true
 
-  '@drey/core@git+https://github.com/dreywallet/core.git#e2c70025012b7104b3a2d2e1a6c8b2397d38036d':
-    resolution: {commit: e2c70025012b7104b3a2d2e1a6c8b2397d38036d, repo: https://github.com/dreywallet/core.git, type: git}
-    version: 0.16.1
+  '@drey/core@git+https://github.com/dreywallet/core.git#ced3ce64be5fdbd60129d1e3baafaa5832dd4ba9':
+    resolution: {commit: ced3ce64be5fdbd60129d1e3baafaa5832dd4ba9, repo: https://github.com/dreywallet/core.git, type: git}
+    version: 0.17.6
 
   '@emnapi/core@1.11.1':
     resolution: {integrity: sha512-RSvbQmHzdKzNsLYa/wHrbc3KN4sYLKAdPZxqiM2HATqv/SBk2/ENSHpvXGaLOMcsAyz0poEGqkmmKYG3OWiJEQ==}
@@ -3372,6 +3376,8 @@ snapshots:
 
   '@babel/runtime@7.28.2': {}
 
+  '@babel/runtime@7.29.7': {}
+
   '@babel/types@7.29.7':
     dependencies:
       '@babel/helper-string-parser': 7.29.7
@@ -3421,7 +3427,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@drey/core@git+https://github.com/dreywallet/core.git#e2c70025012b7104b3a2d2e1a6c8b2397d38036d':
+  '@drey/core@git+https://github.com/dreywallet/core.git#ced3ce64be5fdbd60129d1e3baafaa5832dd4ba9':
     dependencies:
       '@noble/curves': 1.9.7
       '@scure/base': 1.2.6
@@ -3895,7 +3901,7 @@ snapshots:
   '@testing-library/dom@10.4.1':
     dependencies:
       '@babel/code-frame': 7.29.7
-      '@babel/runtime': 7.28.2
+      '@babel/runtime': 7.29.7
       '@types/aria-query': 5.0.4
       aria-query: 5.3.0
       dom-accessibility-api: 0.5.16

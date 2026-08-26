@@ -12,6 +12,10 @@ export const VAULTS_KEY = `${NS}:vaults`;
 export const VAULTS_STAGING_KEY = `${NS}:vaults:staging`;
 /** Raw records that could not be parsed/migrated. Never discarded by normal writes. */
 export const VAULTS_QUARANTINE_KEY = `${NS}:vaults:quarantine`;
+/** Versioned profile credential plus profile-wrapped wallet/owner keys. */
+export const PROFILE_CREDENTIAL_KEY = `${NS}:profileCredential`;
+/** Staging slot for verify-first profile migration and updates. */
+export const PROFILE_CREDENTIAL_STAGING_KEY = `${NS}:profileCredential:staging`;
 export const ACTIVE_VAULT_KEY = `${NS}:activeVaultId`;
 export const CONFIG_KEY = `${NS}:config`;
 /** Object map { [vaultId]: VaultMeta } — plaintext per-vault flags (§7.1 backup gate). */

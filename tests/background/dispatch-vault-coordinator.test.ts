@@ -56,7 +56,7 @@ describe('vault coordinator op registry', () => {
     // The composed registry is the union, with nothing lost in the merge.
     expect(Object.keys(EXTENSION_OP_SCHEMAS)).toHaveLength(
       Object.keys(OP_SCHEMAS).length + Object.keys(PASSKEY_OP_SCHEMAS).length +
-        OPS.length + Object.keys(COMMUNITY_VAULT_OP_SCHEMAS).length + 3,
+        OPS.length + Object.keys(COMMUNITY_VAULT_OP_SCHEMAS).length + 5,
     );
   });
 

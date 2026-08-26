@@ -4,6 +4,26 @@ import type { ApprovalUiMessageKey } from './approval-ui-en';
 export const approvalUiEs: Record<ApprovalUiMessageKey, string> = {
   'approvalUi.requestedBy': 'Solicitado por',
   'approvalUi.transactionSummary': 'Resumen de la transacción',
+  'approvalUi.batch.titleOne': '¿Firmar esta transacción?',
+  'approvalUi.batch.title': '¿Firmar {count} transacciones?',
+  'approvalUi.batch.summary': 'Resumen del lote',
+  'approvalUi.batch.countOne': '1 transacción',
+  'approvalUi.batch.count': '{count} transacciones independientes',
+  'approvalUi.batch.feeExposure': 'Exposición combinada a comisiones',
+  'approvalUi.batch.transaction': 'Transacción {number} de {count}',
+  'approvalUi.batch.reviewEvery':
+    'Revisa cada transacción a continuación. Drey devuelve todas las firmas en orden o ninguna.',
+  'approvalUi.messageBatch.titleOne': '¿Firmar este mensaje?',
+  'approvalUi.messageBatch.title': '¿Firmar {count} mensajes?',
+  'approvalUi.messageBatch.description':
+    'Los mensajes pueden iniciar sesión o confirmar una acción. No pueden gastar bitcoin.',
+  'approvalUi.messageBatch.summaryOne': '1 mensaje de este sitio',
+  'approvalUi.messageBatch.summary': '{count} mensajes de este sitio',
+  'approvalUi.messageBatch.message': 'Mensaje {number} de {count}',
+  'approvalUi.messageBatch.hiddenFormatting':
+    'El formato oculto se muestra como códigos U+.',
+  'approvalUi.messageBatch.signOne': 'Firmar mensaje',
+  'approvalUi.messageBatch.sign': 'Firmar mensajes',
   'approvalUi.leavingWallet': 'Sale de tu cartera',
   'approvalUi.enteringWallet': 'Entra en tu cartera',
   'approvalUi.walletContext': 'Usando',
@@ -20,7 +40,7 @@ export const approvalUiEs: Record<ApprovalUiMessageKey, string> = {
   'approvalUi.protectedFee.body':
     '{sats} sats protegidos pagarían la comisión. Vuelve a crear la transacción usando Bitcoin limpio para las comisiones.',
   'approvalUi.actions.closeEffect':
-    'Rechaza solo esta solicitud o cierra la ventana para rechazar todas las solicitudes pendientes.',
+    'Rechazar afecta esta solicitud. Cerrar la ventana cancela todas las solicitudes pendientes.',
   'approvalUi.warning.title': 'Comprueba antes de continuar',
   'approvalUi.warning.highFee':
     'La comisión de red es alta. Comprueba la cantidad antes de continuar.',
@@ -33,6 +53,10 @@ export const approvalUiEs: Record<ApprovalUiMessageKey, string> = {
   'approvalUi.flexible.title': 'El mercado puede actualizar esta transacción',
   'approvalUi.flexible.body':
     'El mercado puede añadir fondos o sustituir salidas marcadas como Puede cambiar. No puedes retirar la firma después de compartirla.',
+  'approvalUi.genericListing.title': '¿Anunciar inscripción?',
+  'approvalUi.genericListing.sign': 'Firmar anuncio',
+  'approvalUi.genericListing.flexibleBody':
+    'El sitio puede añadir fondos o sustituir salidas marcadas como Puede cambiar. No puedes retirar la firma después de compartirla.',
   'approvalUi.marketplace.authenticate': '¿Iniciar sesión?',
   'approvalUi.marketplace.cancel': '¿Cancelar anuncio?',
   'approvalUi.marketplace.list': '¿Anunciar inscripción?',

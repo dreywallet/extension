@@ -397,6 +397,7 @@ describe('MAIN/isolated provider bridge', () => {
         'methods',
         'protocolVersion',
         'request',
+        'signMultipleTransactions',
       ].sort(),
     );
     expect(provider).not.toHaveProperty('address');

@@ -241,8 +241,9 @@ const methods = [...registryBody.matchAll(/^ {2}([A-Za-z_][A-Za-z0-9_]*): op\(/g
 const expectedMethods = [
   'getInfo', 'drey_openCommunityVault', 'wallet_connect', 'wallet_disconnect', 'wallet_renouncePermissions',
   'wallet_getCurrentPermissions', 'wallet_requestPermissions', 'wallet_getAccount',
-  'wallet_getNetwork', 'getAddresses', 'getAccounts', 'getBalance', 'signMessage',
-  'signPsbt', 'sendTransfer', 'ord_getInscriptions', 'ord_sendInscriptions',
+  'wallet_getNetwork', 'wallet_getWalletType', 'getAddresses', 'getAccounts', 'getBalance', 'signMessage',
+  'signMultipleMessages', 'signPsbt', 'signMultipleTransactions', 'sendTransfer',
+  'ord_getInscriptions', 'ord_sendInscriptions',
 ];
 assert(same(methods, expectedMethods), `provider surface mismatch: ${methods.join(', ')}`);
 const shippedJavaScript = files
@@ -265,7 +266,7 @@ for (const method of expectedMethods) {
 // registry check is the precise one; the bundle scan is the belt-and-braces
 // half, catching a name that reached the build by some path other than the
 // registry — an alias map in the injected provider, say.
-const undocumentedProviderMethods = ['pushTx', 'sendBitcoin', 'signTransaction', 'signMultipleTransactions'];
+const undocumentedProviderMethods = ['pushTx', 'sendBitcoin', 'signTransaction'];
 
 // One class of match is provably not a provider surface: an i18n message key.
 // `approval.action.signTransaction` names a button label, and no page can call

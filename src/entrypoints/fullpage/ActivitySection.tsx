@@ -207,11 +207,11 @@ export function ActivitySection(props: {
         {accelerate !== null ? (
           <div className={sectionStyles['actions']}>
             <strong>{t('activity.bestNext.title')}</strong>
-            <p className={styles['advisory']}>{t('activity.speedUp.explanation')}</p>
+            <p className={sectionStyles['actionHelp']}>{t('activity.speedUp.explanation')}</p>
             <Button variant="secondary" onClick={() => props.onAccelerate(accelerate, item.txid)}>
               {t(accelerate === 'rbf' ? 'activity.speedUp.rbf' : 'activity.speedUp.cpfp')}
             </Button>
-            <p className={styles['advisory']}>{t('activity.pendingSafety')}</p>
+            <p className={sectionStyles['safetyNote']}>{t('activity.pendingSafety')}</p>
           </div>
         ) : transaction?.accelerationUnavailableReason == null ? null : (
           <p className={styles['advisory']}>{t('activity.bestNext.unavailable')}</p>
@@ -271,11 +271,11 @@ export function ActivitySection(props: {
       {accelerate !== null ? (
         <div className={sectionStyles['actions']}>
           <strong>{t('activity.bestNext.title')}</strong>
-          <p className={styles['advisory']}>{t('activity.speedUp.explanation')}</p>
+          <p className={sectionStyles['actionHelp']}>{t('activity.speedUp.explanation')}</p>
           <Button variant="secondary" onClick={() => props.onAccelerate(accelerate, transaction.txid)}>
             {t(accelerate === 'rbf' ? 'activity.speedUp.rbf' : 'activity.speedUp.cpfp')}
           </Button>
-          <p className={styles['advisory']}>{t('activity.pendingSafety')}</p>
+          <p className={sectionStyles['safetyNote']}>{t('activity.pendingSafety')}</p>
         </div>
       ) : transaction.accelerationUnavailableReason == null ? null : (
         <p className={styles['advisory']}>{t('activity.bestNext.unavailable')}</p>

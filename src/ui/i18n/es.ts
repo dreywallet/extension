@@ -118,11 +118,11 @@ export const es: Record<MessageKey, string> = {
   'onboarding.password.title': 'Elige tu contraseña de la aplicación',
   'onboarding.password.body':
     'Una sola contraseña protege todas las carteras de este perfil del navegador. Nunca sale de tu dispositivo.',
-  'onboarding.password.existing.title': 'Introduce la contraseña de la aplicación',
+  'onboarding.password.existing.title': 'Ponle un nombre a esta cartera',
   'onboarding.password.existing.body':
-    'La contraseña actual de la aplicación protegerá esta cartera adicional.',
+    'Se añadirá a tu perfil desbloqueado y usará la misma contraseña de la aplicación.',
   'onboarding.password.existing.hint':
-    'Introduce tu contraseña actual de la aplicación para continuar.',
+    'No hace falta otra contraseña.',
   'onboarding.password.vaultName': 'Nombre de la cartera',
   'onboarding.password.password': 'Contraseña de la app',
   'onboarding.password.confirm': 'Confirmar contraseña de la app',
@@ -135,6 +135,15 @@ export const es: Record<MessageKey, string> = {
   'onboarding.password.tooShort': 'La contraseña debe tener al menos 12 caracteres.',
 
   'onboarding.reveal.title': 'Anota tu frase de recuperación',
+  'backup.defer.title': 'Protege tu nueva cartera',
+  'backup.defer.body': 'Guarda ahora tu frase de recuperación o continúa con un recordatorio permanente hasta verificarla.',
+  'backup.action.now': 'Guardar ahora',
+  'backup.action.later': 'Hacerlo más tarde',
+  'backup.defer.warningTitle': 'Tu cartera no puede recuperarse sin esta frase',
+  'backup.defer.warningBody': 'Si pierdes, dañas o restableces este dispositivo antes de guardar la frase, tus bitcoin podrían perderse para siempre.',
+  'backup.defer.acknowledge': 'Lo entiendo; recuérdamelo',
+  'backup.reminder.title': 'Frase de recuperación sin guardar',
+  'backup.reminder.message': 'Guárdala ahora para recuperar esta cartera si pierdes el dispositivo.',
   'onboarding.reveal.body':
     'Estas 12 palabras son la única forma de recuperar tus bitcoins si pierdes este dispositivo. Escríbelas en papel, en orden, y guárdalas sin conexión. Drey nunca volverá a mostrarlas sin tu contraseña.',
   'onboarding.reveal.warning': 'Nunca compartas estas palabras. Cualquiera que las tenga puede llevarse tus bitcoins.',
@@ -959,6 +968,8 @@ export const es: Record<MessageKey, string> = {
   'blockTrail.detail.unknown': 'No se sabe',
 
   'receive.title': 'Recibir',
+  'receive.recovery.title': 'Es necesario volver a cargar Recibir',
+  'receive.recovery.message': 'Tu cartera sigue segura. Reintenta esta pantalla o vuelve atrás.',
   'receive.tab.bitcoin': 'Bitcoin',
   'receive.tab.ordinals': 'Ordinals',
   'receive.bitcoin.explain':
@@ -1125,7 +1136,9 @@ export const es: Record<MessageKey, string> = {
   'contacts.transfer.previous': 'Fotograma anterior',
   'contacts.transfer.next': 'Fotograma siguiente',
   'settings.vaults.switchBody':
-    'Introduce tu contraseña para cambiar. La cartera actual se bloquea primero.',
+    'Cambia de cartera sin otra contraseña mientras Drey esté desbloqueado.',
+  'settings.vaults.linkBody':
+    'Esta cartera anterior tiene otra contraseña. Introdúcela una vez para vincularla a la contraseña de la aplicación.',
 
   'blockedSite.title': 'Ayuda para sitios bloqueados',
   'blockedSite.alert':
@@ -1429,7 +1442,7 @@ export const es: Record<MessageKey, string> = {
   'communityVault.eyebrow': '69 de 100 · Bitcoin mainnet',
   'communityVault.intro':
     'Únete a una compra de OMB, conserva tu propia clave de propietario y aprueba todas tus unidades con una revisión clara. Drey y la galería no pueden gastar ni recuperar la bóveda.',
-  'communityVault.entry.summary': 'Únete y gestiona una compra compartida de OMB sin dar una clave a Drey ni a la galería.',
+  'communityVault.entry.summary': 'Coordinación multifirma experta para compras compartidas y compras en grupo.',
   'communityVault.entry.open': 'Abrir',
   'communityVault.join.title': 'Unirse a una campaña',
   'communityVault.join.body':

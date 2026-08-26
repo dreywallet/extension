@@ -53,7 +53,7 @@ export function RestoreFlow(props: {
   const [words, setWords] = useState<string[]>(() => Array.from({ length: 12 }, () => ''));
   const [passphrase, setPassphrase] = useState('');
   const [showPassphrase, setShowPassphrase] = useState(false);
-  const [wordsHidden, setWordsHidden] = useState(false);
+  const [wordsHidden, setWordsHidden] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const operationId = useRef(globalThis.crypto.randomUUID()).current;
@@ -65,7 +65,7 @@ export function RestoreFlow(props: {
   const [expectation, setExpectation] = useState<ActiveSessionExpectation | null>(null);
   const [emptyRestore, setEmptyRestore] = useState(false);
   const passwordStepReady = props.existingProfile
-    ? password !== ''
+    ? true
     : checkPasswordPolicy(password).ok && confirm !== '' && password === confirm;
 
   if (step === 'passkey' && expectation !== null) {
@@ -104,7 +104,7 @@ export function RestoreFlow(props: {
     try {
       const restored = await rpc('vault.restore', {
         name: name.trim() || props.defaultWalletName || 'Wallet 1',
-        password,
+        ...(props.existingProfile ? {} : { password }),
         mnemonic: normalized(),
         ...(passphrase !== '' ? { passphrase } : {}),
         operationId,
@@ -113,7 +113,9 @@ export function RestoreFlow(props: {
         setError(t(errorMessageKey(restored.code)));
         return;
       }
-      const unlocked = await rpc('vault.unlock', { vaultId: restored.result.vaultId, password });
+      const unlocked = props.existingProfile
+        ? await rpc('vault.switch', { vaultId: restored.result.vaultId })
+        : await rpc('vault.unlock', { vaultId: restored.result.vaultId, password });
       if (!unlocked.ok) {
         setError(t(errorMessageKey(unlocked.code)));
         return;
@@ -293,7 +295,7 @@ export function RestoreFlow(props: {
       <p className={styles['subtitle']}>
         {t(props.existingProfile ? 'onboarding.password.existing.body' : 'onboarding.password.body')}
       </p>
-      {passkeySettingsAvailable() ? (
+      {passkeySettingsAvailable() && !props.existingProfile ? (
         <p className={styles['hint']}>{t('passkey.onboarding.passwordNote')}</p>
       ) : null}
       <Field
@@ -301,13 +303,13 @@ export function RestoreFlow(props: {
         value={name}
         onChange={(e) => setName(e.target.value)}
       />
-      <Field
+      {!props.existingProfile ? <Field
         label={t('onboarding.password.password')}
         type={showPasswords ? 'text' : 'password'}
         value={password}
         onChange={(e) => setPassword(e.target.value)}
-        autoComplete={props.existingProfile ? 'current-password' : 'new-password'}
-      />
+        autoComplete="new-password"
+      /> : null}
       {!props.existingProfile ? (
         <Field
           label={t('onboarding.password.confirm')}
@@ -317,14 +319,14 @@ export function RestoreFlow(props: {
           autoComplete="new-password"
         />
       ) : null}
-      <label className={styles['hint']}>
+      {props.existingProfile ? null : <label className={styles['hint']}>
         <input
           type="checkbox"
           checked={showPasswords}
           onChange={(event) => setShowPasswords(event.target.checked)}
         />{' '}
         {t('onboarding.password.show')}
-      </label>
+      </label>}
       <div className={styles['feedbackSlot']} aria-live="polite">
         {error !== null ? (
           <p role="alert" className={styles['error']}>{error}</p>

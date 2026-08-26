@@ -29,7 +29,7 @@ export function ResumeVerify(props: { onDone: () => void; expectation: ActiveSes
   const words = useRef<string[] | null>(null);
   const [wordsReady, setWordsReady] = useState(false);
   const [revealError, setRevealError] = useState<string | null>(null);
-  const [step, setStep] = useState<'verify' | 'reauth' | 'reveal'>('verify');
+  const [step, setStep] = useState<'backupChoice' | 'deferWarning' | 'verify' | 'reauth' | 'reveal'>('backupChoice');
 
   useEffect(() => () => {
     words.current?.fill('');
@@ -79,6 +79,21 @@ export function ResumeVerify(props: { onDone: () => void; expectation: ActiveSes
     }
   }
 
+  async function deferBackup(): Promise<void> {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await rpc('backup.defer', props.expectation);
+      if (!result.ok) {
+        setError(t(errorMessageKey(result.code)));
+        return;
+      }
+      props.onDone();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function beginPhraseReview(): void {
     setTyped(['', '', '']);
     setError(null);
@@ -97,6 +112,43 @@ export function ResumeVerify(props: { onDone: () => void; expectation: ActiveSes
     setPositions(pickPositions());
     setTyped(['', '', '']);
     setStep('verify');
+  }
+
+  if (step === 'backupChoice') {
+    return (
+      <div className={styles['form']}>
+        <h1 className={styles['title']}>{t('backup.defer.title')}</h1>
+        <p className={styles['subtitle']}>{t('backup.defer.body')}</p>
+        <div className={styles['actions']}>
+          <Button variant="secondary" onClick={() => setStep('deferWarning')} disabled={busy}>
+            {t('backup.action.later')}
+          </Button>
+          <Button onClick={() => setStep('reauth')} disabled={busy}>
+            {t('backup.action.now')}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (step === 'deferWarning') {
+    return (
+      <div className={styles['form']}>
+        <h1 className={styles['title']}>{t('backup.defer.warningTitle')}</h1>
+        <p className={`${styles['warning']} ${styles['danger']}`} role="alert">
+          {t('backup.defer.warningBody')}
+        </p>
+        {error !== null ? <p role="alert" className={styles['error']}>{error}</p> : null}
+        <div className={styles['actions']}>
+          <Button variant="secondary" onClick={() => setStep('backupChoice')} disabled={busy}>
+            {t('common.back')}
+          </Button>
+          <Button onClick={() => void deferBackup()} disabled={busy}>
+            {t('backup.defer.acknowledge')}
+          </Button>
+        </div>
+      </div>
+    );
   }
 
   if (step === 'reauth') {
@@ -119,7 +171,7 @@ export function ResumeVerify(props: { onDone: () => void; expectation: ActiveSes
         />
         {revealError !== null ? <p role="alert" className={styles['error']}>{revealError}</p> : null}
         <div className={styles['actions']}>
-          <Button variant="secondary" onClick={() => setStep('verify')} disabled={busy}>
+          <Button variant="secondary" onClick={() => setStep('backupChoice')} disabled={busy}>
             {t('common.cancel')}
           </Button>
           <Button type="submit" disabled={busy || password === ''}>

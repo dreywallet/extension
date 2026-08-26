@@ -57,6 +57,16 @@ import {
   zeroize,
   type VaultDeps,
 } from '@drey/core/domain/vault/vault';
+import {
+  addProfileSecret,
+  createProfileCredential,
+  linkLegacyVaultToProfile,
+  removeProfileSecret,
+  rewrapProfilePassword,
+  unlockProfileCredential,
+  unwrapProfileSecret,
+} from '@drey/core/domain/vault/profile-credential';
+import { VaultError } from '@drey/core/domain/vault/errors';
 import type { StorageArea } from '../adapters/storage/area';
 import {
   passkeyBeginEnrollment,
@@ -226,11 +236,18 @@ import {
 } from '../adapters/storage/vault-store';
 import {
   loadCommunityVaultOwners,
-  saveCommunityVaultOwners,
+  savePasswordChangedRecords,
 } from '../adapters/storage/community-vault-store';
+import {
+  loadProfileCredential,
+  profileWalletSecret,
+  saveProfileCredential,
+  type StoredProfileCredentialV1,
+} from '../adapters/storage/profile-credential-store';
 import {
   clearSession,
   getSession,
+  peekSession,
   putSession,
   setSessionAccessTrusted,
   type SessionArea,
@@ -530,6 +547,21 @@ import {
   type ProviderPsbtPlanV3,
 } from '@drey/core/domain/transactions/provider-psbt';
 import {
+  assertProviderPsbtBatchPlan,
+  createProviderPsbtBatchPlan,
+  signProviderPsbtBatchPlan,
+  type ProviderBatchInputSelection,
+  type ProviderPsbtBatchPlanV1,
+} from '@drey/core/domain/transactions/provider-psbt-batch';
+import {
+  assertProviderMessageBatchPlan,
+  assertProviderMessageBatchResults,
+  createProviderMessageBatchPlan,
+  signProviderMessageBatchItem,
+  type ProviderMessageBatchPlanV1,
+  type ProviderSignedMessage,
+} from '@drey/core/domain/transactions/provider-message-batch';
+import {
   automaticOrdinalPostage,
   canonicalOrdinalBatchSelections,
   groupOrdinalInscriptions,
@@ -786,6 +818,42 @@ function tipsEqual(
   return left.height === right.height && left.hash === right.hash;
 }
 
+type ApprovalEvidenceSource = Pick<
+  OutpointsClassifyResponse,
+  'instanceId' | 'classificationRevision' | 'coreTip' | 'indexTip'
+>;
+
+function approvalEvidenceSource(
+  response: ApprovalEvidenceSource,
+): ApprovalEvidenceSource {
+  return {
+    instanceId: response.instanceId,
+    classificationRevision: response.classificationRevision,
+    coreTip: response.coreTip,
+    indexTip: response.indexTip,
+  };
+}
+
+function approvalSourcesEqual(
+  left: ApprovalEvidenceSource,
+  right: ApprovalEvidenceSource,
+): boolean {
+  return left.instanceId === right.instanceId &&
+    left.classificationRevision === right.classificationRevision &&
+    tipsEqual(left.coreTip, right.coreTip) &&
+    tipsEqual(left.indexTip, right.indexTip);
+}
+
+function approvalSourceMatchesStatus(
+  source: ApprovalEvidenceSource,
+  status: StatusCapabilities,
+): boolean {
+  return source.instanceId === status.instanceId &&
+    source.classificationRevision === status.activeRevision &&
+    tipsEqual(source.coreTip, status.coreTip) &&
+    tipsEqual(source.indexTip, status.indexTip);
+}
+
 function providerFactsEqual(fresh: UtxoClassification, expected: ProviderPsbtPlanV3['inputs'][number]): boolean {
   return fresh.txid === expected.txid && fresh.vout === expected.vout &&
     fresh.valueSats === expected.valueSats.toString() && fresh.scriptPubKey === expected.scriptPubKey &&
@@ -829,8 +897,14 @@ function isCurrentStoredTransaction(
 
 // Direct domain/service callers may omit operationId; the RPC boundary requires
 // it so every user-triggered create/restore is durably idempotent.
-type ServiceCreateRequest = Omit<VaultCreateRequest, 'operationId'> & { operationId?: string };
-type ServiceRestoreRequest = Omit<VaultRestoreRequest, 'operationId'> & { operationId?: string };
+type ServiceCreateRequest = Omit<VaultCreateRequest, 'operationId' | 'password'> & {
+  operationId?: string;
+  password?: string;
+};
+type ServiceRestoreRequest = Omit<VaultRestoreRequest, 'operationId' | 'password'> & {
+  operationId?: string;
+  password?: string;
+};
 
 /** BIP39 words are stored NFKD-normalized lowercase; typed input is folded the same way. */
 function normalizeWord(word: string): string {
@@ -998,6 +1072,13 @@ type ResolvedFee = ResolvedFeeBase & ({
   binding: 'custom';
   status: Extract<StatusCapabilities, { protocolVersion: 2 }>;
 });
+
+interface RefreshedPlanClassifications {
+  byOutpoint: Map<string, UtxoClassification>;
+  sourceChanged: boolean;
+  preservedRbfOutpoints: Set<string>;
+  source: ApprovalEvidenceSource | null;
+}
 
 export { MAX_PASSKEY_RECORDS_TOTAL, MAX_PASSKEY_RECORDS_PER_VAULT, PASSKEY_GRANT_TTL_MS } from './passkey-service';
 
@@ -1205,7 +1286,9 @@ export class WalletService {
         const metadata = createBackupMetadata({
           origin: 'generated', wordCount: 12, usesPassphrase: false,
         });
-        meta[result.vaultId] = { backupVerified: false, metadata };
+        meta[result.vaultId] = {
+          backupVerified: false, metadata, deferredUseAcknowledgedAt: null,
+        };
         await saveVaultMeta(this.deps.local, meta);
         return result;
       } finally {
@@ -1236,7 +1319,9 @@ export class WalletService {
           wordCount,
           usesPassphrase: Boolean(input.passphrase),
         });
-        meta[result.vaultId] = { backupVerified: true, metadata };
+        meta[result.vaultId] = {
+          backupVerified: true, metadata, deferredUseAcknowledgedAt: null,
+        };
         await saveVaultMeta(this.deps.local, meta);
         return result;
       } finally {
@@ -1266,7 +1351,7 @@ export class WalletService {
    * session — so a mistyped switch password leaves the current vault unlocked
    * rather than locking the wallet out.
    */
-  async switchVault(input: VaultUnlockRequest): Promise<{ vaultId: string; sessionId: string; deadline: number }> {
+  async switchVault(input: { vaultId: string; password?: string }): Promise<{ vaultId: string; sessionId: string; deadline: number }> {
     const result = await this.runExclusive(() => this.unlockLocked(input));
     void this.retryBroadcasts().catch(() => undefined);
     return result;
@@ -1303,20 +1388,37 @@ export class WalletService {
 
       // Rewrap only rewraps each DEK under the new password; the DEK bytes are
       // unchanged, so an active session's stored DEK stays valid (spec §7.2).
-      const updated = await domainChangePassword(
-        [...records, ...community.records.map((record) => record.secret)],
+      const profile = await loadProfileCredential(this.deps.local);
+      const nextCredential = profile === null ? null : await rewrapProfilePassword(
+        profile.credential,
         input.oldPassword,
         input.newPassword,
         this.deps.vaultDeps,
       );
+      const updated: VaultRecordV1[] = [];
+      for (const record of [...records, ...community.records.map((entry) => entry.secret)]) {
+        try {
+          updated.push((await domainChangePassword(
+            [record], input.oldPassword, input.newPassword, this.deps.vaultDeps,
+          ))[0]!);
+        } catch (error) {
+          if (profile !== null && error instanceof VaultError && error.code === 'wrong-password') {
+            updated.push(record);
+          } else {
+            throw error;
+          }
+        }
+      }
       const newMap: VaultRecordMap = {};
       for (const r of updated.slice(0, records.length)) newMap[r.vaultId] = r;
       const communityUpdated = community.records.map((record, index) => ({
         ...record,
         secret: updated[records.length + index]!,
       }));
-      await saveVaults(this.deps.local, newMap);
-      await saveCommunityVaultOwners(this.deps.local, communityUpdated);
+      await savePasswordChangedRecords(this.deps.local, newMap, communityUpdated);
+      if (profile !== null && nextCredential !== null) {
+        await saveProfileCredential(this.deps.local, { ...profile, credential: nextCredential });
+      }
       return { ok: true };
     });
   }
@@ -1551,7 +1653,7 @@ export class WalletService {
         await purgePasskeyStateForVault(this.passkeyContext(), input.targetVaultId);
         return { removed: false };
       }
-      await verifyVaultPassword(record, input.password);
+      await this.verifyAppPassword(record, input.password);
       // Every successful removal locks, regardless of which vault was active.
       // Lock first: if a later local-storage write fails, the vault remains
       // recoverable but no DEK-equivalent material survives the operation.
@@ -1576,6 +1678,17 @@ export class WalletService {
         delete meta[input.targetVaultId];
         await saveVaultMeta(this.deps.local, meta);
       }
+      const profile = await loadProfileCredential(this.deps.local);
+      if (profile !== null) {
+        await saveProfileCredential(this.deps.local, {
+          ...profile,
+          secrets: removeProfileSecret(profile.secrets, {
+            profileId: profile.credential.profileId,
+            secretId: input.targetVaultId,
+            kind: 'wallet-dek',
+          }),
+        });
+      }
       return { removed: true };
     });
   }
@@ -1596,14 +1709,13 @@ export class WalletService {
       const map = await loadVaults(this.deps.local);
       const record = map[session.vaultId];
       if (!record) throw new RpcError('ERR_VAULT_NOT_FOUND', 'active vault record missing');
-      const unlocked = await unlockVault(record, input.password); // throws on wrong-password/tampered
-      const entropy = hexToBytes(unlocked.payload.entropyHex);
+      await this.verifyAppPassword(record, input.password);
+      const entropy = hexToBytes(openVaultPayload(record, dek).entropyHex);
       try {
         const result = { mnemonic: entropyToMnemonic(entropy) };
         await this.touchSessionLocked(session);
         return result;
       } finally {
-        zeroize(unlocked.dek);
         zeroize(entropy);
       }
     }));
@@ -1651,7 +1763,11 @@ export class WalletService {
               origin: 'generated', wordCount: words.length as RecoveryWordCount, usesPassphrase: false,
             });
         const metadata = recordBackupSpotCheck(observed, this.deps.vaultDeps.now());
-        meta[vaultId] = { backupVerified: true, metadata };
+        meta[vaultId] = {
+          backupVerified: true,
+          metadata,
+          deferredUseAcknowledgedAt: existing?.deferredUseAcknowledgedAt ?? null,
+        };
         await saveVaultMeta(this.deps.local, meta);
       }
       await this.touchSessionLocked(session);
@@ -1701,6 +1817,7 @@ export class WalletService {
         meta[session.vaultId] = {
           backupVerified: metadata.usageGatePassed,
           metadata,
+          deferredUseAcknowledgedAt: existing?.deferredUseAcknowledgedAt ?? null,
         };
         await saveVaultMeta(this.deps.local, meta);
       }
@@ -1746,6 +1863,34 @@ export class WalletService {
     }));
   }
 
+  async backupDeferralStatus(): Promise<{ deferred: boolean }> {
+    return this.runExclusive(async () => {
+      const session = await this.liveSession();
+      if (session === null) return { deferred: false };
+      const meta = await loadVaultMeta(this.deps.local);
+      return {
+        deferred: meta[session.vaultId]?.backupVerified !== true &&
+          (meta[session.vaultId]?.deferredUseAcknowledgedAt ?? null) !== null,
+      };
+    });
+  }
+
+  async deferBackup(input: ActiveSessionRequest): Promise<{ deferred: true }> {
+    return this.runExclusive(() => this.withSessionDek(input, async (_dek, session) => {
+      const meta = await loadVaultMeta(this.deps.local);
+      const entry = meta[session.vaultId];
+      if (entry === undefined) throw new RpcError('ERR_VAULT_NOT_FOUND');
+      meta[session.vaultId] = {
+        ...entry,
+        deferredUseAcknowledgedAt: entry.deferredUseAcknowledgedAt ?? this.deps.vaultDeps.now(),
+      };
+      await saveVaultMeta(this.deps.local, meta);
+      await this.touchSessionLocked(session);
+      this.notifySessionChanged(false);
+      return { deferred: true as const };
+    }));
+  }
+
   /**
    * Stable external receive address (spec §8.1, §10.6): change 0, index 0 of
    * active standard account, on the channel-pinned network. Gated on the §7.1 backup
@@ -1770,10 +1915,12 @@ export class WalletService {
           dek, session.vaultId, input.accountId,
         );
         if (signingSource.kind === 'software') {
-        const meta = await loadVaultMeta(this.deps.local);
-          if (meta[session.vaultId]?.backupVerified !== true) {
-          throw new RpcError('ERR_BACKUP_REQUIRED', 'seed backup not verified');
-        }
+          const meta = await loadVaultMeta(this.deps.local);
+          const backup = meta[session.vaultId];
+          if (backup?.backupVerified !== true &&
+              (backup?.deferredUseAcknowledgedAt ?? null) === null) {
+            throw new RpcError('ERR_BACKUP_REQUIRED', 'seed backup not verified');
+          }
         }
         const definition = await this.loadPublicAccountDefinitionLocked(
           dek, session.vaultId, input.accountId,
@@ -1824,7 +1971,7 @@ export class WalletService {
       const vaults = await loadVaults(this.deps.local);
       const record = vaults[session.vaultId];
       if (!record) throw new RpcError('ERR_VAULT_NOT_FOUND', 'active vault record missing');
-      await verifyVaultPassword(record, input.password);
+      await this.verifyAppPassword(record, input.password);
 
       const payload = openVaultPayload(record, dek);
       const seed = hexToBytes(payload.seedHex);
@@ -2284,7 +2431,7 @@ export class WalletService {
       const map = await loadVaults(this.deps.local);
       const record = map[session.vaultId];
       if (!record) throw new RpcError('ERR_VAULT_NOT_FOUND', 'active vault record missing');
-      await verifyVaultPassword(record, input.password);
+      await this.verifyAppPassword(record, input.password);
       const definition = await this.loadPublicAccountDefinitionLocked(
         dek, session.vaultId, input.accountId,
       );
@@ -2790,6 +2937,117 @@ export class WalletService {
             key.wipePrivateData();
             chain.wipePrivateData();
             accountNode.wipePrivateData();
+            zeroize(seed);
+          }
+        },
+      );
+    });
+  }
+
+  async providerPrepareMessageBatch(input: {
+    requests: Array<{ address: string; message: string; protocol?: 'BIP322' }>;
+    provider: ProviderMessageBatchPlanV1['provider'];
+    approvalGeneration: number;
+    guard?: ProviderOperationGuard;
+  }): Promise<ProviderMessageBatchPlanV1> {
+    input.guard?.();
+    const account = await this.providerAccountView();
+    input.guard?.();
+    try {
+      return createProviderMessageBatchPlan({
+        requests: input.requests,
+        activeAddresses: {
+          payment: account.payment.address,
+          ordinals: account.ordinals.address,
+        },
+        planId: this.deps.newSessionId(),
+        now: this.deps.vaultDeps.now(),
+        network: account.network,
+        vaultId: account.vaultId,
+        sessionId: account.sessionId,
+        accountId: account.accountId,
+        account: account.account,
+        provider: input.provider,
+        approvalGeneration: input.approvalGeneration,
+      });
+    } catch (error) {
+      if (error instanceof RpcError) throw error;
+      throw new RpcError('ERR_UNSAFE_TRANSACTION', 'provider message batch rejected');
+    }
+  }
+
+  async providerRevalidatePreparedMessageBatch(plan: ProviderMessageBatchPlanV1): Promise<void> {
+    try {
+      assertProviderMessageBatchPlan(plan);
+    } catch {
+      throw new RpcError('ERR_PLAN_CHANGED', 'provider message batch changed');
+    }
+    if (this.deps.vaultDeps.now() >= plan.expiresAt) throw new RpcError('ERR_PLAN_EXPIRED');
+    await this.runExclusive(async () => {
+      const session = await this.liveSession();
+      if (!session || session.vaultId !== plan.vaultId || session.sessionId !== plan.sessionId ||
+          plan.network !== this.deps.network) {
+        throw new RpcError('ERR_LOCKED', 'wallet session changed');
+      }
+      await this.withSessionDek(
+        { expectedVaultId: session.vaultId, expectedSessionId: session.sessionId },
+        async (dek) => {
+          const active = await this.assertProviderAccountLocked(dek, session.vaultId);
+          if (active.accountId !== plan.accountId || active.account !== plan.account) {
+            throw new RpcError('ERR_PLAN_CHANGED', 'provider message batch account changed');
+          }
+        },
+      );
+    });
+  }
+
+  async providerSignPreparedMessageBatch(
+    plan: ProviderMessageBatchPlanV1,
+    guard?: ProviderOperationGuard,
+  ): Promise<ProviderSignedMessage[]> {
+    try {
+      assertProviderMessageBatchPlan(plan);
+    } catch {
+      throw new RpcError('ERR_PLAN_CHANGED', 'provider message batch changed');
+    }
+    if (this.deps.vaultDeps.now() >= plan.expiresAt) throw new RpcError('ERR_PLAN_EXPIRED');
+    return this.runExclusive(async () => {
+      const session = await this.liveSession();
+      if (!session || session.vaultId !== plan.vaultId || session.sessionId !== plan.sessionId ||
+          plan.network !== this.deps.network) {
+        throw new RpcError('ERR_LOCKED', 'wallet session changed');
+      }
+      return this.withSessionDek(
+        { expectedVaultId: session.vaultId, expectedSessionId: session.sessionId },
+        async (dek) => {
+          const active = await this.assertProviderAccountLocked(dek, session.vaultId);
+          if (active.accountId !== plan.accountId || active.account !== plan.account) {
+            throw new RpcError('ERR_PLAN_CHANGED', 'provider message batch account changed');
+          }
+          const map = await loadVaults(this.deps.local);
+          const record = map[session.vaultId];
+          if (!record) throw new RpcError('ERR_VAULT_NOT_FOUND');
+          const seed = hexToBytes(openVaultPayload(record, dek).seedHex);
+          const results: ProviderSignedMessage[] = [];
+          try {
+            for (const item of plan.items) {
+              guard?.();
+              results.push(signProviderMessageBatchItem({
+                plan,
+                itemIndex: item.index,
+                seed,
+                now: this.deps.vaultDeps.now(),
+                random: (length) => this.deps.vaultDeps.random(length),
+              }));
+              await new Promise((resolve) => setTimeout(resolve, 0));
+            }
+            guard?.();
+            assertProviderMessageBatchResults(plan, results);
+            return results;
+          } catch (error) {
+            if (error instanceof RpcError) throw error;
+            throw new RpcError('ERR_UNSAFE_TRANSACTION', 'provider message batch signing failed');
+          } finally {
             zeroize(seed);
           }
         },
@@ -3726,6 +3984,56 @@ export class WalletService {
     ));
   }
 
+  async providerPreparePsbtBatch(input: {
+    items: Array<{ psbtBase64: string; inputsToSign?: ProviderBatchInputSelection[] }>;
+    binding: ProviderAuthorityBinding & { providerMethod: 'signMultipleTransactions' };
+    approvalGeneration: number;
+    guard?: ProviderOperationGuard;
+  }): Promise<ProviderPsbtBatchPlanV1> {
+    const account = await this.providerAccountView();
+    const addressLane = new Map([
+      [account.payment.address, 'payment' as const],
+      [account.ordinals.address, 'ordinals' as const],
+    ]);
+    const prepared: Array<{ plan: ProviderPsbtPlanV3; inputsToSign?: ProviderBatchInputSelection[] }> = [];
+    for (const item of input.items) {
+      input.guard?.();
+      for (const selection of item.inputsToSign ?? []) {
+        if (!addressLane.has(selection.address)) {
+          throw new RpcError('ERR_UNSAFE_TRANSACTION', 'batch signing address is not in the active account');
+        }
+      }
+      const selectedInputIndexes = item.inputsToSign?.flatMap((selection) => selection.signingIndexes);
+      const plan = await this.providerPreparePsbt({
+        psbtBase64: item.psbtBase64,
+        binding: input.binding,
+        broadcast: false,
+        ...(selectedInputIndexes === undefined ? {} : { selectedInputIndexes }),
+      });
+      for (const selection of item.inputsToSign ?? []) {
+        const lane = addressLane.get(selection.address);
+        if (selection.signingIndexes.some((index) => plan.inputs[index]?.derivation?.lane !== lane)) {
+          throw new RpcError('ERR_UNSAFE_TRANSACTION', 'batch signing indexes do not match their address');
+        }
+      }
+      prepared.push({ plan, ...(item.inputsToSign === undefined ? {} : { inputsToSign: item.inputsToSign }) });
+      input.guard?.();
+    }
+    try {
+      const batch = createProviderPsbtBatchPlan({
+        items: prepared,
+        planId: this.deps.newSessionId(),
+        now: this.deps.vaultDeps.now(),
+        approvalGeneration: input.approvalGeneration,
+      });
+      input.guard?.();
+      return batch;
+    } catch (error) {
+      if (error instanceof RpcError) throw error;
+      throw new RpcError('ERR_UNSAFE_TRANSACTION', 'provider PSBT batch rejected');
+    }
+  }
+
   /** Revalidate the exact provider plan before it is shown or approved. */
   async providerRevalidatePreparedPsbt(plan: ProviderPsbtPlanV3): Promise<void> {
     try {
@@ -3765,6 +4073,16 @@ export class WalletService {
         },
       );
     });
+  }
+
+  async providerRevalidatePreparedPsbtBatch(plan: ProviderPsbtBatchPlanV1): Promise<void> {
+    try {
+      assertProviderPsbtBatchPlan(plan);
+    } catch {
+      throw new RpcError('ERR_PLAN_CHANGED', 'provider batch plan changed');
+    }
+    if (this.deps.vaultDeps.now() >= plan.expiresAt) throw new RpcError('ERR_PLAN_EXPIRED');
+    for (const item of plan.items) await this.providerRevalidatePreparedPsbt(item.plan);
   }
 
   async providerSignPreparedPsbt(
@@ -3828,6 +4146,81 @@ export class WalletService {
             });
             await this.persistMarketplaceSignedLocked(dek, plan, signed.psbtBase64);
             return signed;
+          } finally {
+            zeroize(seed);
+          }
+        },
+      );
+    });
+  }
+
+  async providerSignPreparedPsbtBatch(
+    plan: ProviderPsbtBatchPlanV1,
+    guard?: ProviderOperationGuard,
+  ): Promise<Array<{ psbtBase64: string }>> {
+    try {
+      assertProviderPsbtBatchPlan(plan);
+    } catch {
+      throw new RpcError('ERR_PLAN_CHANGED', 'provider batch plan changed');
+    }
+    if (this.deps.vaultDeps.now() >= plan.expiresAt) throw new RpcError('ERR_PLAN_EXPIRED');
+    const gatewayViews: GatewayStatusView[] = [];
+    for (const item of plan.items) {
+      gatewayViews.push(await this.refreshProviderPlanFacts(item.plan));
+      await this.refreshProviderPlanPreviews(item.plan);
+    }
+    return this.runExclusive(async () => {
+      const session = await this.liveSession();
+      if (!session || session.vaultId !== plan.vaultId || session.sessionId !== plan.sessionId ||
+          plan.network !== this.deps.network) {
+        throw new RpcError('ERR_LOCKED', 'wallet session changed');
+      }
+      const config = await loadConfig(this.deps.local);
+      if (plan.requiresAdvanced && !config.advancedPsbtSigning) {
+        throw new RpcError('ERR_PLAN_CHANGED', 'provider batch signing context changed');
+      }
+      if (!deriveAccountCapabilities({
+        unlocked: true,
+        vaultType: 'seed',
+        network: this.deps.network,
+        transport: 'software',
+      }).canSignPsbt) {
+        throw new RpcError('ERR_UNSAFE_TRANSACTION', 'account cannot sign PSBTs');
+      }
+      return this.withSessionDek(
+        { expectedVaultId: session.vaultId, expectedSessionId: session.sessionId },
+        async (dek) => {
+          const active = await this.assertProviderAccountLocked(dek, session.vaultId);
+          if (active.accountId !== plan.accountId || active.account !== plan.account) {
+            throw new RpcError('ERR_PLAN_CHANGED', 'provider batch signing account changed');
+          }
+          for (let index = 0; index < plan.items.length; index += 1) {
+            const item = plan.items[index]!;
+            await this.assertSpendingFreshLocked(
+              dek,
+              session.vaultId,
+              gatewayViews[index]!,
+              'native_send',
+            );
+            await this.assertProviderWalletInputsEligibleLocked(dek, session.vaultId, item.plan);
+          }
+          const map = await loadVaults(this.deps.local);
+          const record = map[session.vaultId];
+          if (!record) throw new RpcError('ERR_VAULT_NOT_FOUND');
+          const seed = hexToBytes(openVaultPayload(record, dek).seedHex);
+          try {
+            guard?.();
+            return await signProviderPsbtBatchPlan({
+              plan,
+              seed,
+              now: this.deps.vaultDeps.now(),
+              random: (length) => this.deps.vaultDeps.random(length),
+              ...(guard === undefined ? {} : { guard }),
+              // A timer task lets queued port, window, lock, and account events
+              // invalidate the synchronous guard between signatures and before
+              // any complete result can leave the service.
+              yieldControl: () => new Promise((resolve) => setTimeout(resolve, 0)),
+            });
           } finally {
             zeroize(seed);
           }
@@ -5645,7 +6038,7 @@ export class WalletService {
    * resolves, and those guards prevent that stale paint from committing.
    */
   async galleryCached(input: GalleryCachedRequest): Promise<GalleryCachedResult> {
-    const session = await this.requireSession(input);
+    const session = await this.peekExpectedSession(input);
     const cached = await loadCachedGallery(this.deps.session, {
       vaultId: session.vaultId,
       sessionId: session.sessionId,
@@ -6231,7 +6624,7 @@ export class WalletService {
     const gateway = this.deps.gateway;
     if (!gateway) throw new RpcError('ERR_BROADCAST_REJECTED', 'gateway unavailable');
     const viewPromise = this.gatewayStatus({ forceRefresh: true });
-    const [view, refreshedClassifications, refreshedFee] = await Promise.all([
+    const [initialView, initialClassifications, initialFee] = await Promise.all([
       viewPromise,
       this.refreshPlanClassifications(plan),
       plan.policy.fee.type === 'custom'
@@ -6243,6 +6636,15 @@ export class WalletService {
           }))
         : this.resolveFee(plan.policy.fee),
     ]);
+    const { view, classifications: refreshedClassifications } =
+      await this.reconcileApprovalEvidence(plan, initialView, initialClassifications);
+    let refreshedFee = initialFee;
+    if (plan.policy.fee.type === 'custom') {
+      refreshedFee = await this.resolveFee({
+        type: 'custom',
+        rateSatPerVb: plan.policy.fee.normalizedSatPerVb,
+      });
+    }
     const { byOutpoint, sourceChanged, preservedRbfOutpoints } = refreshedClassifications;
     for (const expected of plan.inputs) {
       if (preservedRbfOutpoints.has(`${expected.txid}:${expected.vout}`)) continue;
@@ -6305,7 +6707,7 @@ export class WalletService {
         const map = await loadVaults(this.deps.local);
         const record = map[session.vaultId];
         if (!record) throw new RpcError('ERR_VAULT_NOT_FOUND');
-        await verifyVaultPassword(record, input.password);
+        await this.verifyAppPassword(record, input.password);
       }
       const livePreviews = await this.livePreviewsForPlan(current, true);
       try {
@@ -6505,14 +6907,13 @@ export class WalletService {
     };
   }
 
-  private async refreshPlanClassifications(plan: TransactionPlan): Promise<{
-    byOutpoint: Map<string, UtxoClassification>;
-    sourceChanged: boolean;
-    preservedRbfOutpoints: Set<string>;
-  }> {
+  private async refreshPlanClassifications(
+    plan: TransactionPlan,
+  ): Promise<RefreshedPlanClassifications> {
     const gateway = this.deps.gateway;
     if (!gateway) throw new RpcError('ERR_DATA_STALE', 'gateway unavailable');
     let sourceChanged = false;
+    let source: ApprovalEvidenceSource | null = null;
     const preservedRbfOutpoints = new Set<string>();
     if (plan.kind === 'rbf') {
       if (plan.replacesTxid === null) {
@@ -6552,11 +6953,17 @@ export class WalletService {
       if (result.value.classifications.length !== expected.size) {
         throw new RpcError('ERR_DATA_STALE', 'classification response incomplete');
       }
-      sourceChanged ||= result.value.instanceId !== plan.source.instanceId ||
-        result.value.coreTip.height !== plan.source.coreTip.height ||
-        result.value.coreTip.hash !== plan.source.coreTip.hash ||
-        result.value.indexTip.height !== plan.source.indexTip.height ||
-        result.value.indexTip.hash !== plan.source.indexTip.hash;
+      const chunkSource = approvalEvidenceSource(result.value);
+      if (source !== null && !approvalSourcesEqual(source, chunkSource)) {
+        throw new RpcError('ERR_DATA_STALE', 'classification responses changed source');
+      }
+      source ??= chunkSource;
+      sourceChanged ||= !approvalSourcesEqual(chunkSource, {
+        instanceId: plan.source.instanceId,
+        classificationRevision: plan.source.classificationRevision,
+        coreTip: plan.source.coreTip,
+        indexTip: plan.source.indexTip,
+      });
       for (const record of result.value.classifications) {
         const key = `${record.txid}:${record.vout}`;
         if (!expected.has(key) || byOutpoint.has(key) ||
@@ -6568,7 +6975,46 @@ export class WalletService {
         byOutpoint.set(key, record);
       }
     }
-    return { byOutpoint, sourceChanged, preservedRbfOutpoints };
+    return { byOutpoint, sourceChanged, preservedRbfOutpoints, source };
+  }
+
+  /**
+   * Status, fee, and input evidence use independent signed endpoints. Preserve
+   * the parallel fast path, but never build a replacement review from a status
+   * snapshot known to be older or newer than its classifications. One bounded
+   * status/classification reconciliation covers normal tip propagation; a
+   * source that still will not converge fails closed instead of looping review.
+   */
+  private async reconcileApprovalEvidence(
+    plan: TransactionPlan,
+    view: GatewayStatusView,
+    classifications: RefreshedPlanClassifications,
+  ): Promise<{ view: GatewayStatusView; classifications: RefreshedPlanClassifications }> {
+    const gateway = this.deps.gateway;
+    if (!gateway || classifications.source === null) return { view, classifications };
+    const loadStatus = () => loadCachedStatus(
+      this.deps.session,
+      gateway.endpoint,
+      gateway.protocolVersions,
+    );
+    let cached = await loadStatus();
+    if (cached && approvalSourceMatchesStatus(classifications.source, cached.status)) {
+      return { view, classifications };
+    }
+
+    const reconciledView = await this.gatewayStatus({ forceRefresh: true });
+    cached = await loadStatus();
+    if (cached && approvalSourceMatchesStatus(classifications.source, cached.status)) {
+      return { view: reconciledView, classifications };
+    }
+
+    const retriedClassifications = await this.refreshPlanClassifications(plan);
+    cached = await loadStatus();
+    if (!cached || retriedClassifications.source === null ||
+        !approvalSourceMatchesStatus(retriedClassifications.source, cached.status)) {
+      throw new RpcError('ERR_DATA_STALE', 'gateway evidence changed during approval');
+    }
+    return { view: reconciledView, classifications: retriedClassifications };
   }
 
   private async loadStoredTransactionForApproval(
@@ -9708,7 +10154,8 @@ export class WalletService {
       activeRecord: (expectation) => this.activeRecord(expectation),
       requireSession: (expectation) => this.requireSession(expectation),
       touchSessionLocked: (session) => this.touchSessionLocked(session),
-      installSessionLocked: (vaultId, dek) => this.installSessionLocked(vaultId, dek),
+      installSessionLocked: (vaultId, dek, profileKey) =>
+        this.installSessionLocked(vaultId, dek, profileKey),
     };
   }
 
@@ -9765,11 +10212,47 @@ export class WalletService {
   }
 
   async communityVaultCreate(input: CommunityVaultCreateRequest): Promise<CommunityVaultOwnerResult> {
-    return communityVaultCreate(this.communityVaultContext(), input);
+    const result = await communityVaultCreate(this.communityVaultContext(), input);
+    await this.linkCommunityVaultOwner(input.campaignId, input.password);
+    return result;
   }
 
   async communityVaultRestore(input: CommunityVaultRestoreRequest): Promise<CommunityVaultOwnerResult> {
-    return communityVaultRestore(this.communityVaultContext(), input);
+    const result = await communityVaultRestore(this.communityVaultContext(), input);
+    await this.linkCommunityVaultOwner(input.campaignId, input.password);
+    return result;
+  }
+
+  private async linkCommunityVaultOwner(campaignId: string, password: string): Promise<void> {
+    return this.runExclusive(async () => {
+      const session = await this.liveSession();
+      if (session?.profileKeyB64 === undefined) return;
+      const profile = await loadProfileCredential(this.deps.local);
+      if (profile === null) return;
+      const owners = await loadCommunityVaultOwners(this.deps.local);
+      const owner = owners.records.find((candidate) => candidate.campaignId === campaignId);
+      if (owner === undefined || profile.secrets.some((secret) =>
+        secret.kind === 'community-vault-owner-dek' && secret.secretId === owner.secret.vaultId)) return;
+      const profileKey = base64ToBytes(session.profileKeyB64);
+      const unlocked = await unlockVault(owner.secret, password);
+      try {
+        openVaultPayload(owner.secret, unlocked.dek);
+        const wrapper = addProfileSecret({
+          profileId: profile.credential.profileId,
+          profileKey,
+          secretId: owner.secret.vaultId,
+          kind: 'community-vault-owner-dek',
+          secret: unlocked.dek,
+        }, this.deps.vaultDeps);
+        await saveProfileCredential(this.deps.local, {
+          ...profile,
+          secrets: [...profile.secrets, wrapper],
+        });
+      } finally {
+        profileKey.fill(0);
+        unlocked.dek.fill(0);
+      }
+    });
   }
 
   async communityVaultRevealRecovery(
@@ -10080,20 +10563,181 @@ export class WalletService {
   /** Unlock core (already holding the serialization lock). Verifies the password
    * before clearing any prior session, so a wrong password is a no-op. */
   private async unlockLocked(
-    input: VaultUnlockRequest,
+    input: { vaultId: string; password?: string },
   ): Promise<{ vaultId: string; sessionId: string; deadline: number }> {
     const map = await loadVaults(this.deps.local);
     const record = map[input.vaultId];
     if (!record) throw new RpcError('ERR_VAULT_NOT_FOUND', 'vault not found');
 
-    const unlocked = await unlockVault(record, input.password); // throws VaultError on wrong-password/tampered
+    const live = await this.liveSession();
+    const profile = await loadProfileCredential(this.deps.local);
+    if (live?.profileKeyB64 !== undefined && profile !== null) {
+      const profileKey = base64ToBytes(live.profileKeyB64);
+      let dek: Uint8Array | null = null;
+      try {
+        let wrapper = profileWalletSecret(profile, record.vaultId);
+        if (wrapper === null) {
+          if (input.password === undefined) {
+            throw new RpcError('ERR_WRONG_PASSWORD', 'legacy wallet password required once');
+          }
+          wrapper = await linkLegacyVaultToProfile({
+            record,
+            password: input.password,
+            profileId: profile.credential.profileId,
+            profileKey,
+          }, this.deps.vaultDeps);
+          await saveProfileCredential(this.deps.local, {
+            ...profile,
+            secrets: [...profile.secrets, wrapper],
+          });
+        }
+        dek = unwrapProfileSecret(wrapper, profileKey);
+        openVaultPayload(record, dek);
+        return await this.installSessionLocked(record.vaultId, dek, profileKey);
+      } finally {
+        dek?.fill(0);
+        profileKey.fill(0);
+      }
+    }
+
+    if (input.password === undefined) {
+      throw new RpcError('ERR_WRONG_PASSWORD', 'app password required');
+    }
+    const unlocked = await this.unlockRecordWithProfile(map, record, input.password);
     try {
       // Single active vault (spec §7.3): drop any prior session only after the
       // new password has verified above.
-      return await this.installSessionLocked(unlocked.vaultId, unlocked.dek);
+      return await this.installSessionLocked(record.vaultId, unlocked.dek, unlocked.profileKey);
     } finally {
       zeroize(unlocked.dek);
+      zeroize(unlocked.profileKey);
     }
+  }
+
+  private async createProfileFromLegacyPassword(
+    map: VaultRecordMap,
+    activeRecord: VaultRecordV1,
+    password: string,
+    activeDek: Uint8Array,
+  ): Promise<{ state: StoredProfileCredentialV1; profileKey: Uint8Array }> {
+    const kdfParams = await this.deps.calibrateKdf();
+    const profileId = `profile:${this.deps.newVaultId()}`;
+    const created = await createProfileCredential(
+      { profileId, password, kdfParams }, this.deps.vaultDeps,
+    );
+    try {
+      const secrets = [addProfileSecret({
+        profileId,
+        profileKey: created.profileKey,
+        secretId: activeRecord.vaultId,
+        kind: 'wallet-dek',
+        secret: activeDek,
+      }, this.deps.vaultDeps)];
+      for (const record of Object.values(map)) {
+        if (record.vaultId === activeRecord.vaultId) continue;
+        try {
+          secrets.push(await linkLegacyVaultToProfile({
+            record, password, profileId, profileKey: created.profileKey,
+          }, this.deps.vaultDeps));
+        } catch (error) {
+          // A record with another legacy password is retained and linked from
+          // an authenticated profile session when the user selects it.
+          if (!(error instanceof VaultError && error.code === 'wrong-password')) throw error;
+        }
+      }
+      const community = await loadCommunityVaultOwners(this.deps.local);
+      if (community.unusableCampaignIds.length > 0) {
+        throw new VaultError('tampered', 'Community Vault owner record is unreadable');
+      }
+      for (const owner of community.records) {
+        let unlocked: Awaited<ReturnType<typeof unlockVault>> | null = null;
+        try {
+          unlocked = await unlockVault(owner.secret, password);
+          openVaultPayload(owner.secret, unlocked.dek);
+          secrets.push(addProfileSecret({
+            profileId,
+            profileKey: created.profileKey,
+            secretId: owner.secret.vaultId,
+            kind: 'community-vault-owner-dek',
+            secret: unlocked.dek,
+          }, this.deps.vaultDeps));
+        } catch (error) {
+          if (!(error instanceof VaultError && error.code === 'wrong-password')) throw error;
+        } finally {
+          unlocked?.dek.fill(0);
+        }
+      }
+      const state: StoredProfileCredentialV1 = {
+        version: 1,
+        credential: created.credential,
+        secrets,
+      };
+      await saveProfileCredential(this.deps.local, state);
+      return { state, profileKey: created.profileKey };
+    } catch (error) {
+      created.profileKey.fill(0);
+      throw error;
+    }
+  }
+
+  private async unlockRecordWithProfile(
+    map: VaultRecordMap,
+    record: VaultRecordV1,
+    password: string,
+  ): Promise<{ dek: Uint8Array; profileKey: Uint8Array }> {
+    const profile = await loadProfileCredential(this.deps.local);
+    if (profile === null) {
+      const unlocked = await unlockVault(record, password);
+      try {
+        const created = await this.createProfileFromLegacyPassword(map, record, password, unlocked.dek);
+        return { dek: unlocked.dek, profileKey: created.profileKey };
+      } catch (error) {
+        unlocked.dek.fill(0);
+        throw error;
+      }
+    }
+    const profileKey = await unlockProfileCredential(profile.credential, password);
+    try {
+      let wrapper = profileWalletSecret(profile, record.vaultId);
+      if (wrapper === null) {
+        try {
+          wrapper = await linkLegacyVaultToProfile({
+            record,
+            password,
+            profileId: profile.credential.profileId,
+            profileKey,
+          }, this.deps.vaultDeps);
+        } catch (error) {
+          if (!(error instanceof VaultError && error.code === 'wrong-password')) throw error;
+          wrapper = await linkLegacyVaultToProfile({
+            record,
+            password: bytesToBase64(profileKey),
+            profileId: profile.credential.profileId,
+            profileKey,
+          }, this.deps.vaultDeps);
+        }
+        await saveProfileCredential(this.deps.local, {
+          ...profile,
+          secrets: [...profile.secrets, wrapper],
+        });
+      }
+      const dek = unwrapProfileSecret(wrapper, profileKey);
+      openVaultPayload(record, dek);
+      return { dek, profileKey };
+    } catch (error) {
+      profileKey.fill(0);
+      throw error;
+    }
+  }
+
+  private async verifyAppPassword(record: VaultRecordV1, password: string): Promise<void> {
+    const profile = await loadProfileCredential(this.deps.local);
+    if (profile === null) {
+      await verifyVaultPassword(record, password);
+      return;
+    }
+    const profileKey = await unlockProfileCredential(profile.credential, password);
+    profileKey.fill(0);
   }
 
   /**
@@ -10104,6 +10748,7 @@ export class WalletService {
   private async installSessionLocked(
     vaultId: string,
     dek: Uint8Array,
+    profileKey?: Uint8Array,
   ): Promise<{ vaultId: string; sessionId: string; deadline: number }> {
     const sessionId = this.deps.newSessionId();
     try {
@@ -10118,6 +10763,7 @@ export class WalletService {
         sessionId,
         vaultId,
         dekB64: bytesToBase64(dek),
+        ...(profileKey === undefined ? {} : { profileKeyB64: bytesToBase64(profileKey) }),
         deadline,
       });
       this.notifySessionChanged(false);
@@ -10163,6 +10809,26 @@ export class WalletService {
     return session;
   }
 
+  /**
+   * Exact-session check for detached, non-authoritative reads.
+   *
+   * Unlike `requireSession`, this never repairs session storage. Cleanup must
+   * stay on the serialized lifecycle path so an expired or malformed value
+   * observed before a concurrent unlock cannot clear the newly installed DEK.
+   */
+  private async peekExpectedSession(expectation: ActiveSessionRequest): Promise<UnlockSession> {
+    const session = await peekSession(this.deps.session);
+    if (
+      !session ||
+      session.deadline <= this.deps.vaultDeps.now() ||
+      session.vaultId !== expectation.expectedVaultId ||
+      session.sessionId !== expectation.expectedSessionId
+    ) {
+      throw new RpcError('ERR_LOCKED', 'wallet session changed');
+    }
+    return session;
+  }
+
   private async touchSessionLocked(session: UnlockSession): Promise<void> {
     if (session.deadline <= this.deps.vaultDeps.now()) {
       await this.clearSessionAndScanState();
@@ -10184,7 +10850,7 @@ export class WalletService {
 
   private async persistNewVault(
     name: string,
-    password: string,
+    password: string | undefined,
     payload: VaultPayloadV1,
     operationId?: string,
     mode: 'create' | 'restore' = 'create',
@@ -10200,19 +10866,107 @@ export class WalletService {
     // completed persistence but its response was lost, retry returns the same
     // durable record instead of generating a duplicate vault.
     const vaultId = operationId === undefined ? this.deps.newVaultId() : `operation:${mode}:${operationId}`;
+    const live = password === undefined ? await this.liveSession() : null;
+    const sessionProfileKey = live?.profileKeyB64 === undefined
+      ? null
+      : base64ToBytes(live.profileKeyB64);
+    if (password === undefined && sessionProfileKey === null) {
+      throw new RpcError('ERR_WRONG_PASSWORD', 'an unlocked profile is required');
+    }
+    const effectivePassword = password ?? bytesToBase64(sessionProfileKey!);
     const existing = map[vaultId];
     if (existing !== undefined) {
-      await this.assertIdempotentRetry(existing, name, password, payload, mode);
-      return { vaultId };
+      let ownedProfileKey: Uint8Array | null = null;
+      let unlocked: Awaited<ReturnType<typeof unlockVault>> | null = null;
+      try {
+        await this.assertIdempotentRetry(existing, name, effectivePassword, payload, mode);
+        let profile = await loadProfileCredential(this.deps.local);
+        if (profile === null || profileWalletSecret(profile, vaultId) === null) {
+          let linkingKey = sessionProfileKey;
+          if (linkingKey === null) {
+            if (profile === null) {
+              const created = await createProfileCredential({
+                profileId: `profile:${vaultId}`,
+                password: effectivePassword,
+                kdfParams: existing.kdf,
+              }, this.deps.vaultDeps);
+              ownedProfileKey = created.profileKey;
+              linkingKey = ownedProfileKey;
+              profile = { version: 1, credential: created.credential, secrets: [] };
+            } else {
+              ownedProfileKey = await unlockProfileCredential(profile.credential, effectivePassword);
+              linkingKey = ownedProfileKey;
+            }
+          }
+          if (profile === null) throw new Error('profile credential unavailable');
+          unlocked = await unlockVault(existing, effectivePassword);
+          const wrapper = addProfileSecret({
+            profileId: profile.credential.profileId,
+            profileKey: linkingKey,
+            secretId: vaultId,
+            kind: 'wallet-dek',
+            secret: unlocked.dek,
+          }, this.deps.vaultDeps);
+          await saveProfileCredential(this.deps.local, {
+            ...profile,
+            secrets: [...profile.secrets, wrapper],
+          });
+        }
+        return { vaultId };
+      } finally {
+        unlocked?.dek.fill(0);
+        ownedProfileKey?.fill(0);
+        sessionProfileKey?.fill(0);
+      }
     }
 
-    await this.assertAppPassword(map, password);
+    let ownedProfileKey: Uint8Array | null = null;
+    let unlocked: Awaited<ReturnType<typeof unlockVault>> | null = null;
+    try {
+      if (password !== undefined) await this.assertAppPassword(map, password);
+      const kdfParams = await this.deps.calibrateKdf();
+      const record = await createVaultRecord({
+        vaultId, name, password: effectivePassword, payload, kdfParams,
+      }, this.deps.vaultDeps);
+      let profile = await loadProfileCredential(this.deps.local);
+      let linkingKey = sessionProfileKey;
+      if (linkingKey === null) {
+        if (profile === null) {
+          const created = await createProfileCredential({
+            profileId: `profile:${vaultId}`,
+            password: effectivePassword,
+            kdfParams,
+          }, this.deps.vaultDeps);
+          ownedProfileKey = created.profileKey;
+          linkingKey = ownedProfileKey;
+          profile = { version: 1, credential: created.credential, secrets: [] };
+        } else {
+          ownedProfileKey = await unlockProfileCredential(profile.credential, effectivePassword);
+          linkingKey = ownedProfileKey;
+        }
+      }
+      if (profile === null) throw new Error('profile credential unavailable');
+      unlocked = await unlockVault(record, effectivePassword);
+      const wrapper = addProfileSecret({
+        profileId: profile.credential.profileId,
+        profileKey: linkingKey,
+        secretId: vaultId,
+        kind: 'wallet-dek',
+        secret: unlocked.dek,
+      }, this.deps.vaultDeps);
+      const nextProfile = { ...profile, secrets: [...profile.secrets, wrapper] };
 
-    const kdfParams = await this.deps.calibrateKdf();
-    const record = await createVaultRecord({ vaultId, name, password, payload, kdfParams }, this.deps.vaultDeps);
-    map[vaultId] = record;
-    await saveVaults(this.deps.local, map);
-    return { vaultId };
+      map[vaultId] = record;
+      // The password-wrapped record remains independently recoverable if the
+      // following profile write is interrupted.
+      await saveVaults(this.deps.local, map);
+      await saveProfileCredential(this.deps.local, nextProfile);
+      return { vaultId };
+    } finally {
+      unlocked?.dek.fill(0);
+      ownedProfileKey?.fill(0);
+      sessionProfileKey?.fill(0);
+    }
   }
 
   private async assertAppPassword(map: VaultRecordMap, password: string): Promise<void> {

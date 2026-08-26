@@ -17,6 +17,10 @@ import type {
 } from '@drey/core/domain/community-vault/contracts';
 import { loadCommunityVaultOwners } from '../../src/adapters/storage/community-vault-store';
 import { loadVaults } from '../../src/adapters/storage/vault-store';
+import {
+  COMMUNITY_VAULT_OWNERS_KEY,
+  VAULTS_KEY,
+} from '../../src/adapters/storage/keys';
 import { makeHarness } from './service-helpers';
 
 beforeAll(installTestCryptoProvider);
@@ -172,6 +176,53 @@ describe('Community Vault owner coordination', () => {
     await expect(h.service.communityVaultRevealRecovery({
       campaignId: 'omb-campaign-1', password: nextPassword, ...expectation,
     })).resolves.toEqual({ mnemonic: revealed.mnemonic });
+  });
+
+  it('keeps both record families on one password when rotation storage fails', async () => {
+    const { h, expectation } = await setup();
+    await h.service.communityVaultCreate({
+      campaignId: 'omb-campaign-1', ownerId: 'owner-0', label: 'OMB together',
+      password: PASSWORD, ...expectation,
+    });
+    const mnemonic = await h.service.communityVaultRevealRecovery({
+      campaignId: 'omb-campaign-1', password: PASSWORD, ...expectation,
+    });
+    const vaultsBefore = structuredClone(h.local.store.get(VAULTS_KEY));
+    const ownersBefore = structuredClone(h.local.store.get(COMMUNITY_VAULT_OWNERS_KEY));
+    const nextPassword = 'a transactionally changed password';
+
+    h.local.failOnSetKey = COMMUNITY_VAULT_OWNERS_KEY;
+    await expect(h.service.changePassword({
+      oldPassword: PASSWORD,
+      newPassword: nextPassword,
+    })).rejects.toThrow(/simulated crash/u);
+    expect(h.local.store.get(VAULTS_KEY)).toEqual(vaultsBefore);
+    expect(h.local.store.get(COMMUNITY_VAULT_OWNERS_KEY)).toEqual(ownersBefore);
+    h.local.failOnSetKey = null;
+    await expect(h.service.communityVaultRevealRecovery({
+      campaignId: 'omb-campaign-1', password: PASSWORD, ...expectation,
+    })).resolves.toEqual(mnemonic);
+    await expect(h.service.communityVaultRevealRecovery({
+      campaignId: 'omb-campaign-1', password: nextPassword, ...expectation,
+    })).rejects.toMatchObject({ code: 'wrong-password' });
+
+    await h.service.lock();
+    const originalVaultId = expectation.expectedVaultId;
+    const stillOld = await h.service.unlock({ vaultId: originalVaultId, password: PASSWORD });
+    const current = { expectedVaultId: originalVaultId, expectedSessionId: stillOld.sessionId };
+    await h.service.changePassword({ oldPassword: PASSWORD, newPassword: nextPassword });
+    await expect(h.service.communityVaultRevealRecovery({
+      campaignId: 'omb-campaign-1', password: PASSWORD, ...current,
+    })).rejects.toMatchObject({ code: 'wrong-password' });
+    await expect(h.service.communityVaultRevealRecovery({
+      campaignId: 'omb-campaign-1', password: nextPassword, ...current,
+    })).resolves.toEqual(mnemonic);
+
+    await h.service.lock();
+    await expect(h.service.unlock({ vaultId: originalVaultId, password: PASSWORD }))
+      .rejects.toMatchObject({ code: 'wrong-password' });
+    await expect(h.service.unlock({ vaultId: originalVaultId, password: nextPassword }))
+      .resolves.toMatchObject({ vaultId: originalVaultId });
   });
 
   it('accepts only the exact owner root and signs every owned unit with one approval', async () => {

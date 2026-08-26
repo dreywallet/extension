@@ -105,6 +105,7 @@ describe('watch-only and fractional-fee UI boundaries', () => {
       ],
       accountAddState: null,
       activeRecoveredAddressCount: 0,
+      backupDeferred: false,
       capabilities: {
         signMethod: 'software', canView: true, canDeriveAddresses: true,
         canPlanTransactions: true, canSignTransactions: true, canSignMessages: true,

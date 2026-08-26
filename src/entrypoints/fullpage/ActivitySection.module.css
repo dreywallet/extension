@@ -87,7 +87,21 @@
 
 .actions p {
   flex-basis: 100%;
+}
+
+.actionHelp {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
   margin: 0;
+}
+
+.safetyNote {
+  background: color-mix(in srgb, var(--color-warning) 6%, var(--color-surface));
+  border-left: 3px solid var(--color-warning);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  margin: var(--space-1) 0 0;
+  padding: var(--space-2) var(--space-3);
 }
 
 .attention {

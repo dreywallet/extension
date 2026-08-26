@@ -116,10 +116,10 @@ export const en = {
   'onboarding.password.title': 'Choose your app password',
   'onboarding.password.body':
     'One password protects every wallet in this browser profile. It never leaves your device.',
-  'onboarding.password.existing.title': 'Enter your app password',
+  'onboarding.password.existing.title': 'Name this wallet',
   'onboarding.password.existing.body':
-    'Your existing app password will protect this additional wallet.',
-  'onboarding.password.existing.hint': 'Enter your current app password to continue.',
+    'It will join your unlocked profile and use the same app password.',
+  'onboarding.password.existing.hint': 'No additional password is needed.',
   'onboarding.password.vaultName': 'Wallet name',
   'onboarding.password.password': 'App password',
   'onboarding.password.confirm': 'Confirm app password',
@@ -132,6 +132,15 @@ export const en = {
   'onboarding.password.tooShort': 'The password must be at least 12 characters.',
 
   'onboarding.reveal.title': 'Write down your recovery phrase',
+  'backup.defer.title': 'Protect your new wallet',
+  'backup.defer.body': 'Back up your recovery phrase now, or continue with a permanent reminder until you verify it.',
+  'backup.action.now': 'Back up now',
+  'backup.action.later': 'Do this later',
+  'backup.defer.warningTitle': 'Your wallet cannot be recovered without this phrase',
+  'backup.defer.warningBody': 'If this device is lost, damaged, or reset before you back up the phrase, your bitcoin may be lost permanently.',
+  'backup.defer.acknowledge': 'I understand — remind me',
+  'backup.reminder.title': 'Recovery phrase not backed up',
+  'backup.reminder.message': 'Back up now so this wallet can be recovered if this device is lost.',
   'onboarding.reveal.body':
     'These 12 words are the only way to recover your bitcoin if this device is lost. Write them on paper, in order, and keep them offline. Drey will never show them again without your password.',
   'onboarding.reveal.warning': 'Never share these words. Anyone who has them can take your bitcoin.',
@@ -949,6 +958,8 @@ export const en = {
   'blockTrail.detail.unknown': 'Not known',
 
   'receive.title': 'Receive',
+  'receive.recovery.title': 'Receive needs to reload',
+  'receive.recovery.message': 'Your wallet is still safe. Retry this screen or go back.',
   'receive.tab.bitcoin': 'Bitcoin',
   'receive.tab.ordinals': 'Ordinals',
   'receive.bitcoin.explain':
@@ -1113,7 +1124,9 @@ export const en = {
   'contacts.transfer.resume': 'Resume animation',
   'contacts.transfer.previous': 'Previous frame',
   'contacts.transfer.next': 'Next frame',
-  'settings.vaults.switchBody': 'Enter your password to switch. The current wallet locks first.',
+  'settings.vaults.switchBody': 'Switch wallets without another password while Drey is unlocked.',
+  'settings.vaults.linkBody':
+    'This older wallet has a different password. Enter it once to link the wallet to your app password.',
 
   'blockedSite.title': 'Blocked site support',
   'blockedSite.alert':
@@ -1421,7 +1434,7 @@ export const en = {
   'communityVault.eyebrow': '69 of 100 · Bitcoin mainnet',
   'communityVault.intro':
     'Join an OMB purchase, keep your own owner key, and approve every unit you own with one clear review. Drey and the gallery cannot spend or recover the vault.',
-  'communityVault.entry.summary': 'Join and manage a shared OMB purchase without giving Drey or the gallery a key.',
+  'communityVault.entry.summary': 'Expert multisig coordination for shared purchases and group buys.',
   'communityVault.entry.open': 'Open',
   'communityVault.join.title': 'Join a campaign',
   'communityVault.join.body':

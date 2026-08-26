@@ -38,6 +38,7 @@ import { PROVIDER_PORT_NAME } from '../provider/bridge';
 import { APPROVAL_PORT_NAME, approvalCommandSchema } from '../provider/approval';
 
 const PROVIDER_UNLOCK_TTL_MS = 5 * 60_000;
+const APPROVAL_PORT_RECONNECT_GRACE_MS = 100;
 
 function toArea(area: chrome.storage.StorageArea): StorageArea {
   return {
@@ -72,7 +73,27 @@ export default defineBackground(() => {
   let observedProviderSession: string | null = null;
   let sessionObservationGeneration = 0;
   let approvalCreation: Promise<void> | null = null;
+  let approvalPortDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
   const approvalPorts = new Set<chrome.runtime.Port>();
+
+  const scheduleApprovalPortDisconnect = (
+    expectedWindowId: number | null,
+    expectedTabId: number | null,
+  ): void => {
+    // closeApproval clears both identities before removing the resolved popup.
+    // Its later Port disconnect belongs to that completed request and must not
+    // be allowed to invalidate a new request whose window is still opening.
+    if (expectedWindowId === null || expectedTabId === null) return;
+    if (approvalPorts.size > 0) return;
+    if (approvalPortDisconnectTimer !== null) clearTimeout(approvalPortDisconnectTimer);
+    approvalPortDisconnectTimer = setTimeout(() => {
+      approvalPortDisconnectTimer = null;
+      if (approvalPorts.size === 0 && approvalWindowId === expectedWindowId &&
+          approvalTabId === expectedTabId) {
+        void providerController?.approvalWindowClosed();
+      }
+    }, APPROVAL_PORT_RECONNECT_GRACE_MS);
+  };
 
   const openOrFocusApproval = async (): Promise<void> => {
     if (approvalWindowId !== null && approvalTabId !== null) {
@@ -88,7 +109,11 @@ export default defineBackground(() => {
       await approvalCreation;
       return;
     }
-    const creation = (async () => {
+    // Publish the in-flight promise before Chrome can load approval.html and
+    // deliver its Port. A fast popup can connect while windows.create() is
+    // still resolving; the Port handler must see this promise so it queues the
+    // initial snapshot command until the exact window/tab identity is bound.
+    const creation = Promise.resolve().then(async () => {
       const created = await chrome.windows.create({
         url: chrome.runtime.getURL('/approval.html'),
         type: 'popup',
@@ -106,7 +131,7 @@ export default defineBackground(() => {
       }
       approvalWindowId = windowId;
       approvalTabId = tabId;
-    })();
+    });
     approvalCreation = creation;
     try {
       await creation;
@@ -129,6 +154,10 @@ export default defineBackground(() => {
   };
 
   const closeApproval = async (): Promise<void> => {
+    if (approvalPortDisconnectTimer !== null) {
+      clearTimeout(approvalPortDisconnectTimer);
+      approvalPortDisconnectTimer = null;
+    }
     const id = approvalWindowId;
     approvalWindowId = null;
     approvalTabId = null;
@@ -351,6 +380,10 @@ export default defineBackground(() => {
       return;
     }
     if (windowId !== approvalWindowId) return;
+    if (approvalPortDisconnectTimer !== null) {
+      clearTimeout(approvalPortDisconnectTimer);
+      approvalPortDisconnectTimer = null;
+    }
     approvalWindowId = null;
     approvalTabId = null;
     void providerController?.approvalWindowClosed();
@@ -429,18 +462,24 @@ export default defineBackground(() => {
       const wasAccepted = approvalPorts.delete(port);
       port.onMessage.removeListener(onMessage);
       if (wasAccepted && approvalPorts.size === 0) {
-        void providerController?.approvalWindowClosed();
+        // Development React deliberately tears down and recreates effects once.
+        // Give the same exact popup one task to reconnect before treating a
+        // Port loss as a rejection. A real window close remains immediate in
+        // windows.onRemoved above, and a different tab/window cannot pass the
+        // exact binding check below.
+        scheduleApprovalPortDisconnect(approvalWindowId, approvalTabId);
       } else if (!accepted && pendingCreation !== null) {
-        // The user can close the newly created popup before windows.create
-        // finishes resolving. Once its identity is known, treat that exact
-        // early disconnect as a real approval-window closure.
+        // The first development effect can disconnect before windows.create
+        // finishes. Once the exact identity is known, give its replacement
+        // Port the same grace as an already accepted connection. A genuine
+        // close is still immediate through windows.onRemoved.
         void pendingCreation.then(() => {
           if (isExpectedApprovalPort(
             port.sender,
             chrome.runtime.id,
             approvalWindowId,
             approvalTabId,
-          )) void providerController?.approvalWindowClosed();
+          )) scheduleApprovalPortDisconnect(approvalWindowId, approvalTabId);
         }).catch(() => undefined);
       }
     });
@@ -454,6 +493,10 @@ export default defineBackground(() => {
       )) {
         port.disconnect();
         return;
+      }
+      if (approvalPortDisconnectTimer !== null) {
+        clearTimeout(approvalPortDisconnectTimer);
+        approvalPortDisconnectTimer = null;
       }
       accepted = true;
       approvalPorts.add(port);

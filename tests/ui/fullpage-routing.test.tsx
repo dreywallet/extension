@@ -331,6 +331,11 @@ describe('full-page routing', () => {
     );
 
     await screen.findByRole('heading', { name: 'Settings' });
+    const communityVault = screen.getByText('Community Vault');
+    expect(communityVault).not.toBeVisible();
+    fireEvent.click(screen.getByText('Advanced'));
+    expect(communityVault).toBeVisible();
+    expect(screen.getByText(/expert multisig coordination/iu)).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Open recovery center' }));
     expect(await screen.findByRole('heading', { name: 'Recovery center' })).toBeInTheDocument();
     expect(window.location.hash).toBe(FULLPAGE_HASH.recovery);

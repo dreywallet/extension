@@ -21,8 +21,9 @@ type RevealResult = string | { code: ErrorCode };
 function setup(
   verifyResults: VerifyResult[],
   revealResults: RevealResult[] = [MNEMONIC],
-): { onDone: ReturnType<typeof vi.fn>; verifyCalls: unknown[] } {
+): { onDone: ReturnType<typeof vi.fn>; verifyCalls: unknown[]; deferCalls: unknown[] } {
   const verifyCalls: unknown[] = [];
+  const deferCalls: unknown[] = [];
   let revealCalls = 0;
   installFakeChrome({
     'vault.create': () => ({ ok: true, result: { vaultId: 'vault-1' } }),
@@ -48,6 +49,10 @@ function setup(
         ? { ok: true, result: { verified: result } }
         : { ok: false, code: result.code };
     },
+    'backup.defer': (payload) => {
+      deferCalls.push(payload);
+      return { ok: true, result: { deferred: true } };
+    },
   });
   const onDone = vi.fn();
   render(
@@ -55,17 +60,61 @@ function setup(
       <CreateFlow onDone={onDone} onBack={vi.fn()} />
     </Providers>,
   );
-  return { onDone, verifyCalls };
+  return { onDone, verifyCalls, deferCalls };
 }
 
-async function reachRevealStep(): Promise<void> {
+async function reachRevealStep(showWords = true): Promise<void> {
   fireEvent.change(screen.getByLabelText('App password'), { target: { value: 'a-long-password' } });
   fireEvent.change(screen.getByLabelText('Confirm app password'), { target: { value: 'a-long-password' } });
   fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-  await screen.findAllByText('legal');
+  await screen.findByRole('heading', { name: 'Protect your new wallet' });
+  fireEvent.click(screen.getByRole('button', { name: 'Back up now' }));
+  await screen.findByRole('heading', { name: 'Write down your recovery phrase' });
+  if (showWords) {
+    fireEvent.click(screen.getByRole('button', { name: 'Show words' }));
+    await screen.findAllByText('legal');
+  }
 }
 
 describe('CreateFlow', () => {
+  it('adds a named wallet to an unlocked profile without another password prompt', async () => {
+    const createCalls: unknown[] = [];
+    const switchCalls: unknown[] = [];
+    installFakeChrome({
+      'vault.create': (payload) => {
+        createCalls.push(payload);
+        return { ok: true, result: { vaultId: 'vault-2' } };
+      },
+      'vault.switch': (payload) => {
+        switchCalls.push(payload);
+        return {
+          ok: true,
+          result: {
+            vaultId: 'vault-2',
+            sessionId: '00000000-0000-4000-8000-000000000002',
+            deadline: 123,
+          },
+        };
+      },
+    });
+    render(
+      <Providers>
+        <CreateFlow existingProfile defaultWalletName="Wallet 2"
+          onDone={vi.fn()} onBack={vi.fn()} />
+      </Providers>,
+    );
+
+    expect(screen.getByRole('heading', { name: 'Name this wallet' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('App password')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Wallet name'), { target: { value: 'Travel' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+
+    await screen.findByRole('heading', { name: 'Protect your new wallet' });
+    expect(createCalls).toEqual([expect.objectContaining({ name: 'Travel' })]);
+    expect(createCalls[0]).not.toHaveProperty('password');
+    expect(switchCalls).toEqual([{ vaultId: 'vault-2' }]);
+  });
+
   it('explains the requirements and keeps Continue disabled until the password is valid (§7.2)', () => {
     setup([]);
     const continueButton = screen.getByRole('button', { name: 'Continue' });
@@ -94,8 +143,29 @@ describe('CreateFlow', () => {
     expect(screen.getByRole('status')).toHaveTextContent(/can continue/iu);
     expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('heading', { name: 'Protect your new wallet' });
+    fireEvent.click(screen.getByRole('button', { name: 'Back up now' }));
     expect(await screen.findByRole('heading', { name: 'Write down your recovery phrase' }))
       .toBeInTheDocument();
+  });
+
+  it('requires one explicit loss-risk acknowledgement before deferring backup', async () => {
+    const { onDone, deferCalls } = setup([]);
+    fireEvent.change(screen.getByLabelText('App password'), { target: { value: 'a-long-password' } });
+    fireEvent.change(screen.getByLabelText('Confirm app password'), { target: { value: 'a-long-password' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('heading', { name: 'Protect your new wallet' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Do this later' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/lost permanently/iu);
+    expect(onDone).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'I understand — remind me' }));
+
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+    expect(deferCalls).toEqual([{
+      expectedVaultId: 'vault-1',
+      expectedSessionId: '00000000-0000-4000-8000-000000000001',
+    }]);
   });
 
   it('shows the mnemonic, then forgets it before verification', async () => {
@@ -154,14 +224,14 @@ describe('CreateFlow', () => {
     expect(screen.queryByText('Confirm your recovery phrase')).not.toBeInTheDocument();
   });
 
-  it('keeps recovery words visible by default and offers one reversible hide control', async () => {
+  it('keeps recovery words hidden until explicitly shown and can hide them again', async () => {
     setup([]);
-    await reachRevealStep();
-    expect(screen.getByText('sausage')).toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: 'Hide words' }));
+    await reachRevealStep(false);
     expect(screen.queryByText('sausage')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Show words' }));
     expect(screen.getByText('sausage')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Hide words' }));
+    expect(screen.queryByText('sausage')).toBeNull();
   });
 
   it('advances only on a verified match and reshuffles on failure', async () => {
@@ -240,14 +310,25 @@ describe('ResumeVerify', () => {
         />
       </Providers>,
     );
-    expect(screen.getByLabelText('Word #1')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Review recovery phrase' }));
-    expect(screen.queryByLabelText('Word #1')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Back up now' }));
     fireEvent.change(screen.getByLabelText('App password'), { target: { value: 'a-long-password' } });
     fireEvent.click(screen.getByRole('button', { name: 'Reveal' }));
     expect(await screen.findByText('sausage')).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'I wrote the words down' }));
-    expect(await screen.findByLabelText('Word #7')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Confirm your recovery phrase' }))
+      .toBeInTheDocument();
+    const firstChallenge = screen.getAllByRole('textbox').map((input) =>
+      input.getAttribute('aria-label') ?? input.closest('div')?.querySelector('label')?.textContent);
+    fireEvent.click(screen.getByRole('button', { name: 'Review recovery phrase' }));
+    expect(screen.queryByRole('heading', { name: 'Confirm your recovery phrase' })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('App password'), { target: { value: 'a-long-password' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Reveal' }));
+    expect(await screen.findByText('sausage')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'I wrote the words down' }));
+    await screen.findByRole('heading', { name: 'Confirm your recovery phrase' });
+    const secondChallenge = screen.getAllByRole('textbox').map((input) =>
+      input.getAttribute('aria-label') ?? input.closest('div')?.querySelector('label')?.textContent);
+    expect(secondChallenge).not.toEqual(firstChallenge);
     random.mockRestore();
   });
 });
