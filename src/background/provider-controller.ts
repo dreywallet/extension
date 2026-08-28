@@ -45,7 +45,13 @@ import {
   providerPsbtPlanPreviews,
   type ProviderPsbtPlanV3,
 } from '@drey/core/domain/transactions/provider-psbt';
-import type { ProviderPsbtBatchPlanV1 } from '@drey/core/domain/transactions/provider-psbt-batch';
+import { assertProviderPsbtSighashDeclarations } from
+  '@drey/core/domain/transactions/provider-psbt-sighash';
+import {
+  providerPsbtUnsignedTxid,
+  type ProviderPsbtBatchPlanV1,
+} from '@drey/core/domain/transactions/provider-psbt-batch';
+import type { ProviderPsbtGroupPlanV1 } from '@drey/core/domain/transactions/provider-psbt-group-plan';
 import type { ProviderMessageBatchPlanV1 } from '@drey/core/domain/transactions/provider-message-batch';
 import {
   approvalInscriptionItems,
@@ -131,6 +137,7 @@ interface PendingApproval {
   contextGeneration: number;
   preparedPsbt?: ProviderPsbtPlanV3;
   preparedBatch?: ProviderPsbtBatchPlanV1;
+  preparedGroup?: ProviderPsbtGroupPlanV1;
   preparedMessageBatch?: ProviderMessageBatchPlanV1;
   marketplace?: {
     context: MarketplaceContext;
@@ -157,6 +164,8 @@ interface PendingApproval {
   };
   /** §21.1 flexible request without marketplace context; core analysis must prove the listing shape. */
   genericListingCandidate?: boolean;
+  /** Global Confirm every transaction with password setting. */
+  requiresTransactionPassword?: boolean;
   approvalError?: string;
 }
 
@@ -237,23 +246,29 @@ function providerAddresses(
 }
 
 function providerOutputCommitted(plan: ProviderPsbtPlanV3, index: number): boolean {
-  return plan.analysis.inputs.length > 0 && plan.analysis.inputs.every((input) =>
-    input.sighash.validEncoding &&
-    (input.sighash.committedOutputIndexes === 'all' ||
-      input.sighash.committedOutputIndexes.includes(index)));
+  return plan.approvalExplanation?.outputs[index]?.guaranteed ??
+    (plan.analysis.inputs.length > 0 && plan.analysis.inputs.every((input) =>
+      input.sighash.validEncoding &&
+      (input.sighash.committedOutputIndexes === 'all' ||
+        input.sighash.committedOutputIndexes.includes(index))));
 }
 
 function providerTransactionReview(plan: ProviderPsbtPlanV3) {
-  const walletInputSats = plan.analysis.inputs
+  const explanation = plan.approvalExplanation;
+  const walletInputSats = explanation?.currentWalletInputSats ?? plan.analysis.inputs
     .filter((item) => item.ownership === 'wallet')
-    .reduce((total, item) => total + item.valueSats, 0n);
-  const walletOutputSats = plan.analysis.outputs
+    .reduce((total, item) => total + item.valueSats, 0n).toString();
+  const walletOutputSats = explanation?.currentWalletOutputSats ?? plan.analysis.outputs
     .filter((item) => item.ownership === 'wallet')
-    .reduce((total, item) => total + item.valueSats, 0n);
-  const externalOutputSats = plan.analysis.outputs
-    .filter((item) => item.ownership === 'external')
-    .reduce((total, item) => total + item.valueSats, 0n);
-  const outputs = plan.analysis.outputs.map((item) => ({
+    .reduce((total, item) => total + item.valueSats, 0n).toString();
+  const outputs = explanation?.outputs.map((item) => ({
+    index: item.index,
+    address: item.address,
+    valueSats: item.valueSats,
+    ownership: item.ownership,
+    role: item.role,
+    committed: item.guaranteed,
+  })) ?? plan.analysis.outputs.map((item) => ({
     index: item.index,
     address: item.address,
     valueSats: item.valueSats.toString(),
@@ -261,16 +276,66 @@ function providerTransactionReview(plan: ProviderPsbtPlanV3) {
     role: item.role,
     committed: providerOutputCommitted(plan, item.index),
   }));
+  const externalOutputSats = outputs
+    .filter((item) => item.ownership === 'external')
+    .reduce((total, item) => total + BigInt(item.valueSats), 0n).toString();
+  const netWalletDebitSats = explanation?.maximumWalletDebitSats ??
+    (BigInt(walletInputSats) - BigInt(walletOutputSats)).toString();
   return {
     authorization: outputs.every((output) => output.committed) ? 'complete' as const : 'partial' as const,
     feeSats: plan.feeSats.toString(),
-    walletInputSats: walletInputSats.toString(),
-    walletOutputSats: walletOutputSats.toString(),
-    externalOutputSats: externalOutputSats.toString(),
-    netWalletDebitSats: (walletInputSats - walletOutputSats).toString(),
+    walletInputSats,
+    walletOutputSats,
+    externalOutputSats,
+    netWalletDebitSats,
     economicClaims: [],
     outputs,
   };
+}
+
+function providerEconomicClaims(
+  plan: ProviderPsbtPlanV3,
+  economics: MarketplaceContext['economics'] | undefined,
+) {
+  if (economics !== undefined) {
+    return [
+      ...(economics.totalSats === undefined
+        ? [] : [{ kind: 'buyer_total' as const, valueSats: economics.totalSats }]),
+      ...(economics.sellerProceedsSats === undefined
+        ? [] : [{ kind: 'guaranteed_proceeds' as const, valueSats: economics.sellerProceedsSats }]),
+      ...(economics.marketplaceFeeSats === undefined
+        ? [] : [{ kind: 'marketplace_fee' as const, valueSats: economics.marketplaceFeeSats }]),
+      ...(economics.royaltySats === undefined
+        ? [] : [{ kind: 'creator_royalty' as const, valueSats: economics.royaltySats }]),
+      ...(economics.minerFeeSats === undefined
+        ? [] : [{ kind: 'miner_fee' as const, valueSats: economics.minerFeeSats }]),
+    ];
+  }
+  if (plan.approvalExplanation && BigInt(plan.approvalExplanation.guaranteedProceedsSats) > 0n) {
+    return [{
+      kind: 'guaranteed_proceeds' as const,
+      valueSats: plan.approvalExplanation.guaranteedProceedsSats,
+    }];
+  }
+  if (plan.genericListing) {
+    return [{
+      kind: 'guaranteed_proceeds' as const,
+      valueSats: plan.genericListing.commitment.guaranteedProceedsSats.toString(),
+    }];
+  }
+  if (plan.communityVaultAcquisition) {
+    return [{ kind: 'buyer_total' as const, valueSats: plan.communityVaultAcquisition.cashDueSats }];
+  }
+  if (plan.communityVaultSale) {
+    return [{ kind: 'guaranteed_proceeds' as const, valueSats: plan.communityVaultSale.ownerPayoutSats }];
+  }
+  if (plan.communityVaultSaleBuyer) {
+    return [{ kind: 'buyer_total' as const, valueSats: plan.communityVaultSaleBuyer.buyerTotalSats }];
+  }
+  if (plan.communityVaultPositionTransfer?.role === 'buyer') {
+    return [{ kind: 'buyer_total' as const, valueSats: plan.communityVaultPositionTransfer.buyerTotalSats }];
+  }
+  return [];
 }
 
 function providerTransactionDetails(
@@ -282,25 +347,30 @@ function providerTransactionDetails(
   return {
     account: plan.account,
     network: plan.network,
+    approvalModelVersion: plan.approvalExplanation?.version ?? null,
     authority: {
       tabId: authority.tabId,
       frameId: authority.frameId,
       documentId: authority.documentId,
     },
     feeSats: plan.feeSats.toString(),
-    feeRateSatPerVb: (Number(plan.feeRateSatPerKvB) / 1000).toString(),
-    vsize: plan.vsize.toString(),
+    feeRateSatPerVb: plan.feeRateSatPerKvB === null
+      ? null : (Number(plan.feeRateSatPerKvB) / 1000).toString(),
+    vsize: plan.vsize?.toString() ?? null,
     rbf: plan.rbf,
+    deferredZeroFee: plan.deferredZeroFee,
+    approvalExplanation: plan.approvalExplanation,
     security: {
+      planVersion: plan.version,
       broadcast: plan.broadcast,
       requiresAdvanced: plan.requiresAdvanced,
       planHash: plan.planHash,
       analysisHash: plan.analysisHash,
       psbtHash: plan.psbtHash,
+      psbtBytes: plan.psbtHex.length / 2,
       hardViolations: plan.analysis.hardViolations,
       protectedInputIndexes: plan.analysis.assetEffects.protectedInputIndexes,
       protectedValueExposedToFees: plan.analysis.assetEffects.protectedValueExposedToFees.toString(),
-      rawPsbtHex: plan.psbtHex,
     },
     inputs: plan.analysis.inputs.map((item) => ({
       index: item.index,
@@ -428,16 +498,24 @@ export class ProviderController {
           }
         }
       }
-      const passwordRequired = pending.preparedPsbt?.requiresAdvanced === true ||
-        pending.preparedBatch?.requiresAdvanced === true ||
+      if (pending.preparedGroup) {
+        for (const item of pending.preparedGroup.items) {
+          const previews = providerPsbtPlanPreviews(item.plan);
+          try {
+            assertPreviewAcknowledged(previews, command.previewUnavailableAcknowledged);
+          } catch (error) {
+            throw new RpcError('ERR_UNSAFE_TRANSACTION', (error as Error).message);
+          }
+        }
+      }
+      const passwordRequired = pending.requiresTransactionPassword === true ||
         pending.communityVaultSale !== undefined ||
         pending.communityVaultPositionTransfer?.review.role === 'owner';
       if (passwordRequired) {
         // Unreachable from the approval surface, which disables Approve until
         // both fields validate. A command that arrives without them did not come
         // from that surface, so it stays terminal.
-        if (((pending.preparedPsbt?.requiresAdvanced === true || pending.preparedBatch?.requiresAdvanced === true) &&
-            command.confirmation !== 'SIGN PSBT') || !command.password) {
+        if (!command.password) {
           throw new RpcError('ERR_WRONG_PASSWORD', 'Transaction password confirmation required');
         }
         try {
@@ -464,9 +542,19 @@ export class ProviderController {
       // Rebind every authority and permission immediately before execution.
       await this.revalidate(pending);
       const result = await this.executeApproved(pending, command.password);
+      // Signing and encrypted journal persistence both yield. Rebind the exact
+      // page, approval generation, session, and TTL at the release boundary.
+      this.assertPendingLive(pending);
       const delivered = this.respondResult(pending, result);
-      if (delivered && pending.preparedPsbt?.marketplace) {
-        await this.deps.service.providerMarkMarketplaceDelivered(pending.preparedPsbt).catch(() => undefined);
+      if (delivered) {
+        if (pending.preparedPsbt?.marketplace) {
+          await this.deps.service.providerMarkMarketplaceDelivered(pending.preparedPsbt).catch(() => undefined);
+        }
+        if (pending.preparedGroup?.items.some((item) => item.plan.marketplace)) {
+          await this.deps.service.providerMarkMarketplaceGroupDelivered(
+            pending.preparedGroup,
+          ).catch(() => undefined);
+        }
       }
     } catch (error) {
       this.respondError(pending,
@@ -761,9 +849,14 @@ export class ProviderController {
         contextGeneration: this.contextGeneration,
       };
       if (method === 'signPsbt') {
-        const psbtParams = params.data as {
+        type ControllerSignPsbtParams = {
           psbt: string;
           signInputs?: Record<string, number[]>;
+          inputsToSign?: Array<{
+            address: string;
+            signingIndexes: number[];
+            sigHash?: number;
+          }>;
           broadcast?: boolean;
           marketplaceContext?: MarketplaceContext;
           communityVaultAcquisitionContext?: CommunityVaultAcquisitionProviderContextV1;
@@ -774,6 +867,26 @@ export class ProviderController {
           communityVaultPositionTransferBuyerContext?:
             CommunityVaultPositionTransferBuyerProviderContextV1;
         };
+        let psbtParams = params.data as ControllerSignPsbtParams;
+        if (psbtParams.inputsToSign !== undefined) {
+          try {
+            assertProviderPsbtSighashDeclarations({
+              psbtBase64: psbtParams.psbt,
+              declarations: psbtParams.inputsToSign,
+            });
+          } catch {
+            throw new RpcError('ERR_INVALID_PAYLOAD', 'PSBT sighash declarations are invalid');
+          }
+          const { inputsToSign, ...withoutDeclarations } = psbtParams;
+          psbtParams = {
+            ...withoutDeclarations,
+            signInputs: Object.fromEntries(inputsToSign.map((selection) => [
+              selection.address,
+              selection.signingIndexes,
+            ])),
+          };
+          pending.params = psbtParams;
+        }
         const candidate = inspectMarketplacePsbt(psbtParams.psbt);
         const selectedInputIndexes = psbtParams.signInputs
           ? Object.values(psbtParams.signInputs).flat()
@@ -950,7 +1063,12 @@ export class ProviderController {
         });
         this.assertPreparationLive(pending);
       }
-      if (method === 'sendTransfer') {
+      if (method === 'signPsbt' || method === 'signMultipleTransactions' ||
+          method === 'sendTransfer' || method === 'ord_sendInscriptions') {
+        pending.requiresTransactionPassword = (await this.deps.service.getConfig()).highSecurityMode;
+        this.assertPreparationLive(pending);
+      }
+      if (method === 'signPsbt' || method === 'signMultipleTransactions' || method === 'sendTransfer') {
         this.assertPreparationLive(pending);
         await this.deps.service.providerEnsureSpendReady({
           expectedVaultId: pending.expectedVaultId,
@@ -967,22 +1085,95 @@ export class ProviderController {
       if (method === 'signMultipleTransactions') {
         const batch = params.data as SignMultipleTransactionsParams;
         const authority = pending.state.authority;
-        pending.preparedBatch = await this.deps.service.providerPreparePsbtBatch({
-          items: batch.psbts.map((item) => ({
-            psbtBase64: item.psbtBase64,
-            ...(item.inputsToSign === undefined ? {} : { inputsToSign: item.inputsToSign }),
-          })),
-          binding: {
+        const marketplaceItems = batch.psbts.map((item) => {
+          if (item.inputsToSign !== undefined) {
+            try {
+              assertProviderPsbtSighashDeclarations({
+                psbtBase64: item.psbtBase64,
+                declarations: item.inputsToSign,
+              });
+            } catch {
+              throw new RpcError('ERR_INVALID_PAYLOAD', 'PSBT sighash declarations are invalid');
+            }
+          }
+          if (item.marketplaceContext === undefined) return undefined;
+          const selectedInputIndexes = item.inputsToSign?.flatMap((selection) => selection.signingIndexes);
+          const candidate = inspectMarketplacePsbt(item.psbtBase64);
+          const resolution = resolveMarketplaceRequest({
             origin: authority.origin,
-            tabId: authority.tabId,
-            frameId: authority.frameId,
-            documentId: authority.documentId,
-            requestNonce: pending.request.requestNonce,
-            providerMethod: 'signMultipleTransactions',
-          },
-          approvalGeneration: pending.approvalGeneration,
-          guard: () => this.assertPreparationLive(pending),
+            network: account.network,
+            method: 'signPsbt',
+            candidate,
+            ...(selectedInputIndexes === undefined ? {} : { selectedInputIndexes }),
+            context: item.marketplaceContext,
+          });
+          if (resolution.status !== 'recognized') {
+            throw new MarketplaceProviderError(
+              resolution.status === 'unknown_marketplace'
+                ? 'ERR_UNSUPPORTED_MARKETPLACE' : 'ERR_UNSUPPORTED_TEMPLATE',
+              resolution.reason,
+            );
+          }
+          return {
+            context: item.marketplaceContext,
+            resolution,
+            candidate,
+            ...(selectedInputIndexes === undefined ? {} : { selectedInputIndexes }),
+          };
         });
+        const verifiedMarketplace = marketplaceItems.find((item) => item !== undefined);
+        if (verifiedMarketplace) {
+          pending.marketplace = verifiedMarketplace;
+        }
+        const binding = {
+          origin: authority.origin,
+          tabId: authority.tabId,
+          frameId: authority.frameId,
+          documentId: authority.documentId,
+          requestNonce: pending.request.requestNonce,
+          providerMethod: 'signMultipleTransactions' as const,
+        };
+        if (batch.psbts.every((item) => item.inputsToSign !== undefined)) {
+          pending.preparedGroup = await this.deps.service.providerPreparePsbtGroup({
+            items: batch.psbts.map((item, index) => ({
+              nodeId: `transaction-${index + 1}`,
+              psbtBase64: item.psbtBase64,
+              inputsToSign: item.inputsToSign!,
+              ...(item.expectedTxid === undefined ? {} : { expectedUnsignedTxid: item.expectedTxid }),
+              ...(marketplaceItems[index] === undefined ? {} : { marketplace: {
+                context: marketplaceItems[index]!.context,
+                resolution: marketplaceItems[index]!.resolution,
+              } }),
+            })),
+            binding,
+            approvalGeneration: pending.approvalGeneration,
+            guard: () => this.assertPreparationLive(pending),
+          });
+        } else {
+          if (marketplaceItems.some((item) => item !== undefined)) {
+            throw new RpcError('ERR_INVALID_PAYLOAD', 'marketplace transaction groups require signing inputs');
+          }
+          pending.preparedBatch = await this.deps.service.providerPreparePsbtBatch({
+            items: batch.psbts.map((item) => ({
+              psbtBase64: item.psbtBase64,
+              ...(item.inputsToSign === undefined ? {} : { inputsToSign: item.inputsToSign }),
+            })),
+            binding,
+            approvalGeneration: pending.approvalGeneration,
+            guard: () => this.assertPreparationLive(pending),
+          });
+          for (let index = 0; index < batch.psbts.length; index += 1) {
+            const expectedTxid = batch.psbts[index]?.expectedTxid;
+            const prepared = pending.preparedBatch.items[index];
+            if (expectedTxid !== undefined &&
+                (!prepared || providerPsbtUnsignedTxid(prepared.plan) !== expectedTxid)) {
+              throw new RpcError(
+                'ERR_INVALID_PAYLOAD',
+                'expected transaction id differs from the PSBT',
+              );
+            }
+          }
+        }
         this.assertPreparationLive(pending);
       }
       await this.withApprovalLock(async () => {
@@ -1193,11 +1384,18 @@ export class ProviderController {
       return { psbt: signed.psbtBase64 };
     }
     if (pending.method === 'signMultipleTransactions') {
-      if (!pending.preparedBatch) throw new RpcError('ERR_PLAN_CHANGED', 'prepared PSBT batch missing');
-      const signed = await this.deps.service.providerSignPreparedPsbtBatch(
-        pending.preparedBatch,
-        () => this.assertPendingLive(pending),
-      );
+      const signed = pending.preparedGroup
+        ? await this.deps.service.providerSignPreparedPsbtGroup(
+            pending.preparedGroup,
+            () => this.assertPendingLive(pending),
+          )
+        : pending.preparedBatch
+          ? await this.deps.service.providerSignPreparedPsbtBatch(
+              pending.preparedBatch,
+              () => this.assertPendingLive(pending),
+            )
+          : null;
+      if (!signed) throw new RpcError('ERR_PLAN_CHANGED', 'prepared PSBT transaction set missing');
       return signed.map((item) => ({ psbtBase64: item.psbtBase64 }));
     }
     if (pending.method === 'sendTransfer') {
@@ -1256,6 +1454,13 @@ export class ProviderController {
       await this.deps.service.providerRevalidatePreparedPsbtBatch(pending.preparedBatch);
       this.assertPendingLive(pending);
     }
+    if (pending.preparedGroup) {
+      if (pending.preparedGroup.approvalGeneration !== pending.approvalGeneration) {
+        throw new RpcError('ERR_PLAN_CHANGED', 'provider group approval changed');
+      }
+      await this.deps.service.providerRevalidatePreparedPsbtGroup(pending.preparedGroup);
+      this.assertPendingLive(pending);
+    }
     if (pending.preparedMessageBatch) {
       if (pending.preparedMessageBatch.approvalGeneration !== pending.approvalGeneration) {
         throw new RpcError('ERR_PLAN_CHANGED', 'provider message batch approval changed');
@@ -1294,51 +1499,16 @@ export class ProviderController {
 
   private snapshot(): ApprovalSnapshot {
     const pending = this.active;
+    const preparedTransactions = pending?.preparedGroup?.items ?? pending?.preparedBatch?.items ?? null;
     let batchDetails: Array<ReturnType<typeof providerTransactionDetails>> | null = null;
-    if (pending?.preparedBatch) {
+    if (pending && preparedTransactions) {
       try {
-        batchDetails = pending.preparedBatch.items.map((item) =>
+        batchDetails = preparedTransactions.map((item) =>
           providerTransactionDetails(item.plan, pending.state.authority));
       } catch {
         pending.approvalError = 'Signed inscription previews are unavailable.';
       }
     }
-    let inscriptionReview: {
-      effectCount: number;
-      inscriptions: ReturnType<typeof approvalInscriptionItems>;
-      requiresPreviewAcknowledgement: boolean;
-    } | null = null;
-    if (pending?.preparedPsbt) {
-      try {
-        const previews = providerPsbtPlanPreviews(pending.preparedPsbt);
-        const inscriptions = approvalInscriptionItems(pending.preparedPsbt.analysis, previews);
-        inscriptionReview = {
-          effectCount: inscriptions.length,
-          inscriptions,
-          requiresPreviewAcknowledgement: requiresPreviewAcknowledgement(previews),
-        };
-      } catch {
-        // A promised preview that is unavailable is a hard approval error, not
-        // a reason to silently drop the inscription rows.
-        pending.approvalError = 'Signed inscription previews are unavailable.';
-      }
-    }
-    /**
-     * An output is committed only when every input's sighash covers it.
-     * SIGHASH_NONE commits to no output and SIGHASH_SINGLE to a single index, so
-     * anything else can still be changed after signing. The review must not
-     * present those outputs as fixed. With no inputs at all there is nothing to
-     * commit, and `[].every()` would otherwise report the strongest claim the
-     * review can make; both PSBT parsers reject an empty transaction, so the
-     * length check only keeps the default fail-closed.
-     */
-    const analysisInputs = pending?.preparedPsbt?.analysis.inputs ?? [];
-    const outputCommitted = (index: number): boolean =>
-      analysisInputs.length > 0 &&
-      analysisInputs.every((input) =>
-        input.sighash.validEncoding &&
-        (input.sighash.committedOutputIndexes === 'all' ||
-          input.sighash.committedOutputIndexes.includes(index)));
     const review = pending?.preparedMessageBatch
       ? {
           kind: 'message_batch' as const,
@@ -1366,102 +1536,63 @@ export class ProviderController {
           transactionCount: pending.preparedBatch.items.length,
           walletInputSats: pending.preparedBatch.aggregate.walletInputSats.toString(),
           walletOutputSats: pending.preparedBatch.aggregate.walletOutputSats.toString(),
-          netWalletDebitSats: (pending.preparedBatch.aggregate.walletInputSats -
-            pending.preparedBatch.aggregate.walletOutputSats).toString(),
+          netWalletDebitSats: pending.preparedBatch.items.reduce((total, item) =>
+            total + BigInt(providerTransactionReview(item.plan).netWalletDebitSats), 0n).toString(),
           feeExposureSats: pending.preparedBatch.aggregate.feeExposureSats.toString(),
           transactions: pending.preparedBatch.items.map((item, index) => ({
             index,
             ...providerTransactionReview(item.plan),
           })),
         }
+      : pending?.preparedGroup
+      ? {
+          kind: 'batch' as const,
+          walletName: pending.expectedWalletName,
+          account: pending.expectedAccount,
+          network: pending.expectedNetwork,
+          transactionCount: pending.preparedGroup.items.length,
+          walletInputSats: pending.preparedGroup.approvalSummary.walletInputSats.toString(),
+          walletOutputSats: pending.preparedGroup.approvalSummary.walletOutputSats.toString(),
+          netWalletDebitSats: pending.preparedGroup.approvalSummary.maximumWalletDebitSats.toString(),
+          feeExposureSats: pending.preparedGroup.approvalSummary.feeExposureSats.toString(),
+          linked: pending.preparedGroup.approvalSummary.linked,
+          maximumWalletDebitSats:
+            pending.preparedGroup.approvalSummary.maximumWalletDebitSats.toString(),
+          maximumFeeExposureSats:
+            pending.preparedGroup.approvalSummary.maximumFeeExposureSats.toString(),
+          branchEconomicsExact: pending.preparedGroup.approvalSummary.branchEconomicsExact,
+          sharedFundingConflictCount:
+            pending.preparedGroup.approvalSummary.externalConflicts.length,
+          alternativeOutcomeGroups:
+            pending.preparedGroup.approvalSummary.alternativeOutcomes.map((outcome) => ({
+              settlements: outcome.settlements.map((settlement) => ({
+                nodeId: settlement.nodeId,
+                guaranteedWalletReturnSats: settlement.guaranteedWalletReturnSats.toString(),
+                maximumWalletDebitSats: settlement.maximumWalletDebitSats.toString(),
+              })),
+              recovery: {
+                nodeId: outcome.recovery.nodeId,
+                guaranteedWalletReturnSats: outcome.recovery.guaranteedWalletReturnSats.toString(),
+                maximumWalletDebitSats: outcome.recovery.maximumWalletDebitSats.toString(),
+              },
+            })),
+          transactions: pending.preparedGroup.items.map((item, index) => ({
+            index,
+            ...providerTransactionReview(item.plan),
+          })),
+        }
       : pending?.preparedPsbt
-      ? (() => {
-          const walletInputSats = pending.preparedPsbt.analysis.inputs
-            .filter((item) => item.ownership === 'wallet')
-            .reduce((total, item) => total + item.valueSats, 0n);
-          const walletOutputSats = pending.preparedPsbt.analysis.outputs
-            .filter((item) => item.ownership === 'wallet')
-            .reduce((total, item) => total + item.valueSats, 0n);
-          const externalOutputSats = pending.preparedPsbt.analysis.outputs
-            .filter((item) => item.ownership === 'external')
-            .reduce((total, item) => total + item.valueSats, 0n);
-          const outputs = pending.preparedPsbt.analysis.outputs.map((item) => ({
-            index: item.index,
-            address: item.address,
-            valueSats: item.valueSats.toString(),
-            ownership: item.ownership,
-            role: item.role,
-            committed: outputCommitted(item.index),
-          }));
-          const economics = pending.marketplace?.context.economics;
-          const genericListing = pending.preparedPsbt.genericListing;
-          const economicClaims = economics === undefined
-            ? genericListing
-              ? [{
-                  kind: 'guaranteed_proceeds' as const,
-                  valueSats: genericListing.commitment.guaranteedProceedsSats.toString(),
-                }]
-              : pending.preparedPsbt.communityVaultAcquisition
-              ? [{
-                  kind: 'buyer_total' as const,
-                  valueSats: pending.preparedPsbt.communityVaultAcquisition.cashDueSats,
-                }]
-              : pending.preparedPsbt.communityVaultSale
-                ? [{
-                    kind: 'guaranteed_proceeds' as const,
-                    valueSats: pending.preparedPsbt.communityVaultSale.ownerPayoutSats,
-                  }]
-                : pending.preparedPsbt.communityVaultSaleBuyer
-                  ? [{
-                      kind: 'buyer_total' as const,
-                      valueSats: pending.preparedPsbt.communityVaultSaleBuyer.buyerTotalSats,
-                    }]
-                  : pending.preparedPsbt.communityVaultPositionTransfer?.role === 'buyer'
-                    ? [{
-                        kind: 'buyer_total' as const,
-                        valueSats: pending.preparedPsbt.communityVaultPositionTransfer.buyerTotalSats,
-                      }]
-                : []
-            : [
-                ...(economics.totalSats === undefined
-                  ? []
-                  : [{ kind: 'buyer_total' as const, valueSats: economics.totalSats }]),
-                ...(economics.sellerProceedsSats === undefined
-                  ? []
-                  : [{
-                      kind: 'guaranteed_proceeds' as const,
-                      valueSats: economics.sellerProceedsSats,
-                    }]),
-                ...(economics.marketplaceFeeSats === undefined
-                  ? []
-                  : [{
-                      kind: 'marketplace_fee' as const,
-                      valueSats: economics.marketplaceFeeSats,
-                    }]),
-                ...(economics.royaltySats === undefined
-                  ? []
-                  : [{ kind: 'creator_royalty' as const, valueSats: economics.royaltySats }]),
-                ...(economics.minerFeeSats === undefined
-                  ? []
-                  : [{ kind: 'miner_fee' as const, valueSats: economics.minerFeeSats }]),
-              ];
-          return {
-            kind: 'transaction' as const,
-            walletName: pending.expectedWalletName,
-            account: pending.expectedAccount,
-            network: pending.expectedNetwork,
-            authorization: outputs.every((output) => output.committed)
-              ? 'complete' as const
-              : 'partial' as const,
-            feeSats: pending.preparedPsbt.feeSats.toString(),
-            walletInputSats: walletInputSats.toString(),
-            walletOutputSats: walletOutputSats.toString(),
-            externalOutputSats: externalOutputSats.toString(),
-            netWalletDebitSats: (walletInputSats - walletOutputSats).toString(),
-            economicClaims,
-            outputs,
-          };
-        })()
+      ? {
+          kind: 'transaction' as const,
+          walletName: pending.expectedWalletName,
+          account: pending.expectedAccount,
+          network: pending.expectedNetwork,
+          ...providerTransactionReview(pending.preparedPsbt),
+          economicClaims: providerEconomicClaims(
+            pending.preparedPsbt,
+            pending.marketplace?.context.economics,
+          ),
+        }
       : pending?.method === 'signMessage'
         ? {
             kind: 'message' as const,
@@ -1546,6 +1677,7 @@ export class ProviderController {
           ? {
               account: pending.preparedBatch.account,
               network: pending.preparedBatch.network,
+              approvalModelVersion: 1,
               authority: {
                 tabId: pending.state.authority.tabId,
                 frameId: pending.state.authority.frameId,
@@ -1566,53 +1698,55 @@ export class ProviderController {
               },
               transactions: batchDetails ?? [],
             }
-          : pending.preparedPsbt
+          : pending.preparedGroup
           ? {
-              account: pending.preparedPsbt.account,
-              network: pending.preparedPsbt.network,
+              account: pending.preparedGroup.account,
+              network: pending.preparedGroup.network,
+              approvalModelVersion: 1,
               authority: {
                 tabId: pending.state.authority.tabId,
                 frameId: pending.state.authority.frameId,
                 documentId: pending.state.authority.documentId,
               },
-              feeSats: pending.preparedPsbt.feeSats.toString(),
-              feeRateSatPerVb: (Number(pending.preparedPsbt.feeRateSatPerKvB) / 1000).toString(),
-              vsize: pending.preparedPsbt.vsize.toString(),
-              rbf: pending.preparedPsbt.rbf,
-              security: {
-                broadcast: pending.preparedPsbt.broadcast,
-                requiresAdvanced: pending.preparedPsbt.requiresAdvanced,
-                planHash: pending.preparedPsbt.planHash,
-                analysisHash: pending.preparedPsbt.analysisHash,
-                psbtHash: pending.preparedPsbt.psbtHash,
-                hardViolations: pending.preparedPsbt.analysis.hardViolations,
-                protectedInputIndexes: pending.preparedPsbt.analysis.assetEffects.protectedInputIndexes,
-                protectedValueExposedToFees:
-                  pending.preparedPsbt.analysis.assetEffects.protectedValueExposedToFees.toString(),
-                rawPsbtHex: pending.preparedPsbt.psbtHex,
+              batch: {
+                transactionCount: pending.preparedGroup.items.length,
+                batchHash: pending.preparedGroup.groupHash,
+                approvalGeneration: pending.preparedGroup.approvalGeneration,
+                aggregate: {
+                  encodedPsbtChars: pending.preparedGroup.aggregate.encodedPsbtChars,
+                  inputs: pending.preparedGroup.aggregate.inputs,
+                  outputs: pending.preparedGroup.aggregate.outputs,
+                  selectedInputs: pending.preparedGroup.aggregate.selectedInputs,
+                  walletInputSats:
+                    pending.preparedGroup.approvalSummary.walletInputSats.toString(),
+                  walletOutputSats:
+                    pending.preparedGroup.approvalSummary.walletOutputSats.toString(),
+                  feeExposureSats:
+                    pending.preparedGroup.approvalSummary.feeExposureSats.toString(),
+                },
               },
-              inputs: pending.preparedPsbt.analysis.inputs.map((item) => ({
-                index: item.index,
-                outpoint: `${item.txid}:${item.vout}`,
-                valueSats: item.valueSats.toString(),
-                ownership: item.ownership,
-                classification: item.classification.primaryClass,
-                sighash: item.sighash,
-              })),
-              outputs: pending.preparedPsbt.analysis.outputs.map((item) => ({
-                index: item.index,
-                address: item.address,
-                valueSats: item.valueSats.toString(),
-                ownership: item.ownership,
-                role: item.role,
-                committed: outputCommitted(item.index),
-              })),
-              warnings: pending.preparedPsbt.analysis.warnings,
-              ...(inscriptionReview ?? {
-                effectCount: pending.preparedPsbt.analysis.assetEffects.inscriptions?.length ?? 0,
-                inscriptions: [],
-                requiresPreviewAcknowledgement: false,
-              }),
+              ...(pending.marketplace ? { marketplace: {
+                status: pending.marketplace.resolution.status,
+                id: pending.marketplace.resolution.marketplaceId,
+                name: pending.marketplace.resolution.displayName,
+                templateId: pending.marketplace.resolution.templateId,
+                templateVersion: pending.marketplace.resolution.templateVersion,
+                action: pending.marketplace.context.action,
+                role: pending.marketplace.context.role,
+                assetKind: pending.marketplace.context.assetKind,
+                step: pending.marketplace.context.step,
+                stepCount: pending.marketplace.context.stepCount,
+                economics: pending.marketplace.context.economics ?? null,
+                identifiers: pending.marketplace.context.identifiers ?? null,
+                expiresAt: pending.marketplace.context.expiresAt ?? null,
+                broadcaster: pending.marketplace.context.broadcaster,
+                flexible: pending.marketplace.resolution.flexible,
+              } } : {}),
+              transactions: batchDetails ?? [],
+            }
+          : pending.preparedPsbt
+          ? {
+              ...providerTransactionDetails(pending.preparedPsbt, pending.state.authority),
               ...(pending.preparedPsbt.genericListing ? { genericListing: {
                 guaranteedProceedsSats:
                   pending.preparedPsbt.genericListing.commitment.guaranteedProceedsSats.toString(),
@@ -1679,12 +1813,10 @@ export class ProviderController {
                 flexible: pending.marketplace.resolution.flexible,
               } } : {}),
             },
-        requiresPassword: pending.preparedPsbt?.requiresAdvanced === true ||
-          pending.preparedBatch?.requiresAdvanced === true ||
+        requiresPassword: pending.requiresTransactionPassword === true ||
           pending.communityVaultSale !== undefined ||
           pending.communityVaultPositionTransfer?.review.role === 'owner',
-        confirmationPhrase: pending.preparedPsbt?.requiresAdvanced === true ||
-          pending.preparedBatch?.requiresAdvanced === true ? 'SIGN PSBT' : null,
+        confirmationPhrase: null,
         approvalError: pending.approvalError ?? null,
       } : null,
     };
@@ -1703,6 +1835,9 @@ export class ProviderController {
       if (feeRateSatPerVb !== undefined) throw new RpcError('ERR_INVALID_PAYLOAD', 'PSBT fee is immutable');
       const params = pending.params as { psbt: string; signInputs?: Record<string, number[]>; broadcast?: boolean };
       const selectedInputIndexes = params.signInputs ? Object.values(params.signInputs).flat() : undefined;
+      const signInputBindings = params.signInputs
+        ? Object.entries(params.signInputs).map(([address, inputIndexes]) => ({ address, inputIndexes }))
+        : undefined;
       const community = pending.communityVaultAcquisition;
       const sale = pending.communityVaultSale;
       const buyer = pending.communityVaultSaleBuyer;
@@ -1712,6 +1847,7 @@ export class ProviderController {
         binding: { ...common, providerMethod: 'signPsbt' },
         broadcast: params.broadcast === true,
         ...(selectedInputIndexes === undefined ? {} : { selectedInputIndexes }),
+        ...(signInputBindings === undefined ? {} : { signInputBindings }),
         ...(community === undefined ? {} : {
           kind: 'community_vault_acquisition' as const,
           communityVaultAcquisition: community.review,

@@ -91,12 +91,10 @@ describe('provider settings', () => {
     expect(screen.getByRole('button', { name: 'Open recovery center' })).toBeVisible();
     expect(screen.getByText('No approved sites.').closest('[role="status"]')).not.toBeNull();
 
-    const advancedControl = screen.getByLabelText('Advanced PSBT signing');
-    expect(advancedControl).not.toBeVisible();
     const summary = screen.getByText('Advanced').closest('summary');
     expect(summary).not.toBeNull();
     await userEvent.click(summary!);
-    expect(advancedControl).toBeVisible();
+    expect(screen.queryByLabelText('Advanced PSBT signing')).toBeNull();
 
     expect(screen.getByText('Update the password used to unlock Drey.')).toBeVisible();
     expect(screen.getByLabelText('Current app password')).not.toBeVisible();

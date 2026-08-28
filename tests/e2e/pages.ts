@@ -254,13 +254,23 @@ export class DappPage {
       inputsToSign?: Array<{
         address: string;
         signingIndexes: number[];
-        sigHash?: 0 | 1 | 129 | 131;
+        sigHash?: 0 | 1 | 3 | 129 | 131;
       }>;
     }>;
   }): Promise<void> {
     await this.page.evaluate((value) => {
       (window as Window & { __dreyE2eTransactionBatch?: unknown })
         .__dreyE2eTransactionBatch = value;
+    }, request);
+  }
+
+  async configurePsbtRequest(request: {
+    psbt: string;
+    signInputs: Record<string, number[]>;
+    broadcast: false;
+  }): Promise<void> {
+    await this.page.evaluate((value) => {
+      (window as Window & { __dreyE2ePsbtRequest?: unknown }).__dreyE2ePsbtRequest = value;
     }, request);
   }
 

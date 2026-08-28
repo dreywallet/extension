@@ -62,7 +62,7 @@ export const VAULT_STANDALONE_TOOL_DIGEST_UNPUBLISHED = '00'.repeat(32);
  *
  * Reproduce both values from a clean checkout:
  *
- *   git clone --branch v0.17.6 https://github.com/dreywallet/core.git
+ *   git clone --branch v0.19.1 https://github.com/dreywallet/core.git
  *   cd core && pnpm install --frozen-lockfile && pnpm recovery:verify
  *
  * The artifact digest is deliberately the narrower claim. It stayed
@@ -110,11 +110,15 @@ export const VAULT_STANDALONE_TOOL_DIGEST_UNPUBLISHED = '00'.repeat(32);
  * snapshot before callers may clear recovery evidence. v0.17.5 keeps that
  * artifact byte-identical while adding the profile credential envelope;
  * v0.17.6 reissues the same wallet logic under the required annotated release
- * tag and binds the complete reviewed source snapshot.
+ * tag. v0.18.0 broadens provider PSBT approval policy without changing the
+ * standalone recovery artifact. v0.18.3 binds that same reproducible artifact
+ * to the PSBT commitment, sighash-declaration, and group-validation source.
+ * v0.19.1 keeps the artifact byte-identical while adding safe linked-group,
+ * shared-funding-alternative, and deferred zero-fee provider signing policy.
  */
 export const VAULT_STANDALONE_TOOL_RELEASE = Object.freeze({
-  coreTag: 'v0.17.6',
-  sourceDigest: '0ac081447d6e89776485bd770f03d9bba348c1aa43d1e5e6cd95cb82fede6332',
+  coreTag: 'v0.19.1',
+  sourceDigest: '23292be826797176ed641a513ad187f6287c143d3224fbc2b61c9f1261055deb',
   artifactDigest: '642ad7904dc16fefa81757ca6151d392464b0087de2e5044cbb7b6a66776d432',
 });
 

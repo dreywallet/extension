@@ -1525,33 +1525,6 @@ test('@m9p reviews signed inert inscription previews and fails closed across mis
   await expect(popup.page.getByRole('tab', { name: 'Hidden (0)' })).toBeVisible();
   await expect(popup.page.getByRole('tab', { name: 'All (3)' })).toBeVisible();
 
-  const settings = await extensionContext.newPage();
-  try {
-    await settings.goto(
-      `chrome-extension://${extensionId}/fullpage.html#/settings/wallets-accounts`,
-    );
-    await expect(settings.getByLabel('Active account')).toBeEnabled();
-    const advancedEnabled = await settings.evaluate(async () => {
-      const raw = (await chrome.storage.session.get('squirrel:session'))['squirrel:session'] as
-        { vaultId?: unknown; sessionId?: unknown } | undefined;
-      if (typeof raw?.vaultId !== 'string' || typeof raw.sessionId !== 'string') return false;
-      const response = await chrome.runtime.sendMessage({
-        protocolVersion: 1,
-        requestId: crypto.randomUUID(),
-        sender: 'fullpage',
-        op: 'config.set',
-        payload: {
-          advancedPsbtSigning: true,
-          expectedVaultId: raw.vaultId,
-          expectedSessionId: raw.sessionId,
-        },
-      }) as { ok?: unknown; result?: { advancedPsbtSigning?: unknown } };
-      return response.ok === true && response.result?.advancedPsbtSigning === true;
-    });
-    expect(advancedEnabled).toBe(true);
-  } finally {
-    await settings.close();
-  }
   await dapp.open();
   const connected = await dapp.invokeWithApproval('Connect');
   await connected.approve();
@@ -1569,9 +1542,9 @@ test('@m9p reviews signed inert inscription previews and fails closed across mis
     const transfer = await dapp.invokeWithApproval('M9P safe inscription transfer');
     await transfer.expectMethod('ord_sendInscriptions');
     await expect(transfer.page.getByRole('heading', { name: '2 co-located inscriptions' })).toBeVisible();
-    await expect(transfer.page.getByText(rasterId)).toBeVisible();
-    await expect(transfer.page.getByText(placeholderId)).toBeVisible();
-    await expect(transfer.page.getByText(distinctRasterId)).toBeVisible();
+    await expect(transfer.page.getByText(rasterId, { exact: true })).toBeVisible();
+    await expect(transfer.page.getByText(placeholderId, { exact: true })).toBeVisible();
+    await expect(transfer.page.getByText(distinctRasterId, { exact: true })).toBeVisible();
     await expect(transfer.page.getByText('Retained').first()).toBeVisible();
     await expect(transfer.page.getByText('Sent').first()).toBeVisible();
     await expect(transfer.page.getByRole('status')).toContainText('Preview unavailable');
@@ -1590,7 +1563,7 @@ test('@m9p reviews signed inert inscription previews and fails closed across mis
     const receivedId = '763ceae5c904f9043e206d5a5c83a0153ed6ba861afae7e2a2e2c2a26a7f0b96i0';
     const received = await dapp.invokeWithApproval('M9P received inscription');
     await received.expectMethod('signPsbt');
-    await expect(received.page.getByText(receivedId)).toBeVisible();
+    await expect(received.page.getByText(receivedId, { exact: true })).toBeVisible();
     // Movement is stated in two independent places: the inscription card badge
     // and the sat-flow diagram. Assert both rather than a page-wide match, which
     // is now ambiguous by design.
@@ -1613,7 +1586,7 @@ test('@m9p reviews signed inert inscription previews and fails closed across mis
 
     await setGatewayScenario({ gatewayMode: 'healthy', snapshotScenario: 'mixed', previewMode: 'exact' });
     const restarted = await dapp.invokeWithApproval('M9P safe inscription transfer');
-    await expect(restarted.page.getByText(rasterId)).toBeVisible();
+    await expect(restarted.page.getByText(rasterId, { exact: true })).toBeVisible();
     await terminateExtensionWorker(extensionContext, extensionId);
     await expect.poll(() => restarted.page.isClosed()).toBe(true);
     expect(externalRequests).toEqual([]);

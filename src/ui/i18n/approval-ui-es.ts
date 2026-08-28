@@ -13,6 +13,25 @@ export const approvalUiEs: Record<ApprovalUiMessageKey, string> = {
   'approvalUi.batch.transaction': 'Transacción {number} de {count}',
   'approvalUi.batch.reviewEvery':
     'Revisa cada transacción a continuación. Drey devuelve todas las firmas en orden o ninguna.',
+  'approvalUi.group.linkedCount': '{count} transacciones relacionadas',
+  'approvalUi.group.maximumFees': 'Comisiones de red máximas',
+  'approvalUi.group.conservativeDebit': 'Límite de gasto conservador',
+  'approvalUi.group.conservativeFees': 'Límite de comisión conservador',
+  'approvalUi.group.conservativeBody':
+    'Estos límites son conservadores porque algunas opciones de transacción se superponen.',
+  'approvalUi.group.signedTogether':
+    'Drey devuelve todas las firmas juntas o ninguna. No se transmite nada.',
+  'approvalUi.group.sharedFundingTitle': 'Fondos compartidos',
+  'approvalUi.group.sharedFundingBody':
+    'Algunas opciones de transacción usan los mismos fondos. Solo una puede completarse.',
+  'approvalUi.group.possibleOutcomes': 'Resultados posibles',
+  'approvalUi.group.outcomeSet': 'Venta o recuperación',
+  'approvalUi.group.outcomeSetNumbered': 'Venta o recuperación {number}',
+  'approvalUi.group.settlementOutcome': 'Liquidación del mercado',
+  'approvalUi.group.recoveryOutcome': 'Devolución a tu cartera',
+  'approvalUi.group.guaranteedReturn': 'Al menos {amount} vuelve a tu cartera.',
+  'approvalUi.group.outcomeMaximumDebit': 'Hasta {amount} puede salir de tu cartera.',
+  'approvalUi.group.oneOutcome': 'Solo un resultado de este grupo puede completarse.',
   'approvalUi.messageBatch.titleOne': '¿Firmar este mensaje?',
   'approvalUi.messageBatch.title': '¿Firmar {count} mensajes?',
   'approvalUi.messageBatch.description':
@@ -28,7 +47,9 @@ export const approvalUiEs: Record<ApprovalUiMessageKey, string> = {
   'approvalUi.enteringWallet': 'Entra en tu cartera',
   'approvalUi.walletContext': 'Usando',
   'approvalUi.fee.limitedLabel': 'Comisión verificada ahora',
+  'approvalUi.fee.deferredLabel': 'Comisión de red ahora',
   'approvalUi.fee.exactBody': 'Comisión exacta de esta transacción.',
+  'approvalUi.fee.deferredBody': 'Se añade por separado antes de transmitir.',
   'approvalUi.fee.limitedBody':
     'Drey puede verificar esta cantidad ahora. La comisión final puede cambiar después de firmar.',
   'approvalUi.authorization.partial.title': 'Algunas salidas pueden cambiar',
@@ -36,6 +57,26 @@ export const approvalUiEs: Record<ApprovalUiMessageKey, string> = {
     'Solo las salidas marcadas como Fija están bloqueadas. Las marcadas como Puede cambiar pueden sustituirse o eliminarse.',
   'approvalUi.output.committed': 'Fija',
   'approvalUi.output.changeable': 'Puede cambiar',
+  'approvalUi.signatureRules.title': 'Reglas de la firma',
+  'approvalUi.signatureRules.input': 'Entrada {number}',
+  'approvalUi.signatureRules.inputCount': '{count} entradas usan esta regla',
+  'approvalUi.signatureRules.inputsFixed': 'Todas las entradas actuales son fijas.',
+  'approvalUi.signatureRules.inputsChangeable':
+    'El sitio puede añadir o eliminar otras entradas.',
+  'approvalUi.signatureRules.outputsFixed': 'Todas las salidas actuales son fijas.',
+  'approvalUi.signatureRules.outputCorresponding': 'Solo la salida {number} es fija.',
+  'approvalUi.signatureRules.outputsCorrespondingEach':
+    'Cada firma fija su salida correspondiente.',
+  'approvalUi.signatureRules.feeFixed': 'La comisión de red es fija.',
+  'approvalUi.signatureRules.feeDeferred':
+    'Esta transacción se mantiene en 0 sats; la comisión del paquete se añade en otra parte.',
+  'approvalUi.signatureRules.feeChangeable': 'La comisión de red final puede cambiar.',
+  'approvalUi.signatureRules.deferredFeeTitle': 'La comisión se añade después',
+  'approvalUi.signatureRules.deferredFeeBody':
+    'Las salidas actuales están fijas. Una transacción enlazada o el sitio debe añadir la comisión del paquete antes de transmitirlo.',
+  'approvalUi.signatureRules.someDeferredFeeTitle': 'Algunas comisiones se añaden después',
+  'approvalUi.signatureRules.someDeferredFeeBody':
+    'Las transacciones indicadas abajo se mantienen en 0 sats. Las demás conservan la comisión mostrada.',
   'approvalUi.protectedFee.title': 'Firma bloqueada',
   'approvalUi.protectedFee.body':
     '{sats} sats protegidos pagarían la comisión. Vuelve a crear la transacción usando Bitcoin limpio para las comisiones.',

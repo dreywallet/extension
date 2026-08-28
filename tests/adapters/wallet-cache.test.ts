@@ -144,8 +144,7 @@ function portConformance(name: string, makePort: () => WalletCachePort) {
         3,
       );
       await port.put(r1);
-      await port.put(r2);
-      await port.put(otherVault);
+      await port.putMany([r2, otherVault]);
 
       expect(await port.get(KEY)).toEqual(r1);
       expect(await port.get({ ...KEY, key: 'missing' })).toBeUndefined();
@@ -168,7 +167,7 @@ function portConformance(name: string, makePort: () => WalletCachePort) {
 portConformance('MemoryWalletCache', () => new MemoryWalletCache());
 portConformance('IdbWalletCache', () => new IdbWalletCache(fakeIndexedDB, fakeIDBKeyRange));
 
-function abortSuccessfulPutTransactions(): IDBFactory {
+function abortSuccessfulPutTransactions(afterSuccessfulPuts = 1): IDBFactory {
   return new Proxy(fakeIndexedDB, {
     get(target, property) {
       if (property !== 'open') {
@@ -189,9 +188,13 @@ function abortSuccessfulPutTransactions(): IDBFactory {
             if (mode !== 'readwrite') return tx;
             const store = tx.objectStore('records');
             const put = store.put.bind(store);
+            let successfulPuts = 0;
             store.put = ((value: unknown, key?: IDBValidKey): IDBRequest<IDBValidKey> => {
               const putRequest = key === undefined ? put(value) : put(value, key);
-              putRequest.addEventListener('success', () => tx.abort(), { once: true });
+              putRequest.addEventListener('success', () => {
+                successfulPuts += 1;
+                if (successfulPuts === afterSuccessfulPuts) tx.abort();
+              }, { once: true });
               return putRequest;
             }) as typeof store.put;
             return tx;
@@ -213,5 +216,19 @@ describe('IdbWalletCache transaction durability', () => {
 
     const committedCache = new IdbWalletCache(fakeIndexedDB, fakeIDBKeyRange);
     await expect(committedCache.get(key)).resolves.toBeUndefined();
+  });
+
+  it('commits a record group atomically when a later request aborts the transaction', async () => {
+    const firstKey = { ...KEY, vaultId: 'group-abort', key: 'first' };
+    const secondKey = { ...KEY, vaultId: 'group-abort', key: 'second' };
+    const first = sealRecord(DEK, { valueSats: 5n, label: 'first' }, firstKey, NONCE, 5);
+    const second = sealRecord(DEK, { valueSats: 6n, label: 'second' }, secondKey, NONCE, 6);
+    const cache = new IdbWalletCache(abortSuccessfulPutTransactions(2), fakeIDBKeyRange);
+
+    await expect(cache.putMany([first, second])).rejects.toThrow();
+
+    const committedCache = new IdbWalletCache(fakeIndexedDB, fakeIDBKeyRange);
+    await expect(committedCache.get(firstKey)).resolves.toBeUndefined();
+    await expect(committedCache.get(secondKey)).resolves.toBeUndefined();
   });
 });

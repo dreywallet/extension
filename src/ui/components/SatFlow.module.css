@@ -34,9 +34,9 @@
 }
 
 .proof {
-  color: var(--color-text-faint);
+  color: var(--color-text-muted);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: .04em;
   text-transform: uppercase;
 }
@@ -173,7 +173,7 @@
 
 .role {
   color: var(--color-text-muted);
-  font-size: 9.5px;
+  font-size: 10.5px;
   line-height: 1.15;
   max-width: 100%;
   overflow: hidden;
@@ -182,9 +182,9 @@
 }
 
 .owner {
-  color: var(--color-text-faint);
+  color: var(--color-text-muted);
   font-family: var(--font-display);
-  font-size: 9px;
+  font-size: 10px;
   letter-spacing: .08em;
   line-height: 1.2;
   max-width: 100%;
@@ -204,9 +204,9 @@
 /* Movement and uncommitted state sit below the box so they never crowd it. */
 .movement,
 .uncommittedTag {
-  bottom: -13px;
+  bottom: -14px;
   font-family: var(--font-display);
-  font-size: 9px;
+  font-size: 10px;
   left: 0;
   letter-spacing: .08em;
   line-height: 1;
@@ -218,7 +218,7 @@
 }
 
 .movement {
-  color: var(--color-text-faint);
+  color: var(--color-text-muted);
 }
 
 .uncommittedTag {
@@ -227,9 +227,9 @@
 
 .rowLabelFrom,
 .rowLabelTo {
-  color: var(--color-text-faint);
+  color: var(--color-text-muted);
   font-family: var(--font-display);
-  font-size: 9px;
+  font-size: 10px;
   letter-spacing: .12em;
   margin: 0;
   position: absolute;
@@ -285,8 +285,8 @@
 
 .legend {
   border-top: 2px solid var(--color-border);
-  color: var(--color-text-faint);
-  font-size: 10px;
+  color: var(--color-text-muted);
+  font-size: 11px;
   letter-spacing: .04em;
   margin: var(--space-2) 0 0;
   padding-top: var(--space-1);

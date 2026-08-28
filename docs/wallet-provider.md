@@ -92,7 +92,7 @@ unsubscribe();
 | Message signing | `signMessage` | BIP322 simple only; fresh approval required |
 | Multiple message signing | `signMultipleMessages` | Official Sats Connect shape; one approval, 1–10 ordered BIP322 results |
 | PSBT signing | `signPsbt` | Returns the signed PSBT and optional broadcast txid |
-| Independent PSBT batch signing | `signMultipleTransactions` | Sats Connect-compatible, one atomic review, 1–41 results in request order, never broadcasts |
+| PSBT transaction-group signing | `signMultipleTransactions` | Sats Connect-compatible; independent, linked, and shared-funding groups; one atomic review, 1–41 results in request order, never broadcasts |
 | BTC transfer | `sendTransfer` | Fresh transaction review required |
 | Ordinals | `ord_getInscriptions`, `ord_sendInscriptions` | Single inscription transfer |
 
@@ -129,7 +129,7 @@ before one approval is shown. The review opens the first message and keeps every
 other full message one click away. Signing returns every verified result in
 request order or no result; it never spends or broadcasts bitcoin.
 
-### Independent PSBT batches
+### PSBT transaction groups
 
 `signMultipleTransactions` accepts the official Sats Connect request and result
 shape. Drey also exposes the callback-era Sats Connect entry point. Its unsigned
@@ -138,21 +138,29 @@ encoding, empty signature, and payload are parsed strictly, then the decoded
 request enters Drey's normal structured provider bridge. The token never grants
 authority.
 
-A batch contains 1–41 independent PSBTs and is bounded by the existing
-single-request aggregate budget: at most 1,500,000 base64 characters, 200 total
-inputs, 2,000 total outputs, and 200 explicitly selected inputs. Every item is
-fully analyzed under the existing Advanced PSBT rules before one approval is
-shown. The approval exposes aggregate wallet input/output and fee exposure and
-keeps every transaction's complete input, output, warning, asset-flow, and raw
-PSBT review available.
+A group contains 1–41 PSBTs and may be independent, internally linked, or a
+set of mutually exclusive transactions sharing funding. It is bounded to
+1,500,000 base64 characters, 500 aggregate inputs, 2,000 aggregate outputs,
+500 aggregate selected inputs, and 200 inputs per PSBT. Every item and the
+complete graph are analyzed under the same provider PSBT policy before one
+approval is shown. The default approval shows the transaction count, whether
+the items are related or alternative outcomes, the maximum wallet debit, and
+the maximum fee exposure. Each transaction's bounded input, output, warning,
+asset-flow, sighash, PSBT hash, and byte-length details are available in
+collapsed sections; raw PSBT bytes are not rendered.
 
 The exact ordered PSBTs, requested indexes and sighashes, analyses, origin and
 browser document, active account, network, vault session, approval generation,
-and expiration are hash-bound. Duplicate PSBTs or unsigned transactions,
-reused inputs, and a PSBT spending an output created by any other item are
-rejected. Signing returns every result in request order only after all items
-succeed. It never broadcasts, skips, partially returns, retries, persists a
-signed batch for replay, or resumes after a stale or restarted approval.
+graph topology, and expiration are hash-bound. Duplicate PSBTs or unsigned
+transactions are rejected. A child may spend a parent output only when the
+parent bytes, output, value, asset projection, and active-account control are
+proved inside the same immutable graph. A reused external input is allowed only
+when Core proves a coherent shared-funding alternative set; the approval uses
+maximum branch exposure instead of adding impossible outcomes together.
+Signing returns every result in request order only after all signatures and
+required encrypted journal updates succeed atomically. It never broadcasts,
+skips, partially returns, retries, persists a signed group for replay, or
+resumes after a stale or restarted approval.
 
 ## Privacy and lifecycle boundaries
 
@@ -196,30 +204,45 @@ signed batch for replay, or resumes after a stale or restarted approval.
 
 ## Marketplace status
 
-Marketplace signing is fail-closed by default. Deterministic generic PSBT
-requests may receive Advanced review, but flexible or partial marketplace
-transactions require an exact compile-time template.
+Marketplace identity and script-path authority remain fail-closed by default.
+Provider PSBT policy may approve standard and flexible key-path signatures when
+their cryptographic guarantees can be explained directly; a marketplace name,
+script path, or additional mutation allowance still requires an exact
+compile-time template.
 
 ord.net single-inscription trading (authenticate, list, buy, offer, counter,
-accept offer, accept counter) is enabled from the published ORD.NET Trading API
-1.0.0 contract: requests must present a `marketplaceContext` carrying the
-preflight handle (anchor/purchase-anchor UUID) and, for settlement-bearing
-actions, the preflight's expected txids, or they fail closed. Batch listing
-preflights and the v2 collection/trait funding-parent offers are not supported.
-The generic batch method is deliberately excluded from marketplace templates;
-in particular, ord.net's shared recovery graph is linked and therefore rejected.
+accept offer, accept counter) can use the published ORD.NET Trading API 1.0.0
+context contract. When the callback supplies that context, Drey binds the
+preflight handle and expected transaction IDs and can name the verified
+workflow. Current Sats Connect callbacks may supply only PSBTs, signing inputs,
+network, and a message. Those requests use the same signing engine but receive
+a conservative transaction review instead of an unverified marketplace label.
+
+`signMultipleTransactions` supports independent batches, internally linked
+transaction graphs, and shared-funding alternatives when every PSBT carries an
+explicit signing declaration. Drey validates the complete graph before one
+review, signs it all-or-none, and returns results in request order without
+broadcasting. This covers the transaction shapes used by ord.net batch
+listings and collection/trait funding parents, including exact sign-only
+zero-fee parents. Shared inputs are presented as mutually exclusive options;
+they are not double-counted as simultaneous spend exposure.
+
+Brand-specific collection/trait semantics remain unavailable when the callback
+omits the preflight contract. Drey does not infer a collection, trait, price, or
+offer identity from page text. It verifies the transaction bytes, selected
+inputs, sighashes, linked topology, asset routes, maximum debit, fee exposure,
+and pinned script/key rules that are actually present in the request.
 Satflow templates remain fixture-backed and must not be represented as live
 integrations until their independent vendor and contract gates pass.
 
 Independent of templates, any HTTPS origin may request a §21.1 generic
-listing: a `signPsbt` whose selected wallet inputs carry explicit
-`SINGLE|ANYONECANPAY` or `ALL|ANYONECANPAY` is signed one-click when the PSBT
-itself proves the guarantees — each SINGLE payout returns to the active
-account at no less than the listed input value, wallet-owned outputs cover the
-full wallet input value, and no rare-sat/unsupported inputs, script paths, or
-mixed deterministic wallet signatures are present. Everything else flexible
-still fails closed. Price sanity is disclosed, not enforced: the approval
-shows the exact payout.
+listing. The request must select exactly one wallet signature and use
+`SINGLE`, `SINGLE|ANYONECANPAY`, or `ALL|ANYONECANPAY`; the PSBT itself must
+prove the protected asset destination and payout, wallet-owned outputs must
+cover the wallet value at risk, and rare-sat/unsupported inputs, unauthorized
+script paths, and mixed wallet signatures remain blocked. The approval names
+the listing, guaranteed proceeds, maximum wallet debit, and exactly what the
+site can still change. Price sanity is disclosed, not enforced.
 
 The provider contract is tested against `@sats-connect/core@0.16.0`, the Core
 version used by `sats-connect@4.2.1`.

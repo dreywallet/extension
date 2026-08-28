@@ -92,6 +92,13 @@ async function request(operation) {
       }
       return providerRequest('signMultipleTransactions', configured);
     }
+    case 'sign-psbt': {
+      const configured = window.__dreyE2ePsbtRequest;
+      if (typeof configured !== 'object' || configured === null) {
+        throw new Error('PSBT fixture unavailable');
+      }
+      return providerRequest('signPsbt', configured);
+    }
     case 'send': return providerRequest('sendTransfer', {
       recipients: [{ address: 'tb1q053ptqlv0ugz8fcc3njw355rdluk4tqnhf0g0j', amount: 1000 }],
     });

@@ -7,6 +7,7 @@ import {
   getProviders,
   request as satsConnectRequest,
   signMultipleTransactions as satsConnectSignMultipleTransactions,
+  signTransaction as satsConnectSignTransaction,
 } from '@sats-connect/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerProviderDiscovery, type ProviderDiscoveryWindow } from '../../src/provider/discovery';
@@ -41,6 +42,8 @@ const ACCOUNT = {
   walletType: 'software',
   network: NETWORK,
 } as const;
+
+const LEGACY_PSBT = 'cHNidP8BAFICAAAAAaqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqAAAAAAD/////ASgjAAAAAAAAFgAUIiIiIiIiIiIiIiIiIiIiIiIiIiIAAAAAAAEBHxAnAAAAAAAAFgAUEREREREREREREREREREREREREREAAA==';
 
 const originalWindow = globalThis.window;
 
@@ -166,6 +169,28 @@ describe('Sats Connect Core 0.16.0 conformance', () => {
     }, 'drey')).resolves.toEqual({
       status: 'success',
       result: { psbt: 'cHNidP8=', txid: '11'.repeat(32) },
+    });
+    const singleOnFinish = vi.fn();
+    const singleOnCancel = vi.fn();
+    await satsConnectSignTransaction({
+      payload: {
+        network: { type: BitcoinNetworkType.Signet },
+        message: 'Sign transaction',
+        psbtBase64: LEGACY_PSBT,
+        inputsToSign: [{
+          address: 'tb1qpaymentaddress',
+          signingIndexes: [0],
+          sigHash: 1,
+        }],
+        broadcast: true,
+      },
+      onFinish: singleOnFinish,
+      onCancel: singleOnCancel,
+      getProvider: async () => drey as never,
+    });
+    expect(singleOnCancel).not.toHaveBeenCalled();
+    expect(singleOnFinish).toHaveBeenCalledWith({
+      psbtBase64: 'cHNidP8=', txId: '11'.repeat(32),
     });
     const onFinish = vi.fn();
     await satsConnectSignMultipleTransactions({

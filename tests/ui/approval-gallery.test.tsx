@@ -3,6 +3,7 @@ import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ApprovalGallery } from '../../tools/approval-gallery/main';
+import { APPROVAL_GALLERY_SCENARIOS } from '../../tools/approval-gallery/scenarios';
 
 afterEach(cleanup);
 
@@ -10,7 +11,7 @@ describe('approval gallery', () => {
   it('renders and switches the real approval surface with inert actions', async () => {
     render(<ApprovalGallery />);
 
-    expect(await screen.findByRole('heading', { name: 'Send bitcoin?' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Sign this transaction?' })).toBeInTheDocument();
     expect(screen.getByRole('navigation', { name: 'Approval scenarios' })).toBeInTheDocument();
     const summary = screen.getByRole('region', { name: 'Transaction summary' });
     const destinations = screen.getByText('Destinations').parentElement;
@@ -26,6 +27,12 @@ describe('approval gallery', () => {
     expect(screen.queryByText('All outputs are fixed')).toBeNull();
     expect(screen.queryByText('Fixed')).toBeNull();
     expect(within(summary).getByText(/exact fee for this transaction/iu)).toBeInTheDocument();
+    const reviewBody = screen.getByTestId('approval-review-body');
+    const decisionBar = screen.getByTestId('approval-decision-bar');
+    expect(reviewBody).not.toContainElement(decisionBar);
+    expect(within(decisionBar).getByRole('button', { name: 'Reject' })).toBeInTheDocument();
+    expect(within(decisionBar).getByRole('button', { name: 'Sign transaction' }))
+      .toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: /^Connect/u }));
     expect(await screen.findByRole('heading', { name: 'Connect this site?' })).toBeInTheDocument();
@@ -60,9 +67,13 @@ describe('approval gallery', () => {
     expect(within(marketplaceSummary).queryByText('Marketplace fee')).toBeNull();
     expect(within(marketplaceSummary).queryByText('Creator royalty')).toBeNull();
     expect(within(marketplaceSummary).queryByText('Miner fee')).toBeNull();
-    expect(screen.getByText('Some outputs can change')).toBeInTheDocument();
+    expect(screen.getByTestId('approval-signature-rules')).toHaveTextContent(
+      'SINGLE|ANYONECANPAY',
+    );
     expect(screen.getByText('Fixed')).toBeInTheDocument();
-    expect(screen.getByText('Can change')).toBeInTheDocument();
+    expect(screen.getByTestId('approval-signature-rules')).toHaveTextContent(
+      'The final network fee can change.',
+    );
     expect(screen.queryByText('All outputs are fixed')).toBeNull();
 
     await userEvent.click(screen.getByRole('button', { name: /Fee warning/iu }));
@@ -76,14 +87,35 @@ describe('approval gallery', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(/protected sats would pay the fee/iu);
     expect(screen.getByTestId('approval-approve')).toBeDisabled();
 
-    await userEvent.click(screen.getByRole('button', { name: /Advanced PSBT/iu }));
+    await userEvent.click(screen.getByRole('button', { name: /Custom transaction/iu }));
     expect(await screen.findByRole('heading', { name: 'Sign this transaction?' }))
       .toBeInTheDocument();
-    expect(screen.getByRole('alert')).toHaveTextContent('Advanced request');
+    expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.queryByText('All outputs are fixed')).toBeNull();
 
     await userEvent.click(screen.getByRole('button', { name: 'Reject' }));
     expect(await screen.findByText('Rejection previewed — nothing was sent.'))
       .toBeInTheDocument();
+  });
+
+  it('keeps decisions separate from scrolling review content in every approval scenario', async () => {
+    render(<ApprovalGallery />);
+    const scenarioButtons = within(screen.getByRole('navigation', { name: 'Approval scenarios' }))
+      .getAllByRole('button');
+
+    for (const [index, scenario] of APPROVAL_GALLERY_SCENARIOS.entries()) {
+      await userEvent.click(scenarioButtons[index]!);
+
+      if (scenario.providerError) {
+        expect(screen.queryByTestId('approval-decision-bar')).toBeNull();
+        continue;
+      }
+
+      const reviewBody = await screen.findByTestId('approval-review-body');
+      const decisionBar = screen.getByTestId('approval-decision-bar');
+      expect(reviewBody).not.toContainElement(decisionBar);
+      expect(within(decisionBar).getByTestId('approval-reject')).toBeInTheDocument();
+      expect(within(decisionBar).getByTestId('approval-approve')).toBeInTheDocument();
+    }
   });
 });

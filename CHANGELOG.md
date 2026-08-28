@@ -3,6 +3,21 @@
 Notable user-facing changes to Drey are recorded here. For earlier releases,
 see the production release tags in the repository.
 
+## 0.14.16
+
+### Added
+
+- Support atomic marketplace PSBT groups, including linked listing graphs,
+  shared-funding alternatives, and exact sign-only zero-fee parents.
+- Show concise signature rules, maximum debit, fee exposure, and mutually
+  exclusive outcomes before signing.
+
+### Security
+
+- Validate and revalidate the complete group before releasing any signature,
+  preserve marketplace replay/order records, and return every result or none.
+- Consume `@drey/core` v0.19.1 and bind its reproducible recovery source digest.
+
 ## 0.14.12
 
 ### Changed

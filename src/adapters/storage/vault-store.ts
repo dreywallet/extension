@@ -35,7 +35,6 @@ export interface WalletConfig {
   version: 2;
   idleTimeoutMs: number;
   highSecurityMode: boolean;
-  advancedPsbtSigning: boolean;
   activeAccounts: Record<string, number>;
 }
 
@@ -50,7 +49,6 @@ export const DEFAULT_CONFIG: WalletConfig = {
   version: 2,
   idleTimeoutMs: IDLE_TIMEOUT_MS.default,
   highSecurityMode: false,
-  advancedPsbtSigning: false,
   activeAccounts: {},
 };
 
@@ -77,23 +75,31 @@ const configSchema = z
       z.literal(IDLE_TIMEOUT_MS.oneWeek),
     ]),
     highSecurityMode: z.boolean(),
-    advancedPsbtSigning: z.boolean(),
     activeAccounts: z.record(z.number().int().min(0).max(MAX_ACCOUNT_INDEX)),
   })
   .strict();
+
+const legacyConfigV2Schema = configSchema.extend({
+  advancedPsbtSigning: z.boolean(),
+}).strict();
 
 export async function loadConfig(area: StorageArea): Promise<WalletConfig> {
   const raw = await getJson<unknown>(area, CONFIG_KEY);
   if (raw === undefined) return DEFAULT_CONFIG;
   const parsed = configSchema.safeParse(raw);
   if (parsed.success) return parsed.data;
+  const legacyV2 = legacyConfigV2Schema.safeParse(raw);
+  if (legacyV2.success) {
+    const { advancedPsbtSigning: _ignored, ...config } = legacyV2.data;
+    void _ignored;
+    return config;
+  }
   const legacy = configV1Schema.safeParse(raw);
   if (legacy.success) {
     const migrated: WalletConfig = {
       version: 2,
       idleTimeoutMs: legacy.data.idleTimeoutMs,
       highSecurityMode: legacy.data.highSecurityMode,
-      advancedPsbtSigning: false,
       activeAccounts: {},
     };
     await setJson(area, CONFIG_KEY, migrated);

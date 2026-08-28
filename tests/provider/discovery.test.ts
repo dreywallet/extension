@@ -4,7 +4,11 @@ import {
   DREY_PROVIDER_ICON,
   type ProviderDiscoveryWindow,
 } from '../../src/provider/discovery';
-import { createDreyProvider, type ProviderTransport } from '../../src/provider/facade';
+import {
+  BITCOIN_SIGN_PSBT_V2_METHOD,
+  createDreyProvider,
+  type ProviderTransport,
+} from '../../src/provider/facade';
 import { PROVIDER_METHODS } from '@drey/core/provider/registry';
 
 function provider() {
@@ -32,7 +36,7 @@ describe('WBIP004 and de-facto provider discovery metadata', () => {
         'https://chromewebstore.google.com/detail/drey/kngidlmmbfmnoeimngkajdlbdenlhgof',
       googlePlayStoreUrl:
         'https://play.google.com/store/apps/details?id=net.squirrelsystems.drey',
-      methods: [...PROVIDER_METHODS],
+      methods: [...PROVIDER_METHODS, BITCOIN_SIGN_PSBT_V2_METHOD],
     }]);
     expect(target.wbip_providers).toEqual([{
       id: 'drey',
@@ -43,7 +47,7 @@ describe('WBIP004 and de-facto provider discovery metadata', () => {
         'https://chromewebstore.google.com/detail/drey/kngidlmmbfmnoeimngkajdlbdenlhgof',
       googlePlayStoreUrl:
         'https://play.google.com/store/apps/details?id=net.squirrelsystems.drey',
-      methods: [...PROVIDER_METHODS],
+      methods: [...PROVIDER_METHODS, BITCOIN_SIGN_PSBT_V2_METHOD],
     }]);
     expect(Object.keys((target.wbip_providers as Record<string, unknown>[])[0]!).sort())
       .toEqual(['chromeWebStoreUrl', 'googlePlayStoreUrl', 'icon', 'id', 'methods', 'name', 'webUrl']);

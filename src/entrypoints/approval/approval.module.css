@@ -1,13 +1,39 @@
 .card {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  height: 100vh;
   margin: 0 auto;
   max-width: 42rem;
   min-width: 0;
   min-height: 100vh;
-  padding: var(--space-4);
+  overflow: hidden;
   width: 100%;
+}
+
+.statusCard,
+.reviewBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+}
+
+.statusCard {
+  height: auto;
+  min-height: 100vh;
+  overflow: auto;
+}
+
+.reviewBody {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.reviewBody > * {
+  flex-shrink: 0;
 }
 
 .card h1 {
@@ -82,6 +108,162 @@
   overflow: hidden;
 }
 
+.transactionGroup {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.groupRelease {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  margin: 0;
+}
+
+.sharedFunding {
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: .2rem;
+  padding: var(--space-2);
+}
+
+.sharedFunding strong {
+  font-size: var(--text-sm);
+}
+
+.sharedFunding span {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+
+.groupOutcomes,
+.signatureRules {
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+}
+
+.groupOutcomes h3,
+.signatureRules h3 {
+  color: var(--color-text-muted);
+  font-family: var(--font-display);
+  font-size: var(--text-xs);
+  letter-spacing: .06em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.outcomeGroups {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.outcomeGroup {
+  border-top: 1px solid var(--color-border);
+  display: grid;
+  gap: var(--space-1);
+  padding-top: var(--space-2);
+}
+
+.outcomeGroup:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.outcomeGroup h4 {
+  font-size: var(--text-sm);
+  margin: 0;
+}
+
+.outcomeGroup > p {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  margin: var(--space-1) 0 0;
+}
+
+.groupOutcomes ul,
+.signatureRuleItems {
+  display: grid;
+  gap: var(--space-2);
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+}
+
+.outcomeGroup ul {
+  margin-top: var(--space-1);
+}
+
+.groupOutcomes li,
+.signatureRuleItems article {
+  border-top: 1px solid var(--color-border);
+  display: grid;
+  gap: .25rem;
+  padding-top: var(--space-2);
+}
+
+.groupOutcomes li:first-child,
+.signatureRuleItems article:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.groupOutcomes li span,
+.groupOutcomes > p,
+.signatureRuleItems li,
+.signatureRuleItems p {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+
+.groupOutcomes > p {
+  margin: var(--space-2) 0 0;
+}
+
+.signatureRules {
+  margin-top: var(--space-2);
+}
+
+.deferredFee {
+  display: grid;
+  gap: .2rem;
+  margin: var(--space-2) 0 0;
+}
+
+.deferredFee span {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+
+.signatureRuleHeading {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  justify-content: space-between;
+}
+
+.signatureRuleHeading code {
+  overflow-wrap: anywhere;
+}
+
+.signatureRuleItems ul {
+  margin: 0;
+  padding-left: var(--space-4);
+}
+
+.signatureRuleItems p {
+  margin: 0;
+}
+
 .transactionSummary h2,
 .walletContext h2 {
   color: var(--color-text-muted);
@@ -133,6 +315,35 @@
 
 .feeAmount dd {
   font-size: 1rem;
+}
+
+.changeableSummary {
+  background: color-mix(in srgb, var(--color-warning) 7%, var(--color-surface));
+  border: 1px solid color-mix(in srgb, var(--color-warning) 55%, var(--color-border));
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+}
+
+.changeableSummary > strong {
+  font-size: var(--text-sm);
+}
+
+.changeableSummary dl {
+  display: grid;
+  gap: .2rem;
+  margin: var(--space-1) 0 0;
+}
+
+.changeableSummary dl > div {
+  display: flex;
+  font-size: var(--text-sm);
+  gap: var(--space-2);
+  justify-content: space-between;
+}
+
+.changeableSummary dd {
+  color: var(--color-text-muted);
+  margin: 0;
 }
 
 .feeAmount small {
@@ -400,14 +611,19 @@
   white-space: pre-wrap;
 }
 
-.actions {
+.decisionBar {
   background: var(--color-bg);
   border-top: 1px solid var(--color-border);
+  box-shadow: 0 -1rem 2rem color-mix(in srgb, var(--color-bg) 88%, transparent);
+  flex: none;
+  padding: var(--space-2) var(--space-4) var(--space-4);
+  position: relative;
+  z-index: 2;
+}
+
+.actions {
   display: flex;
   gap: var(--space-2);
-  justify-content: flex-end;
-  margin-top: var(--space-1);
-  padding-top: var(--space-2);
 }
 
 .actionHelp {
@@ -419,7 +635,7 @@
 
 .actions > * {
   flex: 1;
-  min-width: 8rem;
+  min-width: 0;
 }
 
 @media (max-width: 21rem) {
@@ -443,5 +659,9 @@
 
   .walletContext dl > div:first-child {
     border-top: 0;
+  }
+
+  .decisionBar {
+    padding-inline: var(--space-3);
   }
 }

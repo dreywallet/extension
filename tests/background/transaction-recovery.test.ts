@@ -23,6 +23,7 @@ import { base64ToBytes, bytesToBase64, hexToBytes } from '@drey/core/domain/vaul
 import { SigHash, Transaction } from '@scure/btc-signer';
 import { installTestCryptoProvider } from '../helpers/install-crypto-provider';
 import { signAndValidatePlan, validateSignedTransactionHex } from '@drey/core/domain/transactions/signing';
+import { providerPsbtUnsignedTxid } from '@drey/core/domain/transactions/provider-psbt-batch';
 import type { TransactionPlanRequest } from '@drey/core/messaging/ops';
 import { makeHarness } from './service-helpers';
 
@@ -627,7 +628,7 @@ describe('independent provider PSBT batch execution', () => {
     const { vaultId } = await harness.service.restore({
       name: 'batch signing', password: PASSWORD, mnemonic: MNEMONIC,
     });
-    const unlocked = await harness.service.unlock({ vaultId, password: PASSWORD });
+    await harness.service.unlock({ vaultId, password: PASSWORD });
     const session = await getSession(harness.session);
     if (!session) throw new Error('missing session');
     const dek = base64ToBytes(session.dekB64);
@@ -673,13 +674,6 @@ describe('independent provider PSBT batch execution', () => {
       },
       approvalGeneration: 9,
     };
-    await expect(harness.service.providerPreparePsbtBatch(batchRequest))
-      .rejects.toMatchObject({ code: 'ERR_UNSAFE_TRANSACTION' });
-    await harness.service.setConfig({
-      expectedVaultId: vaultId,
-      expectedSessionId: unlocked.sessionId,
-      advancedPsbtSigning: true,
-    });
     const batch = await harness.service.providerPreparePsbtBatch(batchRequest);
     expect(batch.items).toHaveLength(2);
     expect(batch.aggregate).toMatchObject({ inputs: 2, outputs: 2 });
@@ -700,6 +694,34 @@ describe('independent provider PSBT batch execution', () => {
       independent.push(await harness.service.providerSignPreparedPsbt(item.plan, item.requestedInputIndexes));
     }
     expect(signed.map((item) => item.psbtBase64)).toEqual(independent.map((item) => item.psbtBase64));
+
+    const group = await harness.service.providerPreparePsbtGroup({
+      items: psbts.map((psbtBase64, index) => ({
+        nodeId: `transaction-${index + 1}`,
+        psbtBase64,
+        inputsToSign: [{ address: input.address, signingIndexes: [0], sigHash: 1 as const }],
+        expectedUnsignedTxid: providerPsbtUnsignedTxid(batch.items[index]!.plan),
+      })),
+      binding: batchRequest.binding,
+      approvalGeneration: 10,
+    });
+    expect(group.signatureRelease).toBe('all_or_nothing');
+    expect(group.topology.independent).toBe(true);
+    expect(group.items.map((item) => item.expectedUnsignedTxid)).toEqual(
+      batch.items.map((item) => providerPsbtUnsignedTxid(item.plan)),
+    );
+    await expect(harness.service.providerRevalidatePreparedPsbtGroup(group)).resolves.toBeUndefined();
+
+    let groupGuardChecks = 0;
+    await expect(harness.service.providerSignPreparedPsbtGroup(group, () => {
+      groupGuardChecks += 1;
+      if (groupGuardChecks === 3) throw new Error('group approval became stale');
+    })).rejects.toThrow(/group approval became stale/u);
+    expect(groupGuardChecks).toBe(3);
+
+    const groupSigned = await harness.service.providerSignPreparedPsbtGroup(group);
+    expect(groupSigned).toHaveLength(2);
+    expect(groupSigned.map((item) => item.psbtBase64)).toEqual(signed.map((item) => item.psbtBase64));
   });
 });
 

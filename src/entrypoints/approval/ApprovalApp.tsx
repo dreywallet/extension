@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { APPROVAL_PORT_NAME, approvalSnapshotSchema, type ApprovalSnapshot } from '../../provider/approval';
+import {
+  APPROVAL_PORT_NAME,
+  approvalSnapshotSchema,
+  type ApprovalSnapshot,
+} from '../../provider/approval';
+import { providerPsbtApprovalExplanationSchema } from
+  '@drey/core/domain/transactions/provider-psbt-approval';
 import { PROVIDER_BRIDGE_VERSION } from '../../provider/bridge';
 import { Button } from '../../ui/components/Button';
 import { Field } from '../../ui/components/Field';
@@ -9,6 +15,10 @@ import { BrandMark } from '../../ui/components/BrandMark';
 import { useI18n, type MessageKey } from '../../ui/i18n';
 import styles from './approval.module.css';
 import { makeRpc } from '../../adapters/rpc-client';
+import {
+  ProviderSighashEffects,
+  ProviderTransactionGroupReview,
+} from './ProviderTransactionGroupReview';
 
 function approvalCopy(
   method: string,
@@ -96,8 +106,9 @@ function approvalAction(
     case 'signMultipleMessages':
       return t(itemCount === 1 ? 'approvalUi.messageBatch.signOne' : 'approvalUi.messageBatch.sign');
     case 'signPsbt':
-    case 'signMultipleTransactions':
       return t('approval.action.signTransaction');
+    case 'signMultipleTransactions':
+      return t('approval.action.signTransactions');
     case 'sendTransfer':
     case 'ord_sendInscriptions':
       return t('approval.action.signAndSend');
@@ -137,11 +148,169 @@ function showHiddenTextFormatting(message: string): string {
   );
 }
 
+type ApprovalBatchReview = Extract<
+  NonNullable<ApprovalSnapshot['request']>['review'],
+  { kind: 'batch' }
+>;
+
+function approvalTechnicalDetails(
+  details: Record<string, unknown>,
+  options: { omitTransactions?: boolean } = {},
+): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(details).flatMap(([key, value]) => {
+    if (key === 'authority' || key === 'inscriptions' ||
+        key === 'requiresPreviewAcknowledgement' ||
+        (options.omitTransactions === true && key === 'transactions')) return [];
+    if (key === 'security' && value !== null && typeof value === 'object' && !Array.isArray(value)) {
+      return [[key, Object.fromEntries(Object.entries(value).filter(
+        ([securityKey]) => securityKey !== 'rawPsbtHex',
+      ))]];
+    }
+    return [[key, value]];
+  }));
+}
+
+function BatchTransactionDetails(props: {
+  transaction: ApprovalBatchReview['transactions'][number];
+  transactionIndex: number;
+  transactionCount: number;
+  itemDetails: Record<string, unknown> | null;
+  inscriptionReview: ReturnType<typeof parseInscriptionReview>;
+  approvalExplanation: ReturnType<typeof providerPsbtApprovalExplanationSchema.safeParse>;
+  approvalAvailable: boolean;
+  acknowledgementChecked: boolean;
+  onAcknowledgementChange: (checked: boolean) => void;
+}): ReactNode {
+  const { t, lang } = useI18n();
+  const [open, setOpen] = useState(false);
+  const transaction = props.transaction;
+  const formatSats = (value: string): string =>
+    `${BigInt(value).toLocaleString(lang)} sats`;
+
+  return (
+    <details className={styles['technical']}
+      onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary>{t('approvalUi.batch.transaction', {
+        number: props.transactionIndex + 1,
+        count: props.transactionCount,
+      })}</summary>
+      {open ? (
+        <BatchTransactionDetailsContent
+          transaction={transaction}
+          itemDetails={props.itemDetails}
+          inscriptionReview={props.inscriptionReview}
+          approvalExplanation={props.approvalExplanation}
+          approvalAvailable={props.approvalAvailable}
+          acknowledgementChecked={props.acknowledgementChecked}
+          onAcknowledgementChange={props.onAcknowledgementChange}
+          formatSats={formatSats}
+        />
+      ) : null}
+    </details>
+  );
+}
+
+function BatchTransactionDetailsContent(props: {
+  transaction: ApprovalBatchReview['transactions'][number];
+  itemDetails: Record<string, unknown> | null;
+  inscriptionReview: ReturnType<typeof parseInscriptionReview>;
+  approvalExplanation: ReturnType<typeof providerPsbtApprovalExplanationSchema.safeParse>;
+  approvalAvailable: boolean;
+  acknowledgementChecked: boolean;
+  onAcknowledgementChange: (checked: boolean) => void;
+  formatSats: (value: string) => string;
+}): ReactNode {
+  const { t } = useI18n();
+  const { transaction, itemDetails } = props;
+  const deferredFee = itemDetails?.['deferredZeroFee'] === true;
+  const itemWarnings = Array.isArray(itemDetails?.['warnings'])
+    ? itemDetails['warnings'].flatMap((warning) =>
+        warning !== null && typeof warning === 'object' && 'code' in warning &&
+        typeof warning.code === 'string' ? [warning.code] : [])
+    : [];
+  const itemSatFlow = parseSatFlowModel(itemDetails);
+  const itemTechnical = itemDetails === null ? null : approvalTechnicalDetails(itemDetails);
+
+  return (
+    <>
+      <div className={styles['transactionSummary']}>
+        <dl className={styles['amountSummary']}>
+          <div className={styles['primaryAmount']}>
+            <dt>{BigInt(transaction.netWalletDebitSats) >= 0n
+              ? t('approvalUi.leavingWallet') : t('approvalUi.enteringWallet')}</dt>
+            <dd>{props.formatSats(BigInt(transaction.netWalletDebitSats) >= 0n
+              ? transaction.netWalletDebitSats : transaction.netWalletDebitSats.slice(1))}</dd>
+          </div>
+          <div className={styles['feeAmount']}>
+            <dt>{deferredFee
+              ? t('approvalUi.fee.deferredLabel')
+              : transaction.authorization === 'partial'
+                ? t('approvalUi.fee.limitedLabel') : t('approval.networkFee')}</dt>
+            <dd>{props.formatSats(transaction.feeSats)}</dd>
+            <small>{deferredFee
+              ? t('approvalUi.fee.deferredBody')
+              : transaction.authorization === 'partial'
+                ? t('approvalUi.fee.limitedBody')
+                : t('approvalUi.fee.exactBody')}</small>
+          </div>
+        </dl>
+      </div>
+      <ul>
+        {transaction.outputs.map((output, outputIndex) => (
+          <li key={output.index}>
+            <div className={styles['destinationIdentity']}>
+              <code>{String(output.address ?? output.ownership ??
+                t('approval.output', { number: outputIndex + 1 }))}</code>
+              <span>{t(`approval.role.${output.role}` as MessageKey)}</span>
+            </div>
+            <div className={styles['outputAmount']}>
+              <strong>{props.formatSats(output.valueSats)}</strong>
+              <span className={`${styles['commitmentStatus']} ${output.committed
+                ? styles['commitmentStatusCommitted'] : styles['commitmentStatusChangeable']}`}>
+                {output.committed
+                  ? t('approvalUi.output.committed') : t('approvalUi.output.changeable')}
+              </span>
+            </div>
+          </li>
+        ))}
+      </ul>
+      {transaction.authorization === 'partial' ? (
+        <div role="alert" className={styles['warning']}>
+          <strong>{t('approvalUi.authorization.partial.title')}</strong>
+          <p>{t('approvalUi.authorization.partial.body')}</p>
+        </div>
+      ) : null}
+      {itemWarnings.length > 0 ? (
+        <div role="alert" className={styles['warning']}>
+          <strong>{t('approvalUi.warning.title')}</strong>
+          <ul>{itemWarnings.map((warning) =>
+            <li key={warning}>{warningCopy(warning, t)}</li>)}</ul>
+        </div>
+      ) : null}
+      {itemSatFlow === null ? null : <SatFlow model={itemSatFlow} />}
+      <InscriptionReview
+        items={props.inscriptionReview.items}
+        compact
+        acknowledgementChecked={props.acknowledgementChecked}
+        onAcknowledgementChange={props.onAcknowledgementChange}
+      />
+      {props.approvalAvailable && props.approvalExplanation.success ? (
+        <ProviderSighashEffects
+          explanation={props.approvalExplanation.data}
+          deferredFee={deferredFee}
+        />
+      ) : null}
+      <pre className={styles['details']}>{JSON.stringify(itemTechnical, null, 2)}</pre>
+    </>
+  );
+}
+
 export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {}): ReactNode {
   const { t, lang } = useI18n();
   const portRef = useRef<chrome.runtime.Port | null>(null);
   const requestNonceRef = useRef<string | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const reviewBodyRef = useRef<HTMLDivElement>(null);
   const [snapshot, setSnapshot] = useState<ApprovalSnapshot | null>(null);
   const [snapshotInvalid, setSnapshotInvalid] = useState(false);
   const [password, setPassword] = useState('');
@@ -222,9 +391,14 @@ export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {})
       setApprovalReady(false);
       return undefined;
     }
-    const scrollingElement = document.scrollingElement ?? document.documentElement;
-    scrollingElement.scrollTop = 0;
-    scrollingElement.scrollLeft = 0;
+    const reviewBody = reviewBodyRef.current;
+    if (reviewBody) {
+      reviewBody.scrollTop = 0;
+      reviewBody.scrollLeft = 0;
+    }
+    const documentScroller = document.scrollingElement ?? document.documentElement;
+    documentScroller.scrollTop = 0;
+    documentScroller.scrollLeft = 0;
     headingRef.current?.focus();
     const remaining = approveAfter - Date.now();
     if (remaining <= 0) {
@@ -256,7 +430,7 @@ export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {})
   const request = snapshot?.request;
   if (snapshotInvalid) {
     return (
-      <main className={styles['card']}>
+      <main className={`${styles['card']} ${styles['statusCard']}`}>
         <BrandMark compact />
         <h1>{t('approval.reviewUnavailable.title')}</h1>
         <p role="alert" className={styles['warning']}>{t('approval.reviewUnavailable.body')}</p>
@@ -265,7 +439,12 @@ export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {})
     );
   }
   if (!request) {
-    return <main className={styles['card']}><BrandMark compact /><p>{t('approval.waiting')}</p></main>;
+    return (
+      <main className={`${styles['card']} ${styles['statusCard']}`}>
+        <BrandMark compact />
+        <p>{t('approval.waiting')}</p>
+      </main>
+    );
   }
   const details = request.details && typeof request.details === 'object'
     ? request.details as Record<string, unknown>
@@ -273,8 +452,6 @@ export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {})
   const security = details?.['security'] && typeof details['security'] === 'object'
     ? details['security'] as Record<string, unknown>
     : null;
-  const advancedPsbt = (request.method === 'signPsbt' && security?.['requiresAdvanced'] === true) ||
-    (request.method === 'signMultipleTransactions' && request.confirmationPhrase === 'SIGN PSBT');
   const batchTransactionDetails = Array.isArray(details?.['transactions'])
     ? details['transactions'].filter((item): item is Record<string, unknown> =>
         item !== null && typeof item === 'object' && !Array.isArray(item))
@@ -303,6 +480,35 @@ export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {})
     : null;
   const positionTransferBuyer = communityPositionTransfer?.['role'] === 'buyer';
   const communityReview = communityPositionTransfer ?? communitySaleBuyer ?? communitySale ?? community;
+  const parsedSharedApproval = providerPsbtApprovalExplanationSchema.safeParse(
+    details?.['approvalExplanation'],
+  );
+  const sharedApproval = parsedSharedApproval.success ? parsedSharedApproval.data : null;
+  const batchSharedApprovals = batchTransactionDetails.map((item) =>
+    providerPsbtApprovalExplanationSchema.safeParse(item['approvalExplanation']));
+  const sharedApprovalRequired = details?.['approvalModelVersion'] === 1 &&
+    ((request.method === 'signPsbt' && communityReview === null) ||
+      request.method === 'signMultipleTransactions');
+  const sharedApprovalValid = !sharedApprovalRequired ||
+    (request.method === 'signMultipleTransactions'
+      ? batchSharedApprovals.length === batchTransactionDetails.length &&
+        batchSharedApprovals.every((item) => item.success)
+      : sharedApproval !== null);
+  const validBatchApprovalEntries = batchSharedApprovals.flatMap((item, index) =>
+    item.success ? [{
+      explanation: item.data,
+      deferredFee: batchTransactionDetails[index]?.['deferredZeroFee'] === true,
+    }] : []);
+  const validBatchSharedApprovals = validBatchApprovalEntries.map((item) => item.explanation);
+  const batchDeferredFee = batchTransactionDetails.some((item) => item['deferredZeroFee'] === true);
+  const flexibleApproval = sharedApproval?.presentation === 'flexible' ||
+    validBatchSharedApprovals.some((item) => item.presentation === 'flexible');
+  const flexibleInputsChangeable = sharedApproval?.commitments.inputs === 'changeable' ||
+    validBatchSharedApprovals.some((item) => item.commitments.inputs === 'changeable');
+  const flexibleOutputsChangeable = sharedApproval?.commitments.outputs === 'changeable' ||
+    validBatchSharedApprovals.some((item) => item.commitments.outputs === 'changeable');
+  const flexibleFeeChangeable = sharedApproval?.commitments.fee === 'changeable' ||
+    validBatchSharedApprovals.some((item) => item.commitments.fee === 'changeable');
   const communityUnits = Array.isArray(communityReview?.['units'])
     ? communityReview['units'].filter((unit): unit is number =>
         typeof unit === 'number' && Number.isInteger(unit) && unit >= 0 && unit <= 99)
@@ -320,7 +526,12 @@ export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {})
         claim.kind === 'buyer_total' || claim.kind === 'guaranteed_proceeds')
     : undefined;
   const feeReviewLimited = review.kind === 'transaction' &&
-    (review.authorization === 'partial' || marketplace?.['flexible'] === true || genericListing !== null);
+    (sharedApproval?.commitments.fee === 'changeable' || review.authorization === 'partial');
+  const deferredFee = review.kind === 'transaction' && details?.['deferredZeroFee'] === true;
+  const surfaceSignatureRules = (review.kind === 'transaction' &&
+    (sharedApproval?.presentation === 'flexible' || deferredFee)) ||
+    (review.kind === 'batch' && sharedApprovalValid && validBatchSharedApprovals.length > 0 &&
+      (review.linked === true || flexibleApproval || batchDeferredFee));
   const showOutputCommitmentStatus = outputs.some((output) => !output.committed);
   const protectedFeeSats = protectedFeeExposure(security) + batchTransactionDetails.reduce(
     (total, item) => total + protectedFeeExposure(
@@ -369,13 +580,12 @@ export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {})
     `${BigInt(value).toLocaleString(lang)} sats`;
   const technicalDetails = details === null
     ? request.details
-    : Object.fromEntries(Object.entries(details).filter(([key]) =>
-        key !== 'authority' && key !== 'inscriptions' && key !== 'requiresPreviewAcknowledgement' &&
-        key !== 'transactions'));
+    : approvalTechnicalDetails(details, { omitTransactions: true });
 
   return (
     <main className={styles['card']}>
-      <BrandMark compact />
+      <div className={styles['reviewBody']} ref={reviewBodyRef} data-testid="approval-review-body">
+        <BrandMark compact />
       {backupDeferred ? (
         <section className={styles['backupReminder']} role="alert" data-testid="backup-reminder">
           <strong>{t('backup.reminder.title')}</strong>
@@ -388,23 +598,24 @@ export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {})
       <header className={styles['requestHeader']}>
         <p className={styles['eyebrow']}>{t('approval.eyebrow')}</p>
         <h1 ref={headingRef} tabIndex={-1} className={styles['requestTitle']}>
-          {review.kind === 'batch'
-            ? t(review.transactionCount === 1
-              ? 'approvalUi.batch.titleOne' : 'approvalUi.batch.title',
-            { count: review.transactionCount })
+          {communityPositionTransfer
+            ? t(positionTransferBuyer
+              ? 'approval.community.positionBuyerTitle'
+              : 'approval.community.positionOwnerTitle')
+            : communitySaleBuyer ? t('approval.community.offerTitle')
+            : communitySale ? t('approval.community.saleTitle')
+            : community ? t('approval.community.title')
+            : marketplace ? marketplaceTitle(marketplace['action'], t)
+            : genericListing ? t('approvalUi.genericListing.title')
+            : review.kind === 'batch'
+              ? t(review.transactionCount === 1
+                ? 'approvalUi.batch.titleOne' : 'approvalUi.batch.title',
+              { count: review.transactionCount })
             : review.kind === 'message_batch'
               ? t(review.messageCount === 1
                 ? 'approvalUi.messageBatch.titleOne' : 'approvalUi.messageBatch.title',
               { count: review.messageCount })
-            : communityPositionTransfer
-            ? t(positionTransferBuyer
-              ? 'approval.community.positionBuyerTitle'
-              : 'approval.community.positionOwnerTitle') :
-            communitySaleBuyer ? t('approval.community.offerTitle') :
-            communitySale ? t('approval.community.saleTitle') :
-            community ? t('approval.community.title') :
-            marketplace ? marketplaceTitle(marketplace['action'], t) :
-            genericListing ? t('approvalUi.genericListing.title') : copy.title}
+            : copy.title}
         </h1>
         <div className={styles['requester']}>
           <span>{t('approvalUi.requestedBy')}</span>
@@ -412,7 +623,7 @@ export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {})
           {request.origin !== request.unicodeOrigin ? <code>{request.origin}</code> : null}
         </div>
       </header>
-      {review.kind === 'transaction' ? null : (
+      {review.kind === 'transaction' || review.kind === 'batch' ? null : (
         <p className={styles['description']}>{copy.description}</p>
       )}
       {review.kind === 'transaction' && communityReview ? (
@@ -436,6 +647,8 @@ export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {})
             <div className={styles['primaryAmount']}>
               <dt>{primaryEconomicClaim
                 ? t(`approval.economics.${primaryEconomicClaim.kind}` as MessageKey)
+                : sharedApproval?.presentation === 'flexible'
+                  ? t('approval.psbt.maximumDebit')
                 : BigInt(review.netWalletDebitSats) >= 0n
                   ? t('approvalUi.leavingWallet')
                   : t('approvalUi.enteringWallet')}</dt>
@@ -445,36 +658,60 @@ export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {})
                   : review.netWalletDebitSats.slice(1)))}</dd>
             </div>
             <div className={styles['feeAmount']}>
-              <dt>{feeReviewLimited ? t('approvalUi.fee.limitedLabel') : t('approval.networkFee')}</dt>
+              <dt>{deferredFee
+                ? t('approvalUi.fee.deferredLabel')
+                : feeReviewLimited
+                  ? t('approvalUi.fee.limitedLabel')
+                  : t('approval.networkFee')}</dt>
               <dd>{formatSats(review.feeSats)}</dd>
-              <small>{feeReviewLimited
-                ? t('approvalUi.fee.limitedBody')
-                : t('approvalUi.fee.exactBody')}</small>
+              <small>{deferredFee
+                ? t('approvalUi.fee.deferredBody')
+                : feeReviewLimited
+                  ? t('approvalUi.fee.limitedBody')
+                  : t('approvalUi.fee.exactBody')}</small>
             </div>
           </dl>
         </section>
       ) : null}
       {review.kind === 'batch' ? (
-        <section className={styles['transactionSummary']} aria-labelledby="batch-summary-heading">
-          <h2 id="batch-summary-heading">{t('approvalUi.batch.summary')}</h2>
-          <p>{t(review.transactionCount === 1
-            ? 'approvalUi.batch.countOne' : 'approvalUi.batch.count',
-          { count: review.transactionCount })}</p>
-          <p>{t('approvalUi.batch.reviewEvery')}</p>
-          <dl className={styles['amountSummary']}>
-            <div className={styles['primaryAmount']}>
-              <dt>{BigInt(review.netWalletDebitSats) >= 0n
-                ? t('approvalUi.leavingWallet') : t('approvalUi.enteringWallet')}</dt>
-              <dd>{formatSats(BigInt(review.netWalletDebitSats) >= 0n
-                ? review.netWalletDebitSats : review.netWalletDebitSats.slice(1))}</dd>
-            </div>
-            <div className={styles['feeAmount']}>
-              <dt>{t('approvalUi.batch.feeExposure')}</dt>
-              <dd>{formatSats(review.feeExposureSats)}</dd>
-            </div>
-          </dl>
-        </section>
+        <ProviderTransactionGroupReview presentation={review.linked === true &&
+          review.maximumWalletDebitSats !== undefined &&
+          review.maximumFeeExposureSats !== undefined &&
+          review.alternativeOutcomeGroups !== undefined
+          ? {
+              kind: 'linked',
+              transactionCount: review.transactionCount,
+              maximumWalletDebitSats: review.maximumWalletDebitSats,
+              maximumNetworkFeeSats: review.maximumFeeExposureSats,
+              branchEconomicsExact: review.branchEconomicsExact ?? false,
+              sharedFundingConflictCount: review.sharedFundingConflictCount ?? 0,
+              outcomeGroups: review.alternativeOutcomeGroups.map((group, groupIndex) => ({
+                id: `${group.recovery.nodeId}:${groupIndex}`,
+                settlements: group.settlements.map((outcome, outcomeIndex) => ({
+                  id: `${outcome.nodeId}:settlement:${outcomeIndex}`,
+                  guaranteedWalletReturnSats: outcome.guaranteedWalletReturnSats,
+                  maximumWalletDebitSats: outcome.maximumWalletDebitSats,
+                })),
+                recovery: {
+                  id: `${group.recovery.nodeId}:recovery`,
+                  guaranteedWalletReturnSats: group.recovery.guaranteedWalletReturnSats,
+                  maximumWalletDebitSats: group.recovery.maximumWalletDebitSats,
+                },
+              })),
+            }
+          : {
+              kind: 'independent',
+              transactionCount: review.transactionCount,
+              netWalletDebitSats: review.netWalletDebitSats,
+              feeExposureSats: review.feeExposureSats,
+            }} />
       ) : null}
+      {review.kind === 'batch' && surfaceSignatureRules ? (
+          <ProviderSighashEffects explanations={validBatchApprovalEntries} />
+        ) : null}
+      {review.kind === 'transaction' && sharedApproval !== null && surfaceSignatureRules ? (
+          <ProviderSighashEffects explanation={sharedApproval} deferredFee={deferredFee} />
+        ) : null}
       {review.kind === 'message_batch' ? (
         <section className={styles['messageBatch']} aria-labelledby="message-batch-summary-heading">
           <h2 id="message-batch-summary-heading">
@@ -545,77 +782,20 @@ export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {})
             const itemDetails = batchTransactionDetails[transactionIndex] ?? null;
             const itemInscriptions = batchInscriptionReviews[transactionIndex]?.review ??
               parseInscriptionReview(undefined);
-            const itemWarnings = Array.isArray(itemDetails?.['warnings'])
-              ? itemDetails['warnings'].flatMap((warning) =>
-                  warning !== null && typeof warning === 'object' && 'code' in warning &&
-                  typeof warning.code === 'string' ? [warning.code] : [])
-              : [];
-            const itemTechnical = itemDetails === null ? null : Object.fromEntries(
-              Object.entries(itemDetails).filter(([key]) =>
-                key !== 'authority' && key !== 'inscriptions' && key !== 'requiresPreviewAcknowledgement'),
-            );
-            const itemSatFlow = parseSatFlowModel(itemDetails);
             return (
-              <details className={styles['technical']} key={transaction.index} open={transactionIndex === 0}>
-                <summary>{t('approvalUi.batch.transaction', {
-                  number: transactionIndex + 1,
-                  count: review.transactionCount,
-                })}</summary>
-                <div className={styles['transactionSummary']}>
-                  <dl className={styles['amountSummary']}>
-                    <div className={styles['primaryAmount']}>
-                      <dt>{BigInt(transaction.netWalletDebitSats) >= 0n
-                        ? t('approvalUi.leavingWallet') : t('approvalUi.enteringWallet')}</dt>
-                      <dd>{formatSats(BigInt(transaction.netWalletDebitSats) >= 0n
-                        ? transaction.netWalletDebitSats : transaction.netWalletDebitSats.slice(1))}</dd>
-                    </div>
-                    <div className={styles['feeAmount']}>
-                      <dt>{transaction.authorization === 'partial'
-                        ? t('approvalUi.fee.limitedLabel') : t('approval.networkFee')}</dt>
-                      <dd>{formatSats(transaction.feeSats)}</dd>
-                    </div>
-                  </dl>
-                </div>
-                <ul>
-                  {transaction.outputs.map((output, outputIndex) => (
-                    <li key={output.index}>
-                      <div className={styles['destinationIdentity']}>
-                        <code>{String(output.address ?? output.ownership ??
-                          t('approval.output', { number: outputIndex + 1 }))}</code>
-                        <span>{t(`approval.role.${output.role}` as MessageKey)}</span>
-                      </div>
-                      <div className={styles['outputAmount']}>
-                        <strong>{formatSats(output.valueSats)}</strong>
-                        <span className={`${styles['commitmentStatus']} ${output.committed
-                          ? styles['commitmentStatusCommitted'] : styles['commitmentStatusChangeable']}`}>
-                          {output.committed
-                            ? t('approvalUi.output.committed') : t('approvalUi.output.changeable')}
-                        </span>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-                {transaction.authorization === 'partial' ? (
-                  <div role="alert" className={styles['warning']}>
-                    <strong>{t('approvalUi.authorization.partial.title')}</strong>
-                    <p>{t('approvalUi.authorization.partial.body')}</p>
-                  </div>
-                ) : null}
-                {itemWarnings.length > 0 ? (
-                  <div role="alert" className={styles['warning']}>
-                    <strong>{t('approvalUi.warning.title')}</strong>
-                    <ul>{itemWarnings.map((warning) =>
-                      <li key={warning}>{warningCopy(warning, t)}</li>)}</ul>
-                  </div>
-                ) : null}
-                {itemSatFlow === null ? null : <SatFlow model={itemSatFlow} />}
-                <InscriptionReview
-                  items={itemInscriptions.items}
-                  acknowledgementChecked={previewUnavailableAcknowledged}
-                  onAcknowledgementChange={setPreviewUnavailableAcknowledged}
-                />
-                <pre className={styles['details']}>{JSON.stringify(itemTechnical, null, 2)}</pre>
-              </details>
+              <BatchTransactionDetails
+                key={`${request.requestNonce}:${transaction.index}`}
+                transaction={transaction}
+                transactionIndex={transactionIndex}
+                transactionCount={review.transactionCount}
+                itemDetails={itemDetails}
+                inscriptionReview={itemInscriptions}
+                approvalExplanation={batchSharedApprovals[transactionIndex] ??
+                  providerPsbtApprovalExplanationSchema.safeParse(undefined)}
+                approvalAvailable={sharedApprovalValid}
+                acknowledgementChecked={previewUnavailableAcknowledged}
+                onAcknowledgementChange={setPreviewUnavailableAcknowledged}
+              />
             );
           })}
         </section>
@@ -659,14 +839,20 @@ export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {})
           <p>{t('approval.connectionNoSpending')}</p>
         </div>
       ) : null}
-      {review.kind === 'transaction' && review.authorization === 'partial' ? (
-        <div role="alert" className={styles['warning']}>
-          <strong>{t('approvalUi.authorization.partial.title')}</strong>
-          <p>{t('approvalUi.authorization.partial.body')}</p>
-          {marketplace?.['flexible'] === true || genericListing
-            ? <p>{t(genericListing
-                ? 'approvalUi.genericListing.flexibleBody'
-                : 'approvalUi.flexible.body')}</p> : null}
+      {flexibleApproval && !surfaceSignatureRules ? (
+        <div className={styles['changeableSummary']}>
+          <strong>{t('approval.psbt.changeableTitle')}</strong>
+          <dl>
+            {flexibleInputsChangeable
+              ? <div><dt>{t('approval.psbt.inputs')}</dt><dd>{t('approval.psbt.canChange')}</dd></div>
+              : null}
+            {flexibleOutputsChangeable
+              ? <div><dt>{t('approval.psbt.otherOutputs')}</dt><dd>{t('approval.psbt.canChange')}</dd></div>
+              : null}
+            {flexibleFeeChangeable
+              ? <div><dt>{t('approval.psbt.finalFee')}</dt><dd>{t('approval.psbt.canChange')}</dd></div>
+              : null}
+          </dl>
         </div>
       ) : null}
       {protectedFeeBlocked ? (
@@ -675,7 +861,7 @@ export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {})
           <p>{t('approvalUi.protectedFee.body', { sats: protectedFeeSats.toLocaleString(lang) })}</p>
         </div>
       ) : null}
-      {displayWarningCodes.length > 0 || advancedPsbt ? (
+      {displayWarningCodes.length > 0 ? (
         <div role="alert" className={styles['warning']}>
           <strong>{t('approvalUi.warning.title')}</strong>
           {displayWarningCodes.length === 1 ? (
@@ -683,18 +869,11 @@ export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {})
           ) : displayWarningCodes.length > 1 ? (
             <ul>{displayWarningCodes.map((warning) => <li key={warning}>{warningCopy(warning, t)}</li>)}</ul>
           ) : null}
-          {advancedPsbt ? (
-            <p>{t('approvalUi.advanced')}</p>
-          ) : null}
         </div>
       ) : null}
-      {(marketplace?.['flexible'] === true || genericListing) &&
-          !(review.kind === 'transaction' && review.authorization === 'partial') ? (
-        <div role="alert" className={styles['warning']}>
-          <strong>{t('approvalUi.flexible.title')}</strong>
-          <p>{t(genericListing
-            ? 'approvalUi.genericListing.flexibleBody'
-            : 'approvalUi.flexible.body')}</p>
+      {!sharedApprovalValid ? (
+        <div role="alert" className={styles['danger']}>
+          <strong>{t('approval.psbt.reviewUnavailable')}</strong>
         </div>
       ) : null}
       {message !== null ? (
@@ -715,8 +894,12 @@ export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {})
           onAcknowledgementChange={setPreviewUnavailableAcknowledged}
         />
       )}
-      <details className={styles['technical']} open={advancedPsbt}>
+      <details className={styles['technical']}>
         <summary>{t('approval.technical')}</summary>
+        {sharedApproval === null || sharedApproval.presentation === 'flexible' || deferredFee ? null : (
+          <ProviderSighashEffects explanation={sharedApproval}
+            deferredFee={false} />
+        )}
         <pre className={styles['details']}>{JSON.stringify(technicalDetails, null, 2)}</pre>
       </details>
       {request.approvalError ? <p role="alert" className={styles['warning']}>{request.approvalError}</p> : null}
@@ -748,26 +931,29 @@ export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {})
         <Field label={t('approval.confirmation', { phrase: request.confirmationPhrase })} value={confirmation}
           onChange={(event) => setConfirmation(event.target.value)} />
       ) : null}
-      <p className={styles['actionHelp']}>{t('approvalUi.actions.closeEffect')}</p>
-      <div className={styles['actions']}>
-        <Button variant="danger" data-testid="approval-reject" disabled={busy} onClick={() => resolve(false)}>
-          {t('approval.reject')}
-        </Button>
-        {/* The label is deliberately method-specific ("Sign transaction" reads
-            better than "Approve"), so the harness identifies this button by a
-            stable hook rather than by copy. tests/ui/approval.test.tsx is what
-            asserts the label itself. */}
-        <Button data-testid="approval-approve" disabled={busy || !approvalReady || !validPassword || !validConfirmation || !inscriptionReviewValid || protectedFeeBlocked ||
-          (requiresPreviewAcknowledgement && !previewUnavailableAcknowledged)} onClick={() => resolve(true)}>
-          {approvalAction(
-            request.method,
-            t,
-            review.kind === 'batch' ? review.transactionCount :
-              review.kind === 'message_batch' ? review.messageCount : undefined,
-            genericListing !== null,
-          )}
-        </Button>
+        <p className={styles['actionHelp']}>{t('approvalUi.actions.closeEffect')}</p>
       </div>
+      <footer className={styles['decisionBar']} data-testid="approval-decision-bar">
+        <div className={styles['actions']}>
+          <Button variant="danger" data-testid="approval-reject" disabled={busy} onClick={() => resolve(false)}>
+            {t('approval.reject')}
+          </Button>
+          {/* The label is deliberately method-specific ("Sign transaction" reads
+              better than "Approve"), so the harness identifies this button by a
+              stable hook rather than by copy. tests/ui/approval.test.tsx is what
+              asserts the label itself. */}
+          <Button data-testid="approval-approve" disabled={busy || !approvalReady || !validPassword || !validConfirmation || !inscriptionReviewValid || !sharedApprovalValid || protectedFeeBlocked ||
+            (requiresPreviewAcknowledgement && !previewUnavailableAcknowledged)} onClick={() => resolve(true)}>
+            {approvalAction(
+              request.method,
+              t,
+              review.kind === 'batch' ? review.transactionCount :
+                review.kind === 'message_batch' ? review.messageCount : undefined,
+              genericListing !== null,
+            )}
+          </Button>
+        </div>
+      </footer>
     </main>
   );
 }

@@ -139,6 +139,19 @@ for (const script of manifest.content_scripts ?? []) {
   assert(script.all_frames === true, 'provider scripts must run in all frames');
   assert(script.run_at === 'document_start', 'provider scripts must run at document_start');
 }
+const mainWorldProviderScripts = (manifest.content_scripts ?? [])
+  .filter((script) => script.world === 'MAIN')
+  .flatMap((script) => script.js ?? []);
+assert(mainWorldProviderScripts.length === 1, 'expected exactly one MAIN-world provider script');
+if (mainWorldProviderScripts.length === 1) {
+  // The injected facade is deliberately data-only. This ceiling caught a
+  // regression where importing the Bitcoin parser added roughly 50 kB to
+  // every frame; PSBT interpretation belongs in the isolated worker.
+  assert(
+    statSync(join(output, mainWorldProviderScripts[0])).size <= 180_000,
+    'MAIN-world provider bundle exceeds the data-only size ceiling',
+  );
+}
 assert(same((manifest.content_scripts ?? []).map((script) => script.world), ['MAIN', 'ISOLATED']), 'provider worlds must be MAIN and ISOLATED');
 
 const files = filesBelow(output);
@@ -246,6 +259,7 @@ const expectedMethods = [
   'ord_getInscriptions', 'ord_sendInscriptions',
 ];
 assert(same(methods, expectedMethods), `provider surface mismatch: ${methods.join(', ')}`);
+const facadeCompatibilityMethods = ['bitcoin_signPsbtV2', 'signTransaction'];
 const shippedJavaScript = files
   .filter((path) => path.endsWith('.js'))
   .map((path) => readFileSync(path, 'utf8'))
@@ -262,17 +276,19 @@ assert(
 for (const method of expectedMethods) {
   assert(shippedJavaScript.includes(method), `provider method missing from bundle: ${method}`);
 }
+for (const method of facadeCompatibilityMethods) {
+  assert(shippedJavaScript.includes(method), `provider compatibility method missing from bundle: ${method}`);
+}
 // Competitor-style methods this wallet deliberately does not implement. The
 // registry check is the precise one; the bundle scan is the belt-and-braces
 // half, catching a name that reached the build by some path other than the
 // registry — an alias map in the injected provider, say.
-const undocumentedProviderMethods = ['pushTx', 'sendBitcoin', 'signTransaction'];
+const undocumentedProviderMethods = ['pushTx', 'sendBitcoin'];
 
 // One class of match is provably not a provider surface: an i18n message key.
-// `approval.action.signTransaction` names a button label, and no page can call
-// a message key. Rather than loosen the substring scan — which would also stop
-// catching `provider.signTransaction = …` — redact the exact key strings and
-// leave the scan at full strength everywhere else.
+// Rather than loosen the substring scan, redact only exact catalog keys that
+// happen to contain a prohibited method name and leave the scan at full
+// strength everywhere else.
 //
 // The redaction is deliberately narrow. Only keys that CONTAIN an undocumented
 // name are removed, and a key equal to one cannot redact itself, so an i18n

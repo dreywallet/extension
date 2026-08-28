@@ -14,11 +14,10 @@ review); every Satflow entry and the ord.net collection/trait funding-parent
 entries remain `fixture_only`, for which the provider resolver returns a stable
 unsupported template result even for an otherwise exact live request.
 Registry integrity hard-fails any enabled entry outside the reviewed ord.net
-inscription scope. Each template also carries an explicit single-request
-`signPsbt` or `signMessage` method. The registry cannot represent
-`signMultipleTransactions`; adding any future batch template requires a
-reviewed schema and policy release plus an explicit expansion of both the core
-integrity allowlist and extension audit. `marketplaceContext` is a strict optional
+inscription scope. Each template carries an explicit per-step `signPsbt` or
+`signMessage` method. A multi-transaction callback may bind several recognized
+per-step contexts into one group; the group itself never activates a template
+or broadens an item's mutation allowance. `marketplaceContext` is a strict optional
 extension of `signPsbt` and `signMessage`; it binds workflow state and supplies
 review text, but never selects a marketplace by brand name or authorizes a
 sighash. Resolution returns one of:
@@ -29,23 +28,25 @@ sighash. Resolution returns one of:
 - `known_template_mismatch`
 - `unsupported_action`
 
-An unrecognized request may use the existing Advanced review when every input
-Drey is asked to sign is deterministic (`DEFAULT`/`ALL`). The plan binds the
-exact requested input indexes. A flexible signature on an unselected external
-input is analyzed but does not make Drey create or authorize that signature.
-Unknown flexible wallet signatures, partial seller/listing requests, and
-wallet-owned script paths still fail with a stable unsupported error. New
-marketplaces and versions therefore fail gracefully without becoming signing
-policy.
+An unrecognized request may use the existing review only when Core can prove
+the exact signature commitments, selected wallet inputs, protected-asset
+routes, wallet economics, and any linked topology. The plan binds the exact
+requested input indexes. A flexible signature on an unselected external input
+is analyzed but does not make Drey create or authorize that signature. Flexible
+wallet signatures are limited to reviewed general rules and pinned script/key
+contracts; unknown script paths, ambiguous partial requests, and unprovable
+mutation authority still fail with a stable unsupported error. New marketplace
+names and versions therefore do not become signing policy merely because their
+transactions can receive a conservative structural review.
 
 ## Signing boundary
 
-The wallet signing policy is unchanged: P2WPKH signs `ALL`; Taproot key path
-signs `DEFAULT`/`ALL`. External inputs may carry the common, already-created
-`ALL|ANYONECANPAY` or `SINGLE|ANYONECANPAY` marketplace signature, but Drey
-never signs those inputs through the generic route. A recognized step can
-additionally permit `0x81` or `0x83` only
-for the template-selected input indexes. Before signing, the service verifies
+The wallet signs only the exact indexes declared by the caller and independently
+derives each effective sighash from the PSBT. Standard `DEFAULT`/`ALL` requests
+fully commit to the current transaction. Reviewed flexible rules permit only
+the narrow `ALL|ANYONECANPAY`, `SINGLE`, or `SINGLE|ANYONECANPAY` effects that
+the approval can explain and the final-byte validator can recheck. Before
+signing, the service verifies
 current ownership and classification, every protected-sat route, corresponding
 seller payout, approved economics, and that no extra wallet input is selected.
 
@@ -68,6 +69,22 @@ wallet input, guaranteed payout, protected-sat route, wallet fee exposure, and
 committed outputs. It labels external inputs and non-corresponding outputs as
 uncommitted instead of claiming an unknowable final miner fee.
 
+Grouped signing validates all items and their shared authority before releasing
+any result. Internally linked parents and children are revalidated as one graph.
+Requests that reuse one external input across several candidate children are
+treated as alternatives: the approval shows maximum possible debit and fee and
+makes clear that only one candidate can complete. Exact zero-fee sign-only
+parents are allowed only when all wallet inputs are selected, all signatures
+fully commit with `DEFAULT`/`ALL`, no broadcast is requested, and post-signing
+bytes still match the reviewed plan.
+
+Recognized items from one workflow step are journaled as one encrypted aggregate:
+the exact group, ordered nodes, plans, signed results, and reservations move from
+prepared to signed together. A single-item request cannot replay a step already
+held by a group, or vice versa. Different sequential workflow steps still require
+separate approvals, and a later step is accepted only after the complete prior
+single or grouped step is durably signed.
+
 ## Workflow and reservations
 
 Encrypted cache records bind origin, template/version, network, vault/account,
@@ -85,8 +102,8 @@ cancellation proof—not a page success message or local TTL.
 ## Fixtures and release status
 
 `tests/fixtures/marketplaces/manifest.json` pins provenance and reviewed contract
-digests. `fixtures:marketplaces:check` is offline; the refresh command only emits
-review candidates. `audit:marketplaces` rejects wildcard origins, runtime policy
+digests. The refresh command only emits review candidates.
+`audit:marketplaces` rejects wildcard origins, runtime policy
 fetches, environment activation, excluded actions, and registry/manifest drift.
 
 The ord.net single-inscription trading set (auth, list, buy, offer, counter,
@@ -100,8 +117,10 @@ Known residual risks, accepted for this release: the vendor publishes no
 rotation or detection contract for the pinned sale co-signer key (rotation
 therefore hard-fails signing until re-review), no live-trade evidence exists
 yet, ord.net auth requires a payment address holding at least 0.01 BTC
-confirmed, and batch listing preflights (2..20 items) are not represented and
-fail closed. First live trades are manual operator actions with small amounts;
+confirmed. Batch listing and collection/trait callback transaction shapes are
+supported through the generic group policy, but a contextless callback cannot
+be described as a vendor-verified workflow. First live trades are manual
+operator actions with small amounts;
 operator test-wallet procedures exclude inscription movement.
 
 The checked-in ord.net corpus contains the published contract and derived
@@ -115,9 +134,13 @@ vendor-faithful execution evidence. Closing this gap requires a reviewed,
 non-secret vendor capture containing those exact artifacts; checks must not be
 weakened to manufacture the missing evidence.
 
-The ord.net v2 collection/trait funding-parent design (four-key fill gate,
-zero-fee TRUC parents, enclave co-signer) remains `fixture_only` pending an
-independent design review.
+The ord.net v2 collection/trait template identity remains `fixture_only`; remote
+or page metadata cannot activate it. Its exact sign-only funding-parent shape
+may pass the general grouped policy after Core independently verifies selected
+inputs, fully committing sighashes, zero-fee constraints, shared-funding
+alternatives, and final signed bytes. Without hash-bound context, the approval
+states what the signatures permit rather than claiming a verified collection or
+trait offer.
 
 Satflow live activation remains blocked. Its OpenAPI (still 1.1.4-prod,
 re-checked 2026-08-10) omits the response schema for `/intent/sell` and
@@ -134,9 +157,9 @@ enable a template from remote data or test with production credentials.
 ## Approval friction
 
 Every signing or transfer request still receives a fresh, origin-bound approval.
-Fully structured transfer plans and future recognized marketplace plans need one
-approval click while the wallet is unlocked. Password reauthentication plus the
-typed `SIGN PSBT` challenge is reserved for arbitrary Advanced PSBTs, where the
-wallet cannot provide a recognized business-action template. Lock, navigation,
-account/network/session changes, expiration, and approval-window closure still
-invalidate the request.
+Standard and policy-safe flexible key-path PSBTs use one Sign action while the
+wallet is unlocked; flexible requests show what the site can still change and
+keep technical details collapsed. There is no provider-specific Advanced toggle
+or typed phrase. The global transaction-confirmation setting can still require
+password reauthentication. Lock, navigation, account/network/session changes,
+expiration, and approval-window closure still invalidate the request.

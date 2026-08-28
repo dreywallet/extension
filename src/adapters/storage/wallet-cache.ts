@@ -54,6 +54,8 @@ export interface WalletCacheRecord extends WalletCacheKey {
 export interface WalletCachePort {
   get(key: WalletCacheKey): Promise<WalletCacheRecord | undefined>;
   put(record: WalletCacheRecord): Promise<void>;
+  /** Commit every record in one durability boundary, or commit none of them. */
+  putMany(records: readonly WalletCacheRecord[]): Promise<void>;
   delete(key: WalletCacheKey): Promise<void>;
   listKeys(vaultId: string, network: Network, type: WalletCacheRecordType): Promise<string[]>;
   clearVault(vaultId: string): Promise<void>;

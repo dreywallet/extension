@@ -255,9 +255,16 @@ async function coreRpc<T>(method: string, params: readonly unknown[] = [], walle
     body: JSON.stringify({ jsonrpc: '2.0', id: ++rpcId, method, params }),
     signal: AbortSignal.timeout(15_000),
   });
-  const payload = await response.json() as { result?: T; error?: unknown };
+  const payload = await response.json() as {
+    result?: T;
+    error?: { code?: unknown; message?: unknown } | null;
+  };
   if (!response.ok || payload.error != null || !Object.hasOwn(payload, 'result')) {
-    throw new Error(`Bitcoin Core RPC ${method} failed`);
+    const code = typeof payload.error?.code === 'number' ? ` (${payload.error.code})` : '';
+    const message = typeof payload.error?.message === 'string'
+      ? payload.error.message.replace(/[A-Za-z0-9+/=]{80,}/gu, '[redacted]').slice(0, 240)
+      : 'unknown error';
+    throw new Error(`Bitcoin Core RPC ${method} failed${code}: ${message}`);
   }
   return payload.result as T;
 }
@@ -487,13 +494,14 @@ export async function createProviderPsbtFixture(input: {
   destination: string;
   sendSats: number;
   feeSats?: number;
+  sighash?: 1 | 3 | 129 | 131;
 }): Promise<ProviderPsbtFixture> {
   const feeSats = input.feeSats ?? 500;
   if (!validTxid(input.funding.txid) || !Number.isSafeInteger(input.funding.vout) ||
       input.funding.vout < 0 || !Number.isSafeInteger(input.funding.sats) ||
       input.funding.sats <= 0 || !validRegtestAddress(input.walletAddress) ||
       !validRegtestAddress(input.destination) || !Number.isSafeInteger(input.sendSats) ||
-      input.sendSats <= 0 || !Number.isSafeInteger(feeSats) || feeSats <= 0) {
+      input.sendSats <= 0 || !Number.isSafeInteger(feeSats) || feeSats < 0) {
     throw new Error('provider PSBT fixture received malformed intent');
   }
   const changeSats = input.funding.sats - input.sendSats - feeSats;
@@ -523,7 +531,7 @@ export async function createProviderPsbtFixture(input: {
     index: sourceInput.index,
     ...(sourceInput.sequence === undefined ? {} : { sequence: sourceInput.sequence }),
     witnessUtxo: sourceInput.witnessUtxo,
-    sighashType: SigHash.ALL,
+    sighashType: input.sighash ?? SigHash.ALL,
   });
   for (let index = 0; index < enriched.outputsLength; index += 1) {
     const output = enriched.getOutput(index);
@@ -573,9 +581,84 @@ export async function createProviderPsbtFixture(input: {
   };
 }
 
+export async function mutateAndFinalizeFlexibleProviderPsbt(input: {
+  psbtBase64: string;
+  changeOutputSats?: number;
+  externalFunding?: FundingOutpoint;
+}): Promise<FinalizedProviderTransaction> {
+  const transaction = Transaction.fromPSBT(Buffer.from(input.psbtBase64, 'base64'), {
+    allowUnknownInputs: true,
+    allowUnknownOutputs: true,
+  });
+  const walletSighash = transaction.getInput(0).sighashType;
+  if (input.changeOutputSats !== undefined) {
+    if (!Number.isSafeInteger(input.changeOutputSats) || input.changeOutputSats <= 546 ||
+        transaction.outputsLength < 2) {
+      throw new Error('flexible provider mutation received invalid change intent');
+    }
+    transaction.updateOutput(1, { amount: BigInt(input.changeOutputSats) });
+  }
+  if (input.externalFunding !== undefined) {
+    const prevout = await coreRpc<{
+      value?: unknown;
+      scriptPubKey?: { hex?: unknown };
+    }>('gettxout', [input.externalFunding.txid, input.externalFunding.vout, true]);
+    if (btcToSats(prevout.value, 'flexible external prevout') !== input.externalFunding.sats ||
+        typeof prevout.scriptPubKey?.hex !== 'string' ||
+        !/^(?:[0-9a-f]{2})+$/u.test(prevout.scriptPubKey.hex)) {
+      throw new Error('flexible external prevout did not match Bitcoin Core');
+    }
+    transaction.addInput({
+      txid: input.externalFunding.txid,
+      index: input.externalFunding.vout,
+      sequence: 0xfffffffd,
+      ...(walletSighash === undefined ? {} : { sighashType: walletSighash }),
+      witnessUtxo: {
+        script: Buffer.from(prevout.scriptPubKey.hex, 'hex'),
+        amount: BigInt(input.externalFunding.sats),
+      },
+    });
+  }
+  let psbtBase64 = Buffer.from(transaction.toPSBT()).toString('base64');
+  if (input.externalFunding !== undefined) {
+    const coreSighash = walletSighash === SigHash.ALL_ANYONECANPAY
+      ? 'ALL|ANYONECANPAY'
+      : walletSighash === SigHash.SINGLE_ANYONECANPAY
+        ? 'SINGLE|ANYONECANPAY'
+        : null;
+    if (coreSighash === null) {
+      throw new Error('flexible external input requires an ANYONECANPAY wallet signature');
+    }
+    const processed = await coreRpc<{ psbt?: unknown; complete?: unknown }>(
+      'walletprocesspsbt',
+      [psbtBase64, true, coreSighash, true, false],
+      'drey-regtest-miner',
+    );
+    if (typeof processed.psbt !== 'string') {
+      throw new Error('Bitcoin Core did not sign the appended flexible input');
+    }
+    psbtBase64 = processed.psbt;
+  }
+  const result = await coreRpc<{ hex?: unknown; complete?: unknown }>('finalizepsbt', [psbtBase64, true]);
+  if (result.complete !== true || typeof result.hex !== 'string' || !/^[0-9a-f]+$/u.test(result.hex)) {
+    throw new Error('Bitcoin Core could not finalize the permitted flexible mutation');
+  }
+  const raw = await coreRpc<DecodedTransaction>('decoderawtransaction', [result.hex]);
+  if (!validTxid(raw.txid)) throw new Error('flexible mutation returned a malformed transaction id');
+  const acceptance = await coreRpc<Array<{ txid?: unknown; allowed?: unknown }>>(
+    'testmempoolaccept',
+    [[result.hex]],
+  );
+  if (acceptance.length !== 1 || acceptance[0]?.allowed !== true || acceptance[0].txid !== raw.txid) {
+    throw new Error('Bitcoin Core rejected a sighash-permitted flexible mutation');
+  }
+  return { hex: result.hex, txid: raw.txid };
+}
+
 export async function verifySignedProviderBatch(
   signedPsbts: readonly string[],
   fixtures: readonly ProviderPsbtFixture[],
+  options: { expectMempoolAcceptance?: boolean } = {},
 ): Promise<FinalizedProviderTransaction[]> {
   if (signedPsbts.length !== fixtures.length || signedPsbts.length === 0) {
     throw new Error('signed provider batch result count changed');
@@ -604,13 +687,15 @@ export async function verifySignedProviderBatch(
     }
     finalized.push({ hex: result.hex, txid: fixture.unsignedTxid });
   }
-  const acceptance = await coreRpc<Array<{ txid?: unknown; allowed?: unknown }>>(
-    'testmempoolaccept',
-    [finalized.map((item) => item.hex)],
-  );
-  if (acceptance.length !== finalized.length || acceptance.some((item, index) =>
-    item.allowed !== true || item.txid !== finalized[index]?.txid)) {
-    throw new Error('Bitcoin Core rejected a finalized provider batch result');
+  if (options.expectMempoolAcceptance !== false) {
+    const acceptance = await coreRpc<Array<{ txid?: unknown; allowed?: unknown }>>(
+      'testmempoolaccept',
+      [finalized.map((item) => item.hex)],
+    );
+    if (acceptance.length !== finalized.length || acceptance.some((item, index) =>
+      item.allowed !== true || item.txid !== finalized[index]?.txid)) {
+      throw new Error('Bitcoin Core rejected a finalized provider batch result');
+    }
   }
   return finalized;
 }

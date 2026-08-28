@@ -8,7 +8,11 @@ import { APPROVAL_GALLERY_SCENARIOS } from './scenarios';
 
 type PortListener = (message: unknown) => void;
 
-let currentScenarioIndex = 1;
+const requestedScenario = Number(new URLSearchParams(window.location.search).get('scenario') ?? '1');
+let currentScenarioIndex = Number.isInteger(requestedScenario) &&
+  requestedScenario >= 0 && requestedScenario < APPROVAL_GALLERY_SCENARIOS.length
+  ? requestedScenario
+  : 1;
 let portListener: PortListener | null = null;
 
 function emitCurrentScenario(): void {
@@ -58,7 +62,6 @@ function connectPreviewPort(): chrome.runtime.Port {
 export function ApprovalGallery(): React.ReactElement {
   const [selected, setSelected] = useState(currentScenarioIndex);
   const [status, setStatus] = useState('Safe local preview — no wallet is connected.');
-
   useEffect(() => {
     const onAction = (event: Event): void => {
       setStatus((event as CustomEvent<string>).detail);
@@ -82,6 +85,7 @@ export function ApprovalGallery(): React.ReactElement {
         <p className="galleryIntro">
           Review the real approval screen using synthetic requests. Nothing here can access a wallet, sign, or broadcast.
         </p>
+        <p className="galleryMode">Production shared explanation</p>
         <nav aria-label="Approval scenarios" className="scenarioList">
           {APPROVAL_GALLERY_SCENARIOS.map((scenario, index) => (
             <button
@@ -106,7 +110,16 @@ export function ApprovalGallery(): React.ReactElement {
           <strong>Approval window · 420 × 680</strong>
         </div>
         <div className="approvalViewport">
-          <I18nProvider initial="en"><ApprovalApp connect={connectPreviewPort} /></I18nProvider>
+          {APPROVAL_GALLERY_SCENARIOS[selected]?.providerError ? (
+            <main className="providerErrorPreview">
+              <p className="galleryEyebrow">Request rejected</p>
+              <h2>No approval window opens</h2>
+              <p>{APPROVAL_GALLERY_SCENARIOS[selected]?.providerError}</p>
+              <small>The connected site receives this error. There is currently no user-facing blocked review.</small>
+            </main>
+          ) : (
+            <I18nProvider initial="en"><ApprovalApp connect={connectPreviewPort} /></I18nProvider>
+          )}
         </div>
       </section>
     </div>

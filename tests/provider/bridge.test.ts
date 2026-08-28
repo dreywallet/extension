@@ -8,8 +8,17 @@ import {
   type WindowBridgeTarget,
 } from '../../src/provider/bridge';
 import { providerError } from '@drey/core/provider/errors';
-import { PROVIDER_MAX_SIGN_INPUTS } from '@drey/core/provider/registry';
-import { createDreyProvider, createWindowProviderTransport } from '../../src/provider/facade';
+import {
+  PROVIDER_MAX_SIGN_INPUTS,
+  signMultipleTransactionsParamsSchema,
+} from '@drey/core/provider/registry';
+import {
+  BITCOIN_SIGN_PSBT_V2_METHOD,
+  createDreyProvider,
+  createWindowProviderTransport,
+  parseSatsConnectTransactionToken,
+} from '../../src/provider/facade';
+import { bytesToBase64 } from '@drey/core/domain/vault/encoding';
 
 class FakeWindow implements WindowBridgeTarget {
   readonly listeners = new Set<(event: MessageEvent<unknown>) => void>();
@@ -80,6 +89,31 @@ const ids = (...values: string[]): (() => string) => {
 
 const PAGE_ID = '00000000-0000-4000-8000-000000000001';
 const WORKER_ID = '00000000-0000-4000-8000-000000000002';
+const LEGACY_PSBT = 'cHNidP8BAFICAAAAAaqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqAAAAAAD/////ASgjAAAAAAAAFgAUIiIiIiIiIiIiIiIiIiIiIiIiIiIAAAAAAAEBHxAnAAAAAAAAFgAUEREREREREREREREREREREREREREAAA==';
+
+function base64UrlJson(value: unknown): string {
+  return bytesToBase64(new TextEncoder().encode(JSON.stringify(value)))
+    .replace(/=/gu, '').replace(/\+/gu, '-').replace(/\//gu, '_');
+}
+
+function transactionToken(
+  payload: unknown,
+  header: unknown = { typ: 'JWT', alg: 'none' },
+): string {
+  return `${base64UrlJson(header)}.${base64UrlJson(payload)}.`;
+}
+
+const LEGACY_TRANSACTION = {
+  network: { type: 'Signet' as const },
+  message: 'Sign transaction',
+  psbtBase64: LEGACY_PSBT,
+  inputsToSign: [{
+    address: 'tb1qpaymentaddress',
+    signingIndexes: [0],
+    sigHash: 1 as const,
+  }],
+  broadcast: false,
+};
 
 function setup() {
   const window = new FakeWindow();
@@ -150,6 +184,135 @@ describe('MAIN/isolated provider bridge', () => {
       result: { psbt: 'cHNidP8=' },
     });
     await expect(accepted).resolves.toMatchObject({ result: { psbt: 'cHNidP8=' } });
+  });
+
+  it('rejects a 501-input transaction group at the Core schema boundary', () => {
+    const params = {
+      network: { type: 'Signet' as const },
+      message: 'Criteria offers',
+      psbts: Array.from({ length: 10 }, (_, itemIndex) => ({
+        psbtBase64: 'cHNidP8=',
+        inputsToSign: [{
+          address: 'tb1qpaymentaddress',
+          signingIndexes: Array.from(
+            { length: itemIndex === 9 ? 51 : 50 },
+            (_unused, inputIndex) => inputIndex,
+          ),
+          sigHash: 1 as const,
+        }],
+      })),
+    };
+
+    expect(signMultipleTransactionsParamsSchema.safeParse(params).success).toBe(false);
+  });
+
+  it('normalizes bitcoin_signPsbtV2 to the strict signPsbt worker method', async () => {
+    const { port, provider } = setup();
+    const promise = provider.request(BITCOIN_SIGN_PSBT_V2_METHOD, {
+      psbt: 'cHNidP8=',
+      signInputs: { tb1qpaymentaddress: [0] },
+      broadcast: false,
+    });
+    expect(port.sent[0]).toMatchObject({ method: 'signPsbt' });
+    port.emit({
+      type: 'drey:provider:response', protocolVersion: 1,
+      requestNonce: WORKER_ID, ok: true, result: { psbt: 'cHNidP8=' },
+    });
+    await expect(promise).resolves.toEqual({
+      jsonrpc: '2.0', id: PAGE_ID, result: { psbt: 'cHNidP8=' },
+    });
+  });
+
+  it('translates the canonical Sats Connect signTransaction callback to signPsbt', async () => {
+    const { port, provider } = setup();
+    const promise = provider.signTransaction(transactionToken(LEGACY_TRANSACTION));
+    expect(port.sent[0]).toMatchObject({ method: 'wallet_getNetwork', params: null });
+    port.emit({
+      type: 'drey:provider:response', protocolVersion: 1,
+      requestNonce: WORKER_ID, ok: true,
+      result: {
+        bitcoin: { name: 'Signet' }, stacks: { name: 'testnet' }, spark: { name: 'regtest' },
+      },
+    });
+    await vi.waitFor(() => expect(port.sent).toHaveLength(2));
+    const signRequest = port.sent[1] as RuntimeProviderRequest;
+    expect(signRequest).toMatchObject({
+      method: 'signPsbt',
+      params: {
+        psbt: LEGACY_PSBT,
+        inputsToSign: [{
+          address: 'tb1qpaymentaddress', signingIndexes: [0], sigHash: 1,
+        }],
+        broadcast: false,
+      },
+    });
+    port.emit({
+      type: 'drey:provider:response', protocolVersion: 1,
+      requestNonce: signRequest.requestNonce, ok: true,
+      result: { psbt: LEGACY_PSBT, txid: '11'.repeat(32) },
+    });
+    await expect(promise).resolves.toEqual({
+      psbtBase64: LEGACY_PSBT, txId: '11'.repeat(32),
+    });
+  });
+
+  it('rejects a legacy callback for the wrong active network before signing', async () => {
+    const { port, provider } = setup();
+    const promise = provider.signTransaction(transactionToken({
+      ...LEGACY_TRANSACTION,
+      network: { type: 'Mainnet' },
+    }));
+    port.emit({
+      type: 'drey:provider:response', protocolVersion: 1,
+      requestNonce: WORKER_ID, ok: true,
+      result: {
+        bitcoin: { name: 'Signet' }, stacks: { name: 'testnet' }, spark: { name: 'regtest' },
+      },
+    });
+    await expect(promise).rejects.toMatchObject({
+      code: -32001,
+      data: { dreyCode: 'ERR_UNSUPPORTED_BY_ACCOUNT' },
+    });
+    expect(port.sent).toHaveLength(1);
+  });
+
+  it('parses only canonical, bounded legacy single-transaction tokens', () => {
+    expect(parseSatsConnectTransactionToken(transactionToken(LEGACY_TRANSACTION)))
+      .toEqual(LEGACY_TRANSACTION);
+    const invalidPayloads = [
+      { ...LEGACY_TRANSACTION, inputsToSign: [{
+        address: 'tb1qpaymentaddress', signingIndexes: [-1], sigHash: 1,
+      }] },
+      { ...LEGACY_TRANSACTION, inputsToSign: [{
+        address: 'tb1qpaymentaddress', signingIndexes: [PROVIDER_MAX_SIGN_INPUTS], sigHash: 1,
+      }] },
+      { ...LEGACY_TRANSACTION, inputsToSign: [{
+        address: 'tb1qpaymentaddress', signingIndexes: [0], sigHash: 2,
+      }] },
+      { ...LEGACY_TRANSACTION, inputsToSign: [
+        { address: 'tb1qpaymentaddress', signingIndexes: [0], sigHash: 1 },
+        { address: 'tb1qordinaladdress', signingIndexes: [0], sigHash: 0 },
+      ] },
+    ];
+    for (const payload of invalidPayloads) {
+      expect(() => parseSatsConnectTransactionToken(transactionToken(payload)))
+        .toThrow(expect.objectContaining({ code: -32602 }));
+    }
+    expect(parseSatsConnectTransactionToken(transactionToken({
+      ...LEGACY_TRANSACTION, network: { type: 'Testnet' },
+    })).network.type).toBe('Testnet');
+    for (const token of [
+      '',
+      'a.b',
+      `${base64UrlJson({ typ: 'JWT', alg: 'none' })}.${base64UrlJson(LEGACY_TRANSACTION)}.signature`,
+      transactionToken(LEGACY_TRANSACTION, { typ: 'JWT', alg: 'HS256' }),
+      transactionToken(LEGACY_TRANSACTION, { typ: 'JWT', alg: 'none', kid: 'extra' }),
+      `=${transactionToken(LEGACY_TRANSACTION)}`,
+      'x'.repeat(2_100_001),
+    ]) {
+      expect(() => parseSatsConnectTransactionToken(token))
+        .toThrow(expect.objectContaining({ code: -32602 }));
+    }
   });
 
   it('forwards unknown methods so the worker can return stable unsupported-method', async () => {
@@ -397,6 +560,7 @@ describe('MAIN/isolated provider bridge', () => {
         'methods',
         'protocolVersion',
         'request',
+        'signTransaction',
         'signMultipleTransactions',
       ].sort(),
     );

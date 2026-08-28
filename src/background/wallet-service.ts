@@ -298,6 +298,7 @@ import {
   sealRecord,
   type WalletCacheKey,
   type WalletCachePort,
+  type WalletCacheRecord,
   type WalletCacheRecordType,
 } from '../adapters/storage/wallet-cache';
 import { summarizeBalances } from '@drey/core/domain/classification/balances';
@@ -474,9 +475,11 @@ import {
 } from '@drey/core/domain/marketplaces/workflow';
 import { getCryptoProvider } from '@drey/core/domain/vault/crypto-provider';
 import { RpcError } from './errors';
+import { classifyProviderOutpointsChunked } from './provider-classification';
 import { parseSats } from '@drey/core/domain/sats';
 import {
   DEFAULT_POSTAGE_SATS,
+  MAX_FEE_RATE_SAT_PER_KVB,
   economicChangeThreshold,
   estimateVsize,
   feeForVsize,
@@ -544,6 +547,7 @@ import {
   signProviderPsbtPlan,
   validateProviderTransactionHex,
   type ProviderAuthorityBinding,
+  type ProviderPsbtInputSelection,
   type ProviderPsbtPlanV3,
 } from '@drey/core/domain/transactions/provider-psbt';
 import {
@@ -553,6 +557,20 @@ import {
   type ProviderBatchInputSelection,
   type ProviderPsbtBatchPlanV1,
 } from '@drey/core/domain/transactions/provider-psbt-batch';
+import { PROVIDER_MAX_PSBT_BATCH_ITEMS } from
+  '@drey/core/domain/transactions/provider-psbt-limits';
+import {
+  inspectProviderPsbtGroupRequest,
+  prepareProviderPsbtGroupInputs,
+  providerPsbtLinkedGroupBinding,
+  type ProviderPsbtGroupPreparationItem,
+} from '@drey/core/domain/transactions/provider-psbt-group-prepare';
+import {
+  assertProviderPsbtGroupPlan,
+  createProviderPsbtGroupPlan,
+  signProviderPsbtGroupPlan,
+  type ProviderPsbtGroupPlanV1,
+} from '@drey/core/domain/transactions/provider-psbt-group-plan';
 import {
   assertProviderMessageBatchPlan,
   assertProviderMessageBatchResults,
@@ -953,6 +971,29 @@ const marketplaceWorkflowJournalSchema = z.object({
   }
 });
 type MarketplaceWorkflowJournal = z.infer<typeof marketplaceWorkflowJournalSchema>;
+
+const marketplaceWorkflowGroupJournalSchema = z.object({
+  version: z.literal(1),
+  groupHash: z.string().regex(/^[0-9a-f]{64}$/u),
+  workflowId: z.string().min(1).max(128),
+  step: z.number().int().positive(),
+  entries: z.array(z.object({
+    nodeId: z.string().min(1).max(128),
+    journal: marketplaceWorkflowJournalSchema,
+  }).strict()).min(1).max(PROVIDER_MAX_PSBT_BATCH_ITEMS),
+  createdAt: z.number().int().nonnegative(),
+  updatedAt: z.number().int().nonnegative(),
+}).strict().superRefine((group, context) => {
+  if (new Set(group.entries.map((entry) => entry.nodeId)).size !== group.entries.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'duplicate marketplace group node' });
+  }
+  if (group.entries.some((entry) =>
+    entry.journal.workflow.workflowId !== group.workflowId ||
+    entry.journal.workflow.step !== group.step)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'marketplace group workflow differs' });
+  }
+});
+type MarketplaceWorkflowGroupJournal = z.infer<typeof marketplaceWorkflowGroupJournalSchema>;
 
 /** Dedicated marketplace gate: provider exposure alone is insufficient. */
 export function assertMarketplaceCapability(capabilities: AccountCapabilities): void {
@@ -2084,7 +2125,7 @@ export class WalletService {
       return {
         idleTimeoutMs: config.idleTimeoutMs,
         highSecurityMode: config.highSecurityMode,
-        advancedPsbtSigning: config.advancedPsbtSigning,
+        advancedPsbtSigning: false,
       };
     });
   }
@@ -2101,9 +2142,6 @@ export class WalletService {
         ...config,
         ...(input.idleTimeoutMs !== undefined ? { idleTimeoutMs: input.idleTimeoutMs } : {}),
         ...(input.highSecurityMode !== undefined ? { highSecurityMode: input.highSecurityMode } : {}),
-        ...(input.advancedPsbtSigning !== undefined
-          ? { advancedPsbtSigning: input.advancedPsbtSigning }
-          : {}),
       };
       await saveConfig(this.deps.local, next);
       await this.touchSessionLocked(session);
@@ -2111,7 +2149,7 @@ export class WalletService {
       return {
         idleTimeoutMs: next.idleTimeoutMs,
         highSecurityMode: next.highSecurityMode,
-        advancedPsbtSigning: next.advancedPsbtSigning,
+        advancedPsbtSigning: false,
       };
     });
   }
@@ -3708,6 +3746,46 @@ export class WalletService {
     return view;
   }
 
+  private async refreshProviderGroupFacts(plan: ProviderPsbtGroupPlanV1): Promise<GatewayStatusView> {
+    const gateway = this.deps.gateway;
+    if (!gateway || gateway.endpoint !== plan.items[0]?.plan.source.backend) {
+      throw new RpcError('ERR_DATA_STALE', 'approved provider backend unavailable');
+    }
+    const internalTxids = new Set(plan.topology.nodes.map((node) => node.unsignedTxid));
+    const requested = plan.topology.nodes.flatMap((node) => node.inputs)
+      .filter((input) => !internalTxids.has(input.txid))
+      .map(({ txid, vout }) => ({ txid, vout }))
+      .filter((item, index, all) => all.findIndex((candidate) =>
+        candidate.txid === item.txid && candidate.vout === item.vout) === index)
+      .sort((left, right) => left.txid.localeCompare(right.txid) || left.vout - right.vout);
+    if (requested.length === 0) throw new RpcError('ERR_PLAN_CHANGED', 'provider group has no external roots');
+    const [view, classified] = await Promise.all([
+      this.gatewayStatus({ forceRefresh: true }),
+      classifyProviderOutpointsChunked({
+        network: plan.network,
+        requested,
+        classify: (request) => gateway.classifyOutpoints(request),
+      }),
+    ]);
+    const fresh = await this.assertProviderClassificationBatch(classified, requested);
+    const source = plan.items[0]!.plan.source;
+    if (classified.instanceId !== source.instanceId ||
+        classified.classificationRevision !== source.classificationRevision ||
+        !tipsEqual(classified.coreTip, source.coreTip) ||
+        !tipsEqual(classified.indexTip, source.indexTip)) {
+      throw new RpcError('ERR_PLAN_CHANGED', 'provider group classification source changed');
+    }
+    for (const root of requested) {
+      const expected = plan.items.flatMap((item) => item.plan.inputs).find((candidate) =>
+        candidate.txid === root.txid && candidate.vout === root.vout);
+      const current = fresh.get(`${root.txid}:${root.vout}`);
+      if (!expected || !current || !providerFactsEqual(current, expected)) {
+        throw new RpcError('ERR_PLAN_CHANGED', 'provider group root classification changed');
+      }
+    }
+    return view;
+  }
+
   private async refreshProviderPlanPreviews(plan: ProviderPsbtPlanV3): Promise<void> {
     if (plan.analysis.assetEffects.inscriptions.length === 0) return;
     const gateway = this.deps.gateway;
@@ -3745,11 +3823,26 @@ export class WalletService {
   ): Promise<void> {
     const utxos = await this.loadAllUtxosLocked(dek, vaultId);
     const byOutpoint = new Map(utxos.map((utxo) => [outpointKey(utxo.outpoint), utxo]));
-    const eligibility = await this.eligibilityContextLocked(dek, vaultId, plan.feeRateSatPerKvB);
+    // A deferred parent deliberately carries no fee; its child or replacement
+    // supplies the package fee. Eligibility still needs a positive marginal
+    // input cost, so use the minimum relay rate for that independent check.
+    const eligibilityFeeRate = plan.deferredZeroFee
+      ? 1_000n
+      : plan.feeRateSatPerKvB ?? BigInt(MAX_FEE_RATE_SAT_PER_KVB);
+    const eligibility = await this.eligibilityContextLocked(
+      dek,
+      vaultId,
+      eligibilityFeeRate,
+    );
     const protectedInputs = new Set(plan.protectedSatFlow.map((flow) => flow.inputIndex));
     for (let index = 0; index < plan.inputs.length; index += 1) {
       const planned = plan.inputs[index]!;
       if (planned.ownership !== 'wallet') continue;
+      // A child may spend an output created by another PSBT in the same
+      // approved group. It cannot exist in the wallet cache yet; Core has
+      // already proven its value, asset projection, and active-account
+      // control from the immutable parent transaction and group preparation.
+      if (plan.linkedGroup?.inputProvenance[index]?.kind === 'linked_output') continue;
       const current = byOutpoint.get(`${planned.txid}:${planned.vout}`);
       if (!current || current.accountId !== plan.accountId || current.account !== plan.account ||
           current.valueSats !== planned.valueSats ||
@@ -3778,6 +3871,7 @@ export class WalletService {
     requiresAdvanced?: boolean;
     expiresAt?: number;
     selectedInputIndexes?: number[];
+    signInputBindings?: Array<{ address: string; inputIndexes: number[] }>;
     communityVaultAcquisition?: CommunityVaultAcquisitionProviderReviewV1;
     communityVaultSale?: CommunityVaultSaleProviderReviewV1;
     communityVaultSaleBuyer?: CommunityVaultSaleBuyerProviderReviewV1;
@@ -3829,7 +3923,6 @@ export class WalletService {
           gatewayView,
           input.kind === 'provider_ordinal_transfer' ? 'rescue_sweep' : 'native_send',
         );
-        const config = await loadConfig(this.deps.local);
         const activeAccount = input.marketplace
           ? await this.assertMarketplaceAccountLocked(dek, session.vaultId)
           : await this.assertProviderAccountLocked(dek, session.vaultId);
@@ -3927,6 +4020,7 @@ export class WalletService {
               ...(input.requiresAdvanced === undefined ? {} : { requiresAdvanced: input.requiresAdvanced }),
               ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
               ...(input.selectedInputIndexes === undefined ? {} : { selectedInputIndexes: input.selectedInputIndexes }),
+              ...(input.signInputBindings === undefined ? {} : { signInputBindings: input.signInputBindings }),
               ...(input.communityVaultAcquisition === undefined ? {} : {
                 communityVaultAcquisition: input.communityVaultAcquisition,
               }),
@@ -3944,9 +4038,6 @@ export class WalletService {
             // The Advanced-signing setting gates only plans that actually need
             // the Advanced ceremony. Core decides that: recognized marketplace
             // templates and proven §21.1 generic listings are not Advanced.
-            if (plan.requiresAdvanced && !config.advancedPsbtSigning) {
-              throw new RpcError('ERR_UNSAFE_TRANSACTION', 'advanced PSBT signing is disabled');
-            }
             if (plan.analysis.assetEffects.inscriptions.length > 0) {
               if (!classified.value.capabilities.includes('preview_service')) {
                 throw new Error('signed inscription previews unavailable');
@@ -4009,6 +4100,12 @@ export class WalletService {
         binding: input.binding,
         broadcast: false,
         ...(selectedInputIndexes === undefined ? {} : { selectedInputIndexes }),
+        ...(item.inputsToSign === undefined ? {} : {
+          signInputBindings: item.inputsToSign.map((selection) => ({
+            address: selection.address,
+            inputIndexes: selection.signingIndexes,
+          })),
+        }),
       });
       for (const selection of item.inputsToSign ?? []) {
         const lane = addressLane.get(selection.address);
@@ -4034,6 +4131,236 @@ export class WalletService {
     }
   }
 
+  /**
+   * Prepare a graph-aware signing request from one authenticated root
+   * classification pass. Internally-created child inputs are projected and
+   * control-proven by Core; they are never sent to the gateway as if they were
+   * already on-chain UTXOs.
+   */
+  async providerPreparePsbtGroup(input: {
+    items: Array<{
+      nodeId: string;
+      psbtBase64: string;
+      inputsToSign: ProviderPsbtInputSelection[];
+      expectedUnsignedTxid?: string;
+      marketplace?: { context: MarketplaceContext; resolution: MarketplaceResolution };
+    }>;
+    binding: ProviderAuthorityBinding & { providerMethod: 'signMultipleTransactions' };
+    approvalGeneration: number;
+    guard?: ProviderOperationGuard;
+  }): Promise<ProviderPsbtGroupPlanV1> {
+    const gateway = this.deps.gateway;
+    if (!gateway) throw new RpcError('ERR_DATA_STALE', 'gateway unavailable');
+    const accountView = await this.providerAccountView();
+    const addressLane = new Map([
+      [accountView.payment.address, 'payment' as const],
+      [accountView.ordinals.address, 'ordinals' as const],
+    ]);
+    const preparationItems: ProviderPsbtGroupPreparationItem[] = input.items.map((item) => {
+      for (const selection of item.inputsToSign) {
+        if (!addressLane.has(selection.address)) {
+          throw new RpcError('ERR_UNSAFE_TRANSACTION', 'group signing address is not in the active account');
+        }
+      }
+      return {
+        nodeId: item.nodeId,
+        psbtBase64: item.psbtBase64,
+        selectedInputIndexes: item.inputsToSign.flatMap((selection) => selection.signingIndexes),
+        inputsToSign: item.inputsToSign,
+        ...(item.marketplace === undefined ? {} : { marketplace: item.marketplace }),
+      };
+    });
+    let inspected;
+    try {
+      inspected = inspectProviderPsbtGroupRequest(preparationItems);
+    } catch {
+      throw new RpcError('ERR_INVALID_PAYLOAD', 'invalid PSBT transaction group');
+    }
+    if (inspected.externalOutpoints.length === 0) {
+      throw new RpcError('ERR_INVALID_PAYLOAD', 'unsupported PSBT transaction group input count');
+    }
+    input.guard?.();
+    const [gatewayView, classified] = await Promise.all([
+      this.gatewayStatus({ forceRefresh: true }),
+      classifyProviderOutpointsChunked({
+        network: this.deps.network,
+        requested: inspected.externalOutpoints,
+        classify: (request) => gateway.classifyOutpoints(request),
+        ...(input.guard === undefined ? {} : { guard: input.guard }),
+      }),
+    ]);
+    await this.assertProviderClassificationBatch(classified, inspected.externalOutpoints);
+    input.guard?.();
+    return this.runExclusive(() => this.withSessionDek(
+      { expectedVaultId: accountView.vaultId, expectedSessionId: accountView.sessionId },
+      async (dek, session) => {
+        await this.assertSpendingFreshLocked(dek, session.vaultId, gatewayView, 'native_send');
+        const hasMarketplace = input.items.some((item) => item.marketplace !== undefined);
+        const activeAccount = hasMarketplace
+          ? await this.assertMarketplaceAccountLocked(dek, session.vaultId)
+          : await this.assertProviderAccountLocked(dek, session.vaultId);
+        if (activeAccount.accountId !== accountView.accountId || activeAccount.account !== accountView.account) {
+          throw new RpcError('ERR_PLAN_CHANGED', 'active account changed');
+        }
+        const utxos = await this.loadAllUtxosLocked(dek, session.vaultId);
+        const map = await loadVaults(this.deps.local);
+        const record = map[session.vaultId];
+        if (!record) throw new RpcError('ERR_VAULT_NOT_FOUND');
+        const seed = hexToBytes(openVaultPayload(record, dek).seedHex);
+        try {
+          const primaryDerivations = [
+            { lane: 'payment' as const, address: accountView.payment },
+            { lane: 'ordinals' as const, address: accountView.ordinals },
+          ].map(({ lane, address }) => ({
+            address: address.address,
+            derivation: {
+              account: activeAccount.account,
+              accountId: accountView.accountId,
+              lane,
+              chain: 0 as const,
+              index: 0 as const,
+              path: address.path,
+              publicKeyHex: address.publicKeyHex,
+            },
+          }));
+          const source: TransactionPlan['source'] = {
+            backend: gateway.endpoint,
+            instanceId: classified.instanceId,
+            classificationRevision: classified.classificationRevision,
+            coreTip: classified.coreTip,
+            indexTip: classified.indexTip,
+            feeQuoteTimestamp: null,
+            mempoolState: null,
+          };
+          const preparation = prepareProviderPsbtGroupInputs({
+            groupId: this.deps.newSessionId(),
+            items: preparationItems,
+            externalClassifications: classified.classifications,
+            source,
+            walletControl: {
+              network: this.deps.network,
+              origin: input.binding.origin,
+              accountId: accountView.accountId,
+              account: activeAccount.account,
+              candidates: primaryDerivations,
+            },
+          });
+          const walletOutputs: Array<{ scriptPubKey: string; output: PlanOutput }> =
+            primaryDerivations.map(({ address, derivation }) => {
+              const role = derivation.lane === 'payment' ? 'payment_change' as const : 'ordinal_change' as const;
+              const scriptPubKey = scriptPubKeyHex(
+                derivation.publicKeyHex, derivation.lane, this.deps.network,
+              );
+              return { scriptPubKey, output: { valueSats: 0n, scriptPubKey, address, role, derivation } };
+            });
+          const externalWalletInputs = utxos
+            .filter((utxo) => utxo.accountId === accountView.accountId &&
+              inspected.externalOutpoints.some((root) => outpointKey(utxo.outpoint) === `${root.txid}:${root.vout}`))
+            .map((utxo) => ({
+              outpoint: outpointKey(utxo.outpoint),
+              derivation: this.deriveForUtxo(seed, utxo),
+            }));
+          const plans: Array<{
+            nodeId: string;
+            plan: ProviderPsbtPlanV3;
+            inputsToSign: ProviderPsbtInputSelection[];
+            expectedUnsignedTxid?: string;
+          }> = [];
+          for (let index = 0; index < input.items.length; index += 1) {
+            input.guard?.();
+            const item = input.items[index]!;
+            const linkedBinding = providerPsbtLinkedGroupBinding(preparation, item.nodeId);
+            const selectedInputIndexes = item.inputsToSign.flatMap((selection) => selection.signingIndexes);
+            let plan = createProviderPsbtPlan({
+              psbtBase64: item.psbtBase64,
+              binding: input.binding,
+              network: this.deps.network,
+              vaultId: session.vaultId,
+              sessionId: session.sessionId,
+              accountId: accountView.accountId,
+              account: activeAccount.account,
+              classifications: linkedBinding.classifications,
+              walletInputs: [...externalWalletInputs, ...linkedBinding.walletInputs],
+              source,
+              broadcast: false,
+              planId: this.deps.newSessionId(),
+              now: this.deps.vaultDeps.now(),
+              walletOutputs,
+              selectedInputIndexes,
+              signInputBindings: item.inputsToSign.map((selection) => ({
+                address: selection.address,
+                inputIndexes: selection.signingIndexes,
+              })),
+              ...(item.marketplace === undefined ? {} : { marketplace: {
+                ...item.marketplace,
+                selectedInputIndexes,
+              } }),
+              ...(inspected.topology.independent ? {} : { linkedGroup: linkedBinding.linkedGroup }),
+            });
+            for (const selection of item.inputsToSign) {
+              const lane = addressLane.get(selection.address);
+              if (selection.signingIndexes.some((inputIndex) => plan.inputs[inputIndex]?.derivation?.lane !== lane)) {
+                throw new Error('group signing indexes do not match their address');
+              }
+            }
+            if (plan.analysis.assetEffects.inscriptions.length > 0) {
+              if (!classified.capabilities.includes('preview_service')) {
+                throw new Error('signed inscription previews unavailable');
+              }
+              const request = inscriptionApprovalRequest({
+                network: plan.network,
+                analysis: plan.analysis,
+                analysisHash: plan.analysisHash,
+                psbtHash: plan.psbtHash,
+                transactionCommitmentHash: plan.transactionCommitmentHash,
+              });
+              const fetched = await gateway.fetchInscriptionApprovalBatch(request);
+              if (!fetched.ok || fetched.value.instanceId !== plan.source.instanceId ||
+                  !tipsEqual(fetched.value.coreTip, plan.source.coreTip) ||
+                  !tipsEqual(fetched.value.indexTip, plan.source.indexTip)) {
+                throw new Error('signed inscription previews unavailable');
+              }
+              plan = bindProviderPsbtPlanPreviews(plan, bindInscriptionPreviews({
+                request,
+                response: fetched.value,
+                verifiedAtMs: fetched.verifiedAtMs,
+              }));
+            }
+            await this.assertProviderWalletInputsEligibleLocked(dek, session.vaultId, plan);
+            plans.push({
+              nodeId: item.nodeId,
+              plan,
+              inputsToSign: item.inputsToSign,
+              ...(item.expectedUnsignedTxid === undefined
+                ? {} : { expectedUnsignedTxid: item.expectedUnsignedTxid }),
+            });
+          }
+          input.guard?.();
+          const group = createProviderPsbtGroupPlan({
+            items: plans,
+            groupId: preparation.groupId,
+            now: this.deps.vaultDeps.now(),
+            approvalGeneration: input.approvalGeneration,
+            ...(inspected.topology.independent ? {} : { preparation }),
+          });
+          input.guard?.();
+          await this.persistMarketplaceGroupPreparedLocked(
+            dek,
+            group,
+            input.guard,
+          );
+          input.guard?.();
+          return group;
+        } catch (error) {
+          if (error instanceof RpcError) throw error;
+          throw new RpcError('ERR_UNSAFE_TRANSACTION', 'provider PSBT transaction group rejected');
+        } finally {
+          zeroize(seed);
+        }
+      },
+    ));
+  }
+
   /** Revalidate the exact provider plan before it is shown or approved. */
   async providerRevalidatePreparedPsbt(plan: ProviderPsbtPlanV3): Promise<void> {
     try {
@@ -4049,10 +4376,6 @@ export class WalletService {
       if (!session || session.vaultId !== plan.vaultId || session.sessionId !== plan.sessionId ||
           plan.network !== this.deps.network) {
         throw new RpcError('ERR_LOCKED', 'wallet session changed');
-      }
-      const config = await loadConfig(this.deps.local);
-      if (plan.requiresAdvanced && !config.advancedPsbtSigning) {
-        throw new RpcError('ERR_PLAN_CHANGED', 'provider review context changed');
       }
       await this.withSessionDek(
         { expectedVaultId: session.vaultId, expectedSessionId: session.sessionId },
@@ -4085,6 +4408,39 @@ export class WalletService {
     for (const item of plan.items) await this.providerRevalidatePreparedPsbt(item.plan);
   }
 
+  async providerRevalidatePreparedPsbtGroup(plan: ProviderPsbtGroupPlanV1): Promise<void> {
+    try {
+      assertProviderPsbtGroupPlan(plan);
+    } catch {
+      throw new RpcError('ERR_PLAN_CHANGED', 'provider transaction group changed');
+    }
+    if (this.deps.vaultDeps.now() >= plan.expiresAt) throw new RpcError('ERR_PLAN_EXPIRED');
+    const gatewayView = await this.refreshProviderGroupFacts(plan);
+    for (const item of plan.items) await this.refreshProviderPlanPreviews(item.plan);
+    await this.runExclusive(async () => {
+      const session = await this.liveSession();
+      if (!session || session.vaultId !== plan.vaultId || session.sessionId !== plan.sessionId ||
+          plan.network !== this.deps.network) {
+        throw new RpcError('ERR_LOCKED', 'wallet session changed');
+      }
+      await this.withSessionDek(
+        { expectedVaultId: session.vaultId, expectedSessionId: session.sessionId },
+        async (dek) => {
+          const active = plan.items.some((item) => item.plan.marketplace)
+            ? await this.assertMarketplaceAccountLocked(dek, session.vaultId)
+            : await this.assertProviderAccountLocked(dek, session.vaultId);
+          if (active.accountId !== plan.accountId || active.account !== plan.account) {
+            throw new RpcError('ERR_PLAN_CHANGED', 'provider group review account changed');
+          }
+          await this.assertSpendingFreshLocked(dek, session.vaultId, gatewayView, 'native_send');
+          for (const item of plan.items) {
+            await this.assertProviderWalletInputsEligibleLocked(dek, session.vaultId, item.plan);
+          }
+        },
+      );
+    });
+  }
+
   async providerSignPreparedPsbt(
     plan: ProviderPsbtPlanV3,
     requestedInputIndexes?: number[],
@@ -4103,10 +4459,6 @@ export class WalletService {
       if (!session || session.vaultId !== plan.vaultId || session.sessionId !== plan.sessionId ||
           plan.network !== this.deps.network) {
         throw new RpcError('ERR_LOCKED', 'wallet session changed');
-      }
-      const config = await loadConfig(this.deps.local);
-      if (plan.requiresAdvanced && !config.advancedPsbtSigning) {
-        throw new RpcError('ERR_PLAN_CHANGED', 'provider signing context changed');
       }
       if (!deriveAccountCapabilities({
         unlocked: true,
@@ -4175,10 +4527,6 @@ export class WalletService {
           plan.network !== this.deps.network) {
         throw new RpcError('ERR_LOCKED', 'wallet session changed');
       }
-      const config = await loadConfig(this.deps.local);
-      if (plan.requiresAdvanced && !config.advancedPsbtSigning) {
-        throw new RpcError('ERR_PLAN_CHANGED', 'provider batch signing context changed');
-      }
       if (!deriveAccountCapabilities({
         unlocked: true,
         vaultType: 'seed',
@@ -4229,6 +4577,74 @@ export class WalletService {
     });
   }
 
+  async providerSignPreparedPsbtGroup(
+    plan: ProviderPsbtGroupPlanV1,
+    guard?: ProviderOperationGuard,
+  ): Promise<Array<{ psbtBase64: string }>> {
+    try {
+      assertProviderPsbtGroupPlan(plan);
+    } catch {
+      throw new RpcError('ERR_PLAN_CHANGED', 'provider transaction group changed');
+    }
+    if (this.deps.vaultDeps.now() >= plan.expiresAt) throw new RpcError('ERR_PLAN_EXPIRED');
+    const gatewayView = await this.refreshProviderGroupFacts(plan);
+    for (const item of plan.items) await this.refreshProviderPlanPreviews(item.plan);
+    return this.runExclusive(async () => {
+      const session = await this.liveSession();
+      if (!session || session.vaultId !== plan.vaultId || session.sessionId !== plan.sessionId ||
+          plan.network !== this.deps.network) {
+        throw new RpcError('ERR_LOCKED', 'wallet session changed');
+      }
+      if (!deriveAccountCapabilities({
+        unlocked: true,
+        vaultType: 'seed',
+        network: this.deps.network,
+        transport: 'software',
+      }).canSignPsbt) {
+        throw new RpcError('ERR_UNSAFE_TRANSACTION', 'account cannot sign PSBTs');
+      }
+      return this.withSessionDek(
+        { expectedVaultId: session.vaultId, expectedSessionId: session.sessionId },
+        async (dek) => {
+          const active = plan.items.some((item) => item.plan.marketplace)
+            ? await this.assertMarketplaceAccountLocked(dek, session.vaultId)
+            : await this.assertProviderAccountLocked(dek, session.vaultId);
+          if (active.accountId !== plan.accountId || active.account !== plan.account) {
+            throw new RpcError('ERR_PLAN_CHANGED', 'provider group signing account changed');
+          }
+          await this.assertSpendingFreshLocked(dek, session.vaultId, gatewayView, 'native_send');
+          for (const item of plan.items) {
+            await this.assertProviderWalletInputsEligibleLocked(dek, session.vaultId, item.plan);
+          }
+          const map = await loadVaults(this.deps.local);
+          const record = map[session.vaultId];
+          if (!record) throw new RpcError('ERR_VAULT_NOT_FOUND');
+          const seed = hexToBytes(openVaultPayload(record, dek).seedHex);
+          try {
+            guard?.();
+            const signed = await signProviderPsbtGroupPlan({
+              plan,
+              seed,
+              now: () => this.deps.vaultDeps.now(),
+              random: (length) => this.deps.vaultDeps.random(length),
+              ...(guard === undefined ? {} : { guard }),
+              yieldControl: () => new Promise((resolve) => setTimeout(resolve, 0)),
+            });
+            await this.persistMarketplaceGroupSignedLocked(
+              dek,
+              plan,
+              signed.results,
+              guard,
+            );
+            return signed.results.map(({ psbtBase64 }) => ({ psbtBase64 }));
+          } finally {
+            zeroize(seed);
+          }
+        },
+      );
+    });
+  }
+
   async providerMarkMarketplaceDelivered(plan: ProviderPsbtPlanV3): Promise<void> {
     if (!plan.marketplace || plan.marketplace.context.broadcaster !== 'site') return;
     const marketplace = plan.marketplace;
@@ -4268,6 +4684,68 @@ export class WalletService {
     ));
   }
 
+  async providerMarkMarketplaceGroupDelivered(plan: ProviderPsbtGroupPlanV1): Promise<void> {
+    const marketplaceItems = plan.items.filter((item) => item.plan.marketplace !== undefined);
+    if (marketplaceItems.length === 0 ||
+        marketplaceItems.every((item) => item.plan.marketplace!.context.broadcaster !== 'site')) return;
+    if (marketplaceItems.length !== plan.items.length) {
+      throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow group is incomplete');
+    }
+    const first = marketplaceItems[0]!.plan;
+    const workflowId = first.marketplace!.context.workflowId;
+    await this.runExclusive(() => this.withSessionDek(
+      { expectedVaultId: plan.vaultId, expectedSessionId: plan.sessionId },
+      async (dek) => {
+        const active = await this.assertMarketplaceAccountLocked(dek, plan.vaultId);
+        if (active.accountId !== plan.accountId || active.account !== plan.account) {
+          throw new RpcError('ERR_PLAN_CHANGED', 'provider group delivery account changed');
+        }
+        const key = this.cacheKey(
+          plan.vaultId,
+          'marketplaceWorkflows',
+          this.marketplaceWorkflowGroupKey(plan, workflowId),
+        );
+        const cache = this.requireCache();
+        const record = await cache.get(key);
+        if (!record) return;
+        let grouped: MarketplaceWorkflowGroupJournal;
+        try { grouped = openRecord(dek, record, marketplaceWorkflowGroupJournalSchema); }
+        catch { throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow group journal is corrupt'); }
+        if (grouped.groupHash !== plan.groupHash || grouped.entries.length !== marketplaceItems.length) return;
+        const now = this.deps.vaultDeps.now();
+        const entries = grouped.entries.map((entry, index) => {
+          const item = marketplaceItems[index];
+          if (!item || entry.nodeId !== item.nodeId || !item.plan.marketplace) {
+            throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow group changed');
+          }
+          const workflow = this.assertMarketplaceWorkflowJournal(
+            entry.journal,
+            item.plan,
+            item.plan.marketplace.context.step,
+          );
+          if (workflow.planHash !== item.plan.planHash || workflow.state !== 'signed_undelivered') {
+            return entry;
+          }
+          if (workflow.broadcaster !== 'site') return entry;
+          return {
+            ...entry,
+            journal: this.marketplaceWorkflowJournal(
+              item.plan,
+              transitionMarketplaceWorkflow(workflow, 'delivered_site_broadcast', now),
+            ),
+          };
+        });
+        await cache.put(sealRecord(
+          dek,
+          marketplaceWorkflowGroupJournalSchema.parse({ ...grouped, entries, updatedAt: now }),
+          key,
+          this.deps.vaultDeps.random(24),
+          now,
+        ));
+      },
+    ));
+  }
+
   async providerBroadcastPreparedPsbt(
     plan: ProviderPsbtPlanV3,
     requestedInputIndexes?: number[],
@@ -4282,7 +4760,12 @@ export class WalletService {
     if (!feeResponse.ok) throw new RpcError('ERR_FEE_QUOTE_INVALID', 'fee estimator unavailable');
     try { validateAutomaticQuote(feeResponse.value, this.deps.vaultDeps.now()); }
     catch { throw new RpcError('ERR_FEE_QUOTE_INVALID', 'unsafe fee quote'); }
-    const feeTier = feeResponse.value.tiers.find((tier) => BigInt(tier.effectiveSatPerKvB) <= plan.feeRateSatPerKvB);
+    if (plan.feeRateSatPerKvB === null) {
+      throw new RpcError('ERR_FEE_QUOTE_INVALID', 'provider fee rate is unavailable');
+    }
+    const approvedFeeRate = plan.feeRateSatPerKvB;
+    const feeTier = feeResponse.value.tiers.find((tier) =>
+      BigInt(tier.effectiveSatPerKvB) <= approvedFeeRate);
     if (!feeTier) throw new RpcError('ERR_FEE_QUOTE_INVALID', 'provider fee is below the live policy floor');
     const wtxid = transactionWtxid(signed.transactionHex);
     const recovery: ProviderBroadcastRecovery = {
@@ -8565,9 +9048,15 @@ export class WalletService {
       const record = await cache.get(this.cacheKey(vaultId, 'marketplaceWorkflows', workflowId));
       if (!record) continue;
       try {
-        const workflow = openRecord(dek, record, marketplaceWorkflowJournalSchema).workflow;
-        if (['signed_undelivered', 'delivered_site_broadcast', 'wallet_broadcast_pending'].includes(workflow.state)) {
-          for (const outpoint of workflow.reservedOutpoints) locked.add(outpoint);
+        const workflows = workflowId.startsWith('group:')
+          ? openRecord(dek, record, marketplaceWorkflowGroupJournalSchema).entries.map(
+              (entry) => entry.journal.workflow,
+            )
+          : [openRecord(dek, record, marketplaceWorkflowJournalSchema).workflow];
+        for (const workflow of workflows) {
+          if (['signed_undelivered', 'delivered_site_broadcast', 'wallet_broadcast_pending'].includes(workflow.state)) {
+            for (const outpoint of workflow.reservedOutpoints) locked.add(outpoint);
+          }
         }
       } catch {
         // Durable reservation records remain authoritative if a workflow is
@@ -9171,6 +9660,124 @@ export class WalletService {
     return `${plan.marketplace.context.workflowId}:${workflowStep}:${bindingHash}`;
   }
 
+  private marketplaceWorkflowGroupKey(plan: ProviderPsbtGroupPlanV1, workflowId: string): string {
+    return `group:${workflowId}:${plan.groupHash}`;
+  }
+
+  private async marketplaceWorkflowGroupsLocked(
+    dek: Uint8Array,
+    plan: ProviderPsbtPlanV3,
+  ): Promise<MarketplaceWorkflowGroupJournal[]> {
+    if (!plan.marketplace) return [];
+    const cache = this.requireCache();
+    const prefix = `group:${plan.marketplace.context.workflowId}:`;
+    const keys = await cache.listKeys(plan.vaultId, plan.network, 'marketplaceWorkflows');
+    const groups: MarketplaceWorkflowGroupJournal[] = [];
+    for (const key of keys.filter((candidate) => candidate.startsWith(prefix))) {
+      const record = await cache.get(this.cacheKey(plan.vaultId, 'marketplaceWorkflows', key));
+      if (!record) continue;
+      try {
+        groups.push(openRecord(dek, record, marketplaceWorkflowGroupJournalSchema));
+      } catch {
+        throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow group journal is corrupt');
+      }
+    }
+    return groups;
+  }
+
+  private async marketplaceWorkflowJournalsLocked(
+    dek: Uint8Array,
+    plan: ProviderPsbtPlanV3,
+  ): Promise<MarketplaceWorkflowJournal[]> {
+    if (!plan.marketplace) return [];
+    const cache = this.requireCache();
+    const prefix = `${plan.marketplace.context.workflowId}:`;
+    const keys = await cache.listKeys(plan.vaultId, plan.network, 'marketplaceWorkflows');
+    const journals: MarketplaceWorkflowJournal[] = [];
+    for (const key of keys.filter((candidate) =>
+      !candidate.startsWith('group:') && candidate.startsWith(prefix))) {
+      const record = await cache.get(this.cacheKey(plan.vaultId, 'marketplaceWorkflows', key));
+      if (!record) continue;
+      try {
+        journals.push(openRecord(dek, record, marketplaceWorkflowJournalSchema));
+      } catch {
+        throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow journal is corrupt');
+      }
+    }
+    return journals;
+  }
+
+  private marketplaceGroupAuthorityMatches(
+    group: MarketplaceWorkflowGroupJournal,
+    plan: ProviderPsbtPlanV3,
+    step: number,
+    allowDifferentRequest: boolean,
+  ): boolean {
+    if (group.step !== step || group.entries.length === 0) return false;
+    try {
+      for (const entry of group.entries) {
+        this.assertMarketplaceWorkflowJournal(
+          entry.journal,
+          plan,
+          step,
+          allowDifferentRequest,
+        );
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private marketplaceSignedGroupHash(group: MarketplaceWorkflowGroupJournal): string {
+    const signed = group.entries.map((entry) => ({
+      nodeId: entry.nodeId,
+      signedPsbtBase64: entry.journal.workflow.signedPsbtBase64,
+    }));
+    if (signed.some((entry) => entry.signedPsbtBase64 === null)) {
+      throw new RpcError('ERR_PLAN_CHANGED', 'prior marketplace workflow group is not signed');
+    }
+    return bytesToHex(getCryptoProvider().sha256(
+      new TextEncoder().encode(JSON.stringify({ groupHash: group.groupHash, signed })),
+    ));
+  }
+
+  private async marketplacePriorSignedHashLocked(
+    dek: Uint8Array,
+    plan: ProviderPsbtPlanV3,
+    priorStep: number,
+  ): Promise<string> {
+    const signedStates = new Set([
+      'signed_undelivered', 'delivered_site_broadcast', 'wallet_broadcast_pending', 'completed',
+    ]);
+    const candidates: string[] = [];
+    for (const journal of await this.marketplaceWorkflowJournalsLocked(dek, plan)) {
+      try {
+        const workflow = this.assertMarketplaceWorkflowJournal(journal, plan, priorStep, true);
+        if (!signedStates.has(workflow.state) || workflow.signedPsbtBase64 === null) {
+          throw new RpcError('ERR_PLAN_CHANGED', 'prior marketplace workflow step is not signed');
+        }
+        candidates.push(hashHex(bytesToHex(base64ToBytes(workflow.signedPsbtBase64))));
+      } catch (error) {
+        if (error instanceof RpcError && error.message.includes('authority changed')) continue;
+        if (journal.workflow.step === priorStep) throw error;
+      }
+    }
+    for (const group of await this.marketplaceWorkflowGroupsLocked(dek, plan)) {
+      if (!this.marketplaceGroupAuthorityMatches(group, plan, priorStep, true)) continue;
+      if (group.entries.some((entry) => !signedStates.has(entry.journal.workflow.state))) {
+        throw new RpcError('ERR_PLAN_CHANGED', 'prior marketplace workflow group is not signed');
+      }
+      candidates.push(this.marketplaceSignedGroupHash(group));
+    }
+    if (candidates.length !== 1) {
+      throw new RpcError('ERR_PLAN_CHANGED', candidates.length === 0
+        ? 'marketplace workflow step is out of order'
+        : 'marketplace prior workflow step is ambiguous');
+    }
+    return candidates[0]!;
+  }
+
   private marketplaceWorkflowJournal(
     plan: ProviderPsbtPlanV3,
     workflow: MarketplaceWorkflow,
@@ -9190,91 +9797,13 @@ export class WalletService {
     });
   }
 
-  private assertMarketplaceWorkflowJournal(
-    journal: MarketplaceWorkflowJournal,
+  private preparedMarketplaceWorkflow(
     plan: ProviderPsbtPlanV3,
-    expectedStep: number,
-    priorStep = false,
+    priorSignedHash: string | null,
+    now: number,
   ): MarketplaceWorkflow {
-    const marketplace = plan.marketplace;
-    if (!marketplace) throw new RpcError('ERR_PLAN_CHANGED', 'marketplace context missing');
-    const workflow = journal.workflow;
-    const authorityMatches = journal.authority.origin === plan.provider.origin &&
-      journal.authority.tabId === plan.provider.tabId &&
-      journal.authority.frameId === plan.provider.frameId &&
-      journal.authority.documentId === plan.provider.documentId &&
-      (priorStep || (
-        journal.authority.requestNonce === plan.provider.requestNonce &&
-        journal.authority.providerMethod === plan.provider.providerMethod
-      ));
-    if (journal.accountId !== plan.accountId || !authorityMatches ||
-        workflow.workflowId !== marketplace.context.workflowId ||
-        workflow.step !== expectedStep || workflow.stepCount !== marketplace.context.stepCount ||
-        workflow.origin !== plan.provider.origin || workflow.network !== plan.network ||
-        workflow.vaultId !== plan.vaultId || workflow.sessionId !== plan.sessionId ||
-        workflow.account !== plan.account ||
-        workflow.marketplaceId !== marketplace.context.marketplaceId ||
-        workflow.templateId !== marketplace.resolution.templateId ||
-        workflow.templateVersion !== marketplace.context.templateVersion ||
-        workflow.role !== marketplace.context.role || workflow.action !== marketplace.context.action ||
-        workflow.assetKind !== marketplace.context.assetKind ||
-        workflow.broadcaster !== marketplace.context.broadcaster) {
-      throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow authority changed');
-    }
-    return workflow;
-  }
-
-  private async persistMarketplacePreparedLocked(
-    dek: Uint8Array,
-    plan: ProviderPsbtPlanV3,
-  ): Promise<void> {
-    if (!plan.marketplace) return;
-    const cache = this.requireCache();
-    const key = this.marketplaceWorkflowKey(plan);
-    const recordKey = this.cacheKey(plan.vaultId, 'marketplaceWorkflows', key);
-    const existingRecord = await cache.get(recordKey);
-    if (existingRecord) {
-      let existing: MarketplaceWorkflow;
-      try {
-        existing = this.assertMarketplaceWorkflowJournal(
-          openRecord(dek, existingRecord, marketplaceWorkflowJournalSchema),
-          plan,
-          plan.marketplace.context.step,
-        );
-      }
-      catch { throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow journal is corrupt'); }
-      if (existing.planHash === plan.planHash && existing.psbtHash === plan.psbtHash &&
-          existing.requestHash === marketplaceRequestHash(plan) &&
-          ['prepared', 'needs_reapproval'].includes(existing.state)) return;
-      throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow step was replayed or changed');
-    }
-    let priorSignedHash: string | null = null;
-    if (plan.marketplace.context.step > 1) {
-      const priorKey = this.cacheKey(
-        plan.vaultId,
-        'marketplaceWorkflows',
-        this.marketplaceWorkflowKey(plan, plan.marketplace.context.step - 1),
-      );
-      const priorRecord = await cache.get(priorKey);
-      if (!priorRecord) throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow step is out of order');
-      let prior: MarketplaceWorkflow;
-      try {
-        prior = this.assertMarketplaceWorkflowJournal(
-          openRecord(dek, priorRecord, marketplaceWorkflowJournalSchema),
-          plan,
-          plan.marketplace.context.step - 1,
-          true,
-        );
-      }
-      catch { throw new RpcError('ERR_PLAN_CHANGED', 'prior marketplace workflow step is corrupt'); }
-      if (!['signed_undelivered', 'delivered_site_broadcast', 'wallet_broadcast_pending', 'completed'].includes(prior.state) ||
-          prior.signedPsbtBase64 === null) {
-        throw new RpcError('ERR_PLAN_CHANGED', 'prior marketplace workflow step is not signed');
-      }
-      priorSignedHash = hashHex(bytesToHex(base64ToBytes(prior.signedPsbtBase64)));
-    }
-    const now = this.deps.vaultDeps.now();
-    const workflow: MarketplaceWorkflow = marketplaceWorkflowSchema.parse({
+    if (!plan.marketplace) throw new RpcError('ERR_PLAN_CHANGED', 'marketplace context missing');
+    return marketplaceWorkflowSchema.parse({
       version: 1,
       workflowId: plan.marketplace.context.workflowId,
       marketplaceId: plan.marketplace.context.marketplaceId,
@@ -9309,13 +9838,189 @@ export class WalletService {
       createdAt: now,
       updatedAt: now,
     });
-    await cache.put(sealRecord(
+  }
+
+  private assertMarketplaceWorkflowJournal(
+    journal: MarketplaceWorkflowJournal,
+    plan: ProviderPsbtPlanV3,
+    expectedStep: number,
+    allowDifferentRequest = false,
+  ): MarketplaceWorkflow {
+    const marketplace = plan.marketplace;
+    if (!marketplace) throw new RpcError('ERR_PLAN_CHANGED', 'marketplace context missing');
+    const workflow = journal.workflow;
+    const authorityMatches = journal.authority.origin === plan.provider.origin &&
+      journal.authority.tabId === plan.provider.tabId &&
+      journal.authority.frameId === plan.provider.frameId &&
+      journal.authority.documentId === plan.provider.documentId &&
+      (allowDifferentRequest || (
+        journal.authority.requestNonce === plan.provider.requestNonce &&
+        journal.authority.providerMethod === plan.provider.providerMethod
+      ));
+    if (journal.accountId !== plan.accountId || !authorityMatches ||
+        workflow.workflowId !== marketplace.context.workflowId ||
+        workflow.step !== expectedStep || workflow.stepCount !== marketplace.context.stepCount ||
+        workflow.origin !== plan.provider.origin || workflow.network !== plan.network ||
+        workflow.vaultId !== plan.vaultId || workflow.sessionId !== plan.sessionId ||
+        workflow.account !== plan.account ||
+        workflow.marketplaceId !== marketplace.context.marketplaceId ||
+        workflow.templateId !== marketplace.resolution.templateId ||
+        workflow.templateVersion !== marketplace.context.templateVersion ||
+        workflow.role !== marketplace.context.role || workflow.action !== marketplace.context.action ||
+        workflow.assetKind !== marketplace.context.assetKind ||
+        workflow.broadcaster !== marketplace.context.broadcaster) {
+      throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow authority changed');
+    }
+    return workflow;
+  }
+
+  private async persistMarketplacePreparedLocked(
+    dek: Uint8Array,
+    plan: ProviderPsbtPlanV3,
+    write = true,
+  ): Promise<WalletCacheRecord | undefined> {
+    if (!plan.marketplace) return undefined;
+    const cache = this.requireCache();
+    const key = this.marketplaceWorkflowKey(plan);
+    const recordKey = this.cacheKey(plan.vaultId, 'marketplaceWorkflows', key);
+    const existingRecord = await cache.get(recordKey);
+    if (existingRecord) {
+      let existing: MarketplaceWorkflow;
+      try {
+        existing = this.assertMarketplaceWorkflowJournal(
+          openRecord(dek, existingRecord, marketplaceWorkflowJournalSchema),
+          plan,
+          plan.marketplace.context.step,
+        );
+      }
+      catch { throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow journal is corrupt'); }
+      if (existing.planHash === plan.planHash && existing.psbtHash === plan.psbtHash &&
+          existing.requestHash === marketplaceRequestHash(plan) &&
+          ['prepared', 'needs_reapproval'].includes(existing.state)) return undefined;
+      throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow step was replayed or changed');
+    }
+    const groupedAtStep = (await this.marketplaceWorkflowGroupsLocked(dek, plan)).some((group) =>
+      this.marketplaceGroupAuthorityMatches(
+        group,
+        plan,
+        plan.marketplace!.context.step,
+        true,
+      ));
+    if (groupedAtStep) {
+      throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow step was replayed or changed');
+    }
+    let priorSignedHash: string | null = null;
+    if (plan.marketplace.context.step > 1) {
+      priorSignedHash = await this.marketplacePriorSignedHashLocked(
+        dek,
+        plan,
+        plan.marketplace.context.step - 1,
+      );
+    }
+    const now = this.deps.vaultDeps.now();
+    const workflow = this.preparedMarketplaceWorkflow(plan, priorSignedHash, now);
+    const record = sealRecord(
       dek,
       this.marketplaceWorkflowJournal(plan, workflow),
       recordKey,
       this.deps.vaultDeps.random(24),
       now,
-    ));
+    );
+    if (write) {
+      await cache.put(record);
+      return undefined;
+    }
+    return record;
+  }
+
+  /** One aggregate record makes a same-step marketplace group one replay unit. */
+  private async persistMarketplaceGroupPreparedLocked(
+    dek: Uint8Array,
+    plan: ProviderPsbtGroupPlanV1,
+    guard?: ProviderOperationGuard,
+  ): Promise<void> {
+    const marketplaceItems = plan.items.filter((item) => item.plan.marketplace !== undefined);
+    if (marketplaceItems.length === 0) return;
+    if (marketplaceItems.length !== plan.items.length) {
+      throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow group is incomplete');
+    }
+    const first = marketplaceItems[0]!.plan;
+    const workflowId = first.marketplace!.context.workflowId;
+    const step = first.marketplace!.context.step;
+    const templateId = first.marketplace!.resolution.templateId;
+    const broadcaster = first.marketplace!.context.broadcaster;
+    if (marketplaceItems.some((item) =>
+      item.plan.marketplace!.context.workflowId !== workflowId ||
+      item.plan.marketplace!.context.step !== step ||
+      item.plan.marketplace!.resolution.templateId !== templateId ||
+      item.plan.marketplace!.context.broadcaster !== broadcaster)) {
+      throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow steps require separate approvals');
+    }
+    const cache = this.requireCache();
+    const recordKey = this.cacheKey(
+      plan.vaultId,
+      'marketplaceWorkflows',
+      this.marketplaceWorkflowGroupKey(plan, workflowId),
+    );
+    const existingRecord = await cache.get(recordKey);
+    if (existingRecord) {
+      let existing: MarketplaceWorkflowGroupJournal;
+      try { existing = openRecord(dek, existingRecord, marketplaceWorkflowGroupJournalSchema); }
+      catch { throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow group journal is corrupt'); }
+      if (existing.groupHash !== plan.groupHash || existing.entries.length !== marketplaceItems.length) {
+        throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow group was replayed or changed');
+      }
+      for (let index = 0; index < marketplaceItems.length; index += 1) {
+        const item = marketplaceItems[index]!;
+        const entry = existing.entries[index];
+        if (!entry || entry.nodeId !== item.nodeId) {
+          throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow group was replayed or changed');
+        }
+        const workflow = this.assertMarketplaceWorkflowJournal(entry.journal, item.plan, step);
+        if (workflow.state !== 'prepared' || workflow.planHash !== item.plan.planHash ||
+            workflow.psbtHash !== item.plan.psbtHash ||
+            workflow.requestHash !== marketplaceRequestHash(item.plan)) {
+          throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow group was replayed or changed');
+        }
+      }
+      return;
+    }
+    const existingSingles = await this.marketplaceWorkflowJournalsLocked(dek, first);
+    if (existingSingles.some((journal) => {
+      try {
+        this.assertMarketplaceWorkflowJournal(journal, first, step, true);
+        return true;
+      } catch { return false; }
+    })) {
+      throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow group was replayed or changed');
+    }
+    const existingGroups = await this.marketplaceWorkflowGroupsLocked(dek, first);
+    if (existingGroups.some((group) =>
+      this.marketplaceGroupAuthorityMatches(group, first, step, true))) {
+      throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow group was replayed or changed');
+    }
+    const priorSignedHash = step > 1
+      ? await this.marketplacePriorSignedHashLocked(dek, first, step - 1)
+      : null;
+    const now = this.deps.vaultDeps.now();
+    const grouped = marketplaceWorkflowGroupJournalSchema.parse({
+      version: 1,
+      groupHash: plan.groupHash,
+      workflowId,
+      step,
+      entries: marketplaceItems.map((item) => ({
+        nodeId: item.nodeId,
+        journal: this.marketplaceWorkflowJournal(
+          item.plan,
+          this.preparedMarketplaceWorkflow(item.plan, priorSignedHash, now),
+        ),
+      })),
+      createdAt: now,
+      updatedAt: now,
+    });
+    guard?.();
+    await cache.put(sealRecord(dek, grouped, recordKey, this.deps.vaultDeps.random(24), now));
+    guard?.();
   }
 
   private async persistMarketplaceSignedLocked(
@@ -9323,10 +10028,112 @@ export class WalletService {
     plan: ProviderPsbtPlanV3,
     signedPsbtBase64: string,
   ): Promise<void> {
-    if (!plan.marketplace) return;
+    const cache = this.requireCache();
+    const records = await this.buildMarketplaceSignedRecordsLocked(dek, plan, signedPsbtBase64);
+    await cache.putMany(records);
+  }
+
+  private async persistMarketplaceGroupSignedLocked(
+    dek: Uint8Array,
+    plan: ProviderPsbtGroupPlanV1,
+    results: readonly { nodeId: string; psbtBase64: string }[],
+    guard?: ProviderOperationGuard,
+  ): Promise<void> {
+    const marketplaceItems = plan.items.filter((item) => item.plan.marketplace !== undefined);
+    if (marketplaceItems.length === 0) return;
+    if (marketplaceItems.length !== plan.items.length || results.length !== marketplaceItems.length) {
+      throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow group changed');
+    }
+    const first = marketplaceItems[0]!.plan;
+    const workflowId = first.marketplace!.context.workflowId;
+    const recordKey = this.cacheKey(
+      plan.vaultId,
+      'marketplaceWorkflows',
+      this.marketplaceWorkflowGroupKey(plan, workflowId),
+    );
+    const cache = this.requireCache();
+    const record = await cache.get(recordKey);
+    if (!record) throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow group journal is missing');
+    let grouped: MarketplaceWorkflowGroupJournal;
+    try { grouped = openRecord(dek, record, marketplaceWorkflowGroupJournalSchema); }
+    catch { throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow group journal is corrupt'); }
+    if (grouped.groupHash !== plan.groupHash || grouped.entries.length !== marketplaceItems.length) {
+      throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow group state changed');
+    }
+    const resultByNode = new Map(results.map((result) => [result.nodeId, result.psbtBase64]));
+    if (resultByNode.size !== results.length) {
+      throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow group result changed');
+    }
+    const now = this.deps.vaultDeps.now();
+    const pendingRecords = new Map<string, WalletCacheRecord>();
+    const entries = [];
+    for (let index = 0; index < marketplaceItems.length; index += 1) {
+      guard?.();
+      const item = marketplaceItems[index]!;
+      const entry = grouped.entries[index];
+      if (!entry || entry.nodeId !== item.nodeId) {
+        throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow group state changed');
+      }
+      const workflow = this.assertMarketplaceWorkflowJournal(
+        entry.journal,
+        item.plan,
+        item.plan.marketplace!.context.step,
+      );
+      const signedPsbtBase64 = resultByNode.get(item.nodeId);
+      if (workflow.state !== 'prepared' || workflow.planHash !== item.plan.planHash ||
+          workflow.psbtHash !== item.plan.psbtHash ||
+          workflow.requestHash !== marketplaceRequestHash(item.plan) ||
+          signedPsbtBase64 === undefined) {
+        throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow group state changed');
+      }
+      const approved = transitionMarketplaceWorkflow(workflow, 'approved_unsigned', now);
+      const signed = transitionMarketplaceWorkflow(
+        approved,
+        'signed_undelivered',
+        now,
+        { signedPsbtBase64 },
+      );
+      entries.push({
+        nodeId: item.nodeId,
+        journal: this.marketplaceWorkflowJournal(item.plan, signed),
+      });
+      const reservations = await this.buildMarketplaceReservationRecordsLocked(
+        dek,
+        item.plan,
+        signed,
+        pendingRecords,
+      );
+      for (const reservation of reservations) {
+        pendingRecords.set(this.walletCacheRecordId(reservation), reservation);
+      }
+    }
+    const signedGroup = marketplaceWorkflowGroupJournalSchema.parse({
+      ...grouped,
+      entries,
+      updatedAt: now,
+    });
+    const signedGroupRecord = sealRecord(
+      dek,
+      signedGroup,
+      recordKey,
+      this.deps.vaultDeps.random(24),
+      now,
+    );
+    guard?.();
+    await cache.putMany([signedGroupRecord, ...pendingRecords.values()]);
+    guard?.();
+  }
+
+  private async buildMarketplaceSignedRecordsLocked(
+    dek: Uint8Array,
+    plan: ProviderPsbtPlanV3,
+    signedPsbtBase64: string,
+    pendingRecords: ReadonlyMap<string, WalletCacheRecord> = new Map(),
+  ): Promise<WalletCacheRecord[]> {
+    if (!plan.marketplace) return [];
     const cache = this.requireCache();
     const recordKey = this.cacheKey(plan.vaultId, 'marketplaceWorkflows', this.marketplaceWorkflowKey(plan));
-    const record = await cache.get(recordKey);
+    const record = pendingRecords.get(this.walletCacheRecordId(recordKey)) ?? await cache.get(recordKey);
     if (!record) throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow journal is missing');
     let workflow: MarketplaceWorkflow;
     try {
@@ -9344,21 +10151,42 @@ export class WalletService {
     const now = this.deps.vaultDeps.now();
     const approved = transitionMarketplaceWorkflow(workflow, 'approved_unsigned', now);
     const signed = transitionMarketplaceWorkflow(approved, 'signed_undelivered', now, { signedPsbtBase64 });
-    await cache.put(sealRecord(
+    const records = [sealRecord(
       dek,
       this.marketplaceWorkflowJournal(plan, signed),
       recordKey,
       this.deps.vaultDeps.random(24),
       now,
+    )];
+    records.push(...await this.buildMarketplaceReservationRecordsLocked(
+      dek,
+      plan,
+      signed,
+      pendingRecords,
     ));
+    return records;
+  }
 
-    if (!['list', 'bulk_list', 'offer', 'collection_offer', 'trait_offer'].includes(plan.marketplace.context.action)) return;
+  private async buildMarketplaceReservationRecordsLocked(
+    dek: Uint8Array,
+    plan: ProviderPsbtPlanV3,
+    signed: MarketplaceWorkflow,
+    pendingRecords: ReadonlyMap<string, WalletCacheRecord> = new Map(),
+  ): Promise<WalletCacheRecord[]> {
+    if (!plan.marketplace ||
+        !['list', 'bulk_list', 'offer', 'collection_offer', 'trait_offer'].includes(
+          plan.marketplace.context.action,
+        )) return [];
+    const now = signed.updatedAt;
+    const cache = this.requireCache();
+    const records: WalletCacheRecord[] = [];
     for (const index of plan.marketplace.selectedInputIndexes) {
       const selected = plan.inputs[index];
       if (!selected || selected.ownership !== 'wallet') continue;
       const outpoint = `${selected.txid}:${selected.vout}`;
       const reservationKey = this.cacheKey(plan.vaultId, 'marketplaceReservations', outpoint);
-      const existing = await cache.get(reservationKey);
+      const existing = pendingRecords.get(this.walletCacheRecordId(reservationKey)) ??
+        await cache.get(reservationKey);
       if (existing) {
         let reservation: MarketplaceReservation;
         try { reservation = openRecord(dek, existing, marketplaceReservationSchema); }
@@ -9382,8 +10210,15 @@ export class WalletService {
         releasedAt: null,
         releaseProof: null,
       });
-      await cache.put(sealRecord(dek, reservation, reservationKey, this.deps.vaultDeps.random(24), now));
+      records.push(sealRecord(
+        dek,
+        reservation,
+        reservationKey,
+        this.deps.vaultDeps.random(24),
+        now,
+      ));
     }
+    return records;
   }
 
   private requireCache(): WalletCachePort {
@@ -9408,6 +10243,10 @@ export class WalletService {
 
   private cacheKey(vaultId: string, type: WalletCacheRecordType, key: string): WalletCacheKey {
     return { vaultId, network: this.deps.network, type, key };
+  }
+
+  private walletCacheRecordId(key: WalletCacheKey): string {
+    return `${key.vaultId}\0${key.network}\0${key.type}\0${key.key}`;
   }
 
   private async persistUnitLocked(

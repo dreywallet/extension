@@ -45,4 +45,24 @@ describe('compact inscription review', () => {
     expect(screen.getByText('#2')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'View all 2' })).not.toBeInTheDocument();
   });
+
+  it('keeps heading references unique when related transaction details are open together', () => {
+    const repeated = item(FIRST_TXID, 1, 'retained');
+    const { container } = render(
+      <I18nProvider initial="en">
+        <InscriptionReview acknowledgementChecked={false} items={[repeated]}
+          onAcknowledgementChange={() => undefined} />
+        <InscriptionReview acknowledgementChecked={false} items={[repeated]}
+          onAcknowledgementChange={() => undefined} />
+      </I18nProvider>,
+    );
+
+    const ids = [...container.querySelectorAll('[id]')].map((element) => element.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const element of container.querySelectorAll('[aria-labelledby]')) {
+      const labelledBy = element.getAttribute('aria-labelledby');
+      expect(labelledBy).not.toBeNull();
+      expect(document.getElementById(labelledBy!)).not.toBeNull();
+    }
+  });
 });

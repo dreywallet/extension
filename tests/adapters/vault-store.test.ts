@@ -162,7 +162,6 @@ describe('vault-store', () => {
       version: 2 as const,
       idleTimeoutMs: IDLE_TIMEOUT_MS.oneWeek,
       highSecurityMode: true,
-      advancedPsbtSigning: true,
       activeAccounts: { 'vault-1:signet': 25 },
     };
     await saveConfig(area, custom);
@@ -197,9 +196,24 @@ describe('vault-store', () => {
       version: 2,
       idleTimeoutMs: 12 * 60 * 60 * 1000,
       highSecurityMode: true,
-      advancedPsbtSigning: false,
       activeAccounts: {},
     });
+  });
+
+  it('accepts the legacy Advanced PSBT flag, ignores it, and removes it on the next write', async () => {
+    const area = makeFakeArea();
+    area.store.set(CONFIG_KEY, {
+      version: 2,
+      idleTimeoutMs: IDLE_TIMEOUT_MS.default,
+      highSecurityMode: false,
+      advancedPsbtSigning: true,
+      activeAccounts: {},
+    });
+    const loaded = await loadConfig(area);
+    expect(loaded).toEqual(DEFAULT_CONFIG);
+    expect(area.store.get(CONFIG_KEY)).toHaveProperty('advancedPsbtSigning', true);
+    await saveConfig(area, loaded);
+    expect(area.store.get(CONFIG_KEY)).not.toHaveProperty('advancedPsbtSigning');
   });
 });
 

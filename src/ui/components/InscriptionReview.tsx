@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type ReactNode, type SyntheticEvent } from 'react';
+import { useCallback, useId, useMemo, useRef, useState, type ReactNode, type SyntheticEvent } from 'react';
 import styles from './InscriptionReview.module.css';
 import { MediaBadgeTile, TextExcerptTile } from './PreviewTile';
 import { useI18n, type MessageKey } from '../i18n';
@@ -193,6 +193,7 @@ export function InscriptionReview(props: {
   compact?: boolean;
 }): ReactNode {
   const { t } = useI18n();
+  const idPrefix = useId();
   const [showAll, setShowAll] = useState(false);
   const groups = useMemo(() => {
     const grouped = new Map<string, InscriptionReviewItem[]>();
@@ -239,10 +240,10 @@ export function InscriptionReview(props: {
     <section
       className={`${styles['review']} ${props.compact ? styles['compactReview'] : ''}`}
       aria-label={props.compact ? t('inscription.review.heading') : undefined}
-      aria-labelledby={props.compact ? undefined : 'inscription-review-heading'}
+      aria-labelledby={props.compact ? undefined : `${idPrefix}-heading`}
     >
       {props.compact ? null : (
-        <h2 className={styles['heading']} id="inscription-review-heading">
+        <h2 className={styles['heading']} id={`${idPrefix}-heading`}>
           {t('inscription.review.heading')}
         </h2>
       )}
@@ -255,17 +256,18 @@ export function InscriptionReview(props: {
             : undefined}
           aria-labelledby={props.compact && items.length === 1
             ? undefined
-            : `inscription-group-${groupIndex}`}
+            : `${idPrefix}-group-${groupIndex}`}
         >
           {!props.compact || items.length > 1 ? (
-            <h3 className={styles['groupHeading']} id={`inscription-group-${groupIndex}`}>
+            <h3 className={styles['groupHeading']} id={`${idPrefix}-group-${groupIndex}`}>
               {items.length === 1
                 ? t('inscription.review.location')
                 : t('inscription.review.coLocated', { count: items.length })}
             </h3>
           ) : null}
           {items.map((item) => (
-            <article className={styles['card']} key={item.inscriptionId} aria-labelledby={`inscription-${item.inscriptionId}`}>
+            <article className={styles['card']} key={item.inscriptionId}
+              aria-labelledby={`${idPrefix}-inscription-${item.inscriptionId}`}>
               {props.compact ? null : (
                 <div className={styles['status']}>
                   <span className={styles['badge']}>{t(movementKey(item.movement))}</span>
@@ -295,7 +297,7 @@ export function InscriptionReview(props: {
                   <p>{t(placeholderReasonKey(item.preview.reason))}</p>
                 </div>
               )}
-              <strong id={`inscription-${item.inscriptionId}`}>
+              <strong id={`${idPrefix}-inscription-${item.inscriptionId}`}>
                 {props.compact
                   ? item.number === null ? t('gallery.unnumbered') : `#${item.number}`
                   : t('inscription.review.id')}

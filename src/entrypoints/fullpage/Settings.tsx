@@ -37,7 +37,6 @@ export function Settings(props: { session: SessionView }): ReactNode {
 
   const [idleTimeoutMs, setIdleTimeoutMs] = useState<number | null>(null);
   const [highSecurityMode, setHighSecurityMode] = useState(false);
-  const [advancedPsbtSigning, setAdvancedPsbtSigning] = useState(false);
   const [connectedSites, setConnectedSites] = useState<Array<{
     resourceId: string; origin: string; network: string; account: number; categories: string[];
   }>>([]);
@@ -59,7 +58,6 @@ export function Settings(props: { session: SessionView }): ReactNode {
       if (generation === configGeneration.current && r.ok) {
         setIdleTimeoutMs(r.result.idleTimeoutMs);
         setHighSecurityMode(r.result.highSecurityMode);
-        setAdvancedPsbtSigning(r.result.advancedPsbtSigning);
       }
     });
   }, [rpc]);
@@ -111,15 +109,6 @@ export function Settings(props: { session: SessionView }): ReactNode {
     if (props.session.expectation === null) return;
     const r = await rpc('config.set', { idleTimeoutMs: ms, ...props.session.expectation });
     if (r.ok) setIdleTimeoutMs(r.result.idleTimeoutMs);
-  }
-
-  async function toggleAdvancedPsbt(enabled: boolean): Promise<void> {
-    if (props.session.expectation === null) return;
-    const result = await rpc('config.set', {
-      advancedPsbtSigning: enabled,
-      ...props.session.expectation,
-    });
-    if (result.ok) setAdvancedPsbtSigning(result.result.advancedPsbtSigning);
   }
 
   async function toggleHighSecurity(enabled: boolean): Promise<void> {
@@ -419,18 +408,6 @@ export function Settings(props: { session: SessionView }): ReactNode {
               </Button>
             </div>
           ) : null}
-          <div className={styles['row']}>
-            <label className={styles['rowLabel']} htmlFor="advanced-psbt-signing">
-              {t('settings.advancedPsbt')}
-            </label>
-            <input
-              id="advanced-psbt-signing"
-              type="checkbox"
-              checked={advancedPsbtSigning}
-              onChange={(event) => void toggleAdvancedPsbt(event.target.checked)}
-            />
-          </div>
-          <p className={styles['rowLabel']}>{t('settings.advancedPsbt.help')}</p>
         </div>
       </details>
 

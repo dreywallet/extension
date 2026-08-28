@@ -85,9 +85,15 @@ export class IdbWalletCache implements WalletCachePort {
   }
 
   async put(record: WalletCacheRecord): Promise<void> {
+    await this.putMany([record]);
+  }
+
+  async putMany(records: readonly WalletCacheRecord[]): Promise<void> {
+    if (records.length === 0) return;
     const transaction = await this.transaction('readwrite');
+    const store = transaction.objectStore(STORE);
     await Promise.all([
-      requestToPromise(transaction.objectStore(STORE).put(record)),
+      ...records.map((record) => requestToPromise(store.put(record))),
       transactionToPromise(transaction),
     ]);
   }
@@ -135,7 +141,15 @@ export class MemoryWalletCache implements WalletCachePort {
   }
 
   put(record: WalletCacheRecord): Promise<void> {
-    this.records.set(MemoryWalletCache.mapKey(record), { ...record });
+    return this.putMany([record]);
+  }
+
+  putMany(records: readonly WalletCacheRecord[]): Promise<void> {
+    const next = new Map(this.records);
+    for (const record of records) {
+      next.set(MemoryWalletCache.mapKey(record), { ...record });
+    }
+    this.records = next;
     return Promise.resolve();
   }
 

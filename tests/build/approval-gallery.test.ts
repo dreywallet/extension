@@ -7,14 +7,30 @@ import {
 
 describe('local approval gallery', () => {
   it('uses valid, unique synthetic approval snapshots', () => {
-    expect(APPROVAL_GALLERY_SCENARIOS).toHaveLength(8);
     expect(new Set(APPROVAL_GALLERY_SCENARIOS.map((scenario) => scenario.id)).size)
       .toBe(APPROVAL_GALLERY_SCENARIOS.length);
+    expect(APPROVAL_GALLERY_SCENARIOS.map((scenario) => scenario.id)).toEqual(
+      expect.arrayContaining([
+        'p2wpkh-all',
+        'p2tr-default',
+        'all-anyonecanpay',
+        'single',
+        'single-anyonecanpay-listing',
+        'mixed-sighash',
+        'blocked-none',
+        'transaction-batch',
+      ]),
+    );
 
     for (const scenario of APPROVAL_GALLERY_SCENARIOS) {
       expect(approvalSnapshotSchema.safeParse(scenario.snapshot).success).toBe(true);
-      expect(scenario.snapshot.request?.origin).toMatch(/^https:\/\/[a-z-]+\.example$/u);
-      expect(JSON.stringify(scenario.snapshot)).toContain(APPROVAL_GALLERY_ISOLATION_MARKER);
+      if (scenario.snapshot.request) {
+        expect(scenario.snapshot.request.origin).toMatch(/^https:\/\/[a-z-]+\.example$/u);
+        expect(JSON.stringify(scenario.snapshot)).toContain(APPROVAL_GALLERY_ISOLATION_MARKER);
+      } else {
+        expect(scenario.id).toBe('blocked-none');
+        expect(scenario.providerError).toMatch(/reject/u);
+      }
     }
   });
 

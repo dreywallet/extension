@@ -12,8 +12,10 @@ import type { ProviderRuntimePort } from '../../src/provider/bridge';
 import type { ProviderAuthority } from '../../src/provider/authority';
 import type { PermissionGrantEvent } from '@drey/core/domain/provider/permission-journal';
 import { SigHash, Transaction } from '@scure/btc-signer';
-import { bytesToBase64, hexToBytes } from '@drey/core/domain/vault/encoding';
+import { base64ToBytes, bytesToBase64, bytesToHex, hexToBytes } from
+  '@drey/core/domain/vault/encoding';
 import type { ProviderPsbtPlanV3 } from '@drey/core/domain/transactions/provider-psbt';
+import { providerPsbtUnsignedTxid } from '@drey/core/domain/transactions/provider-psbt-batch';
 import { RpcError } from '../../src/background/errors';
 
 beforeAll(() => installTestCryptoProvider());
@@ -166,8 +168,11 @@ function mockService() {
     providerRevalidatePreparedMessageBatch: vi.fn(async () => undefined),
     providerPreparePsbtBatch: vi.fn(), providerSignPreparedPsbtBatch: vi.fn(),
     providerRevalidatePreparedPsbtBatch: vi.fn(async () => undefined),
+    providerPreparePsbtGroup: vi.fn(), providerSignPreparedPsbtGroup: vi.fn(),
+    providerRevalidatePreparedPsbtGroup: vi.fn(async () => undefined),
     providerRevalidatePreparedPsbt: vi.fn(async () => undefined),
     providerMarkMarketplaceDelivered: vi.fn(async () => undefined),
+    providerMarkMarketplaceGroupDelivered: vi.fn(async () => undefined),
     providerBroadcastPreparedPsbt: vi.fn(async () => ({
       psbt: 'cHNidP8=',
       txid: '44'.repeat(32),
@@ -176,6 +181,11 @@ function mockService() {
       preparedTransfer(input.feeRateSatPerVb)),
     providerPrepareOrdinalTransfer: vi.fn(),
     providerReauthenticate: vi.fn(),
+    getConfig: vi.fn(async () => ({
+      idleTimeoutMs: 3_600_000,
+      highSecurityMode: false,
+      advancedPsbtSigning: false,
+    })),
     communityVaultSign: vi.fn(),
     communityVaultStatus: vi.fn(async () => ({ owners: [], unusableCampaignIds: [] })),
   };
@@ -216,10 +226,10 @@ function harness(area = fakeArea(), evaluatePhishing?: ProviderControllerDeps['e
 
 async function tick(): Promise<void> { await new Promise((resolve) => setTimeout(resolve, 0)); }
 
-function flexiblePsbt(): string {
+function flexiblePsbt(txid = 'aa'.repeat(32)): string {
   const tx = new Transaction({ lowR: true });
   tx.addInput({
-    txid: 'aa'.repeat(32), index: 0, sighashType: SigHash.SINGLE_ANYONECANPAY,
+    txid, index: 0, sighashType: SigHash.SINGLE_ANYONECANPAY,
     witnessUtxo: { script: hexToBytes(`0014${'11'.repeat(20)}`), amount: 10_000n },
   });
   tx.addOutput({ script: hexToBytes(`0014${'22'.repeat(20)}`), amount: 20_000n });
@@ -391,14 +401,14 @@ describe('ProviderController authority, disclosure and approvals', () => {
     expect(snapshot.request).toMatchObject({
       method: 'signMultipleTransactions',
       review: { kind: 'batch', transactionCount: 2 },
-      requiresPassword: true,
-      confirmationPhrase: 'SIGN PSBT',
+      requiresPassword: false,
+      confirmationPhrase: null,
       details: { batch: { batchHash: '99'.repeat(32) } },
     });
     h.advance(APPROVAL_SWITCH_COOLDOWN_MS);
     await h.controller.approvalCommand({
       type: 'drey:approval', protocolVersion: 1, command: 'resolve',
-      requestNonce: batchNonce, approved: true, password: 'password', confirmation: 'SIGN PSBT',
+      requestNonce: batchNonce, approved: true,
     });
     expect(h.mock.service.providerSignPreparedPsbtBatch).toHaveBeenCalledTimes(1);
     expect(page.messages.at(-1)).toMatchObject({
@@ -420,6 +430,472 @@ describe('ProviderController authority, disclosure and approvals', () => {
     });
     expect(h.mock.service.providerSignPreparedPsbtBatch).toHaveBeenCalledTimes(1);
     expect(page.messages.at(-1)).toMatchObject({ ok: false, requestNonce: cancelledNonce });
+  });
+
+  it('checks expected transaction ids on legacy batches without signing declarations', async () => {
+    const h = harness();
+    const page = fakePort();
+    h.controller.attach(page.port, authority);
+    const connectNonce = '123e4567-e89b-42d3-a456-426614174206';
+    page.send(request('wallet_connect', connectNonce, null));
+    await tick();
+    await h.controller.approvalCommand({
+      type: 'drey:approval', protocolVersion: 1, command: 'resolve',
+      requestNonce: connectNonce, approved: true,
+    });
+    const psbtBase64 = flexiblePsbt('ab'.repeat(32));
+    const plan = {
+      ...h.mock.preparedTransfer(),
+      psbtHex: bytesToHex(base64ToBytes(psbtBase64)),
+      provider: {
+        ...authority,
+        requestNonce: '123e4567-e89b-42d3-a456-426614174207',
+        providerMethod: 'signMultipleTransactions' as const,
+      },
+    };
+    const expectedTxid = providerPsbtUnsignedTxid(plan as never);
+    const preparedBatch = {
+      version: 1 as const,
+      planId: 'expected-id-batch', createdAt: h.now(), expiresAt: h.now() + 300_000,
+      network: 'signet' as const, vaultId: 'vault-1',
+      sessionId: '123e4567-e89b-42d3-a456-426614174001',
+      accountId: `acct_signet_${'1'.repeat(64)}`, account: 0,
+      provider: plan.provider, approvalGeneration: 0, requiresAdvanced: false,
+      items: [{ plan, requestedInputIndexes: [0] }],
+      aggregate: {
+        encodedPsbtChars: psbtBase64.length, inputs: 1, outputs: 1,
+        walletInputSats: 10_500n, walletOutputSats: 10_000n, feeExposureSats: 500n,
+      },
+      batchHash: '98'.repeat(32),
+    };
+    h.mock.service.providerPreparePsbtBatch = vi.fn(async () => preparedBatch as never);
+
+    const acceptedNonce = '123e4567-e89b-42d3-a456-426614174207';
+    page.send(request('signMultipleTransactions', acceptedNonce, {
+      network: { type: 'Signet' }, message: 'Expected transaction',
+      psbts: [{ psbtBase64, expectedTxid }],
+    }));
+    await tick();
+    expect((await h.controller.approvalCommand({
+      type: 'drey:approval', protocolVersion: 1, command: 'snapshot',
+    })).request?.requestNonce).toBe(acceptedNonce);
+    await h.controller.approvalCommand({
+      type: 'drey:approval', protocolVersion: 1, command: 'resolve',
+      requestNonce: acceptedNonce, approved: false,
+    });
+
+    const rejectedNonce = '123e4567-e89b-42d3-a456-426614174208';
+    page.messages.length = 0;
+    page.send(request('signMultipleTransactions', rejectedNonce, {
+      network: { type: 'Signet' }, message: 'Changed transaction',
+      psbts: [{ psbtBase64, expectedTxid: 'ff'.repeat(32) }],
+    }));
+    await tick();
+    expect(page.messages).toEqual([expect.objectContaining({
+      ok: false,
+      error: { code: -32602, message: 'Invalid params' },
+    })]);
+    expect((await h.controller.approvalCommand({
+      type: 'drey:approval', protocolVersion: 1, command: 'snapshot',
+    })).request).toBeNull();
+  });
+
+  it('routes declared transaction groups with expected txids through revalidation and one atomic signing call', async () => {
+    const h = harness();
+    const page = fakePort();
+    h.controller.attach(page.port, authority);
+    const connectNonce = '123e4567-e89b-42d3-a456-426614174216';
+    page.send(request('wallet_connect', connectNonce, null));
+    await tick();
+    await h.controller.approvalCommand({
+      type: 'drey:approval', protocolVersion: 1, command: 'resolve',
+      requestNonce: connectNonce, approved: true,
+    });
+
+    const groupNonce = '123e4567-e89b-42d3-a456-426614174217';
+    const expectedTxids = ['11'.repeat(32), '22'.repeat(32)];
+    const psbts = [flexiblePsbt('aa'.repeat(32)), flexiblePsbt('bb'.repeat(32))];
+    const plans = psbts.map((_psbt, index) => ({
+      ...h.mock.preparedTransfer(),
+      planId: `group-plan-${index}`,
+      provider: {
+        ...authority,
+        requestNonce: groupNonce,
+        providerMethod: 'signMultipleTransactions' as const,
+      },
+      kind: 'provider_psbt' as const,
+      broadcast: false,
+      requiresAdvanced: true,
+      psbtHash: String(index + 5).repeat(64),
+      planHash: String(index + 7).repeat(64),
+    }));
+    const preparedGroup = {
+      version: 1 as const,
+      groupId: 'group-1', groupHash: '77'.repeat(32),
+      createdAt: h.now(), expiresAt: h.now() + 300_000,
+      network: 'signet' as const, vaultId: 'vault-1',
+      sessionId: '123e4567-e89b-42d3-a456-426614174001',
+      accountId: `acct_signet_${'1'.repeat(64)}`, account: 0,
+      provider: plans[0]!.provider, approvalGeneration: 0,
+      signatureRelease: 'all_or_nothing' as const,
+      requiresAdvanced: true,
+      items: plans.map((plan, index) => ({
+        nodeId: `transaction-${index + 1}`,
+        plan,
+        inputsToSign: [{
+          address: 'tb1qpaymentaddress', signingIndexes: [0], sigHash: 131 as const,
+        }],
+        requestedInputIndexes: [0],
+        expectedUnsignedTxid: expectedTxids[index],
+      })),
+      aggregate: { encodedPsbtChars: 24, inputs: 2, outputs: 2, selectedInputs: 2 },
+      approvalSummary: {
+        action: 'sign_transaction_group' as const,
+        transactionCount: 2, linked: true, alternativeCount: 1,
+        marketplaceActions: [], walletInputSats: 21_000n, walletOutputSats: 20_000n,
+        feeExposureSats: 1_000n, maximumWalletDebitSats: 1_000n,
+        maximumFeeExposureSats: 1_000n, branchEconomicsExact: true,
+        externalConflicts: [], alternativeOutcomes: [{
+          outpoint: `${'aa'.repeat(32)}:0`, outpoints: [`${'aa'.repeat(32)}:0`],
+          settlements: [{ nodeId: 'transaction-1', guaranteedWalletReturnSats: 20_000n,
+            maximumWalletDebitSats: 0n }],
+          recovery: { nodeId: 'transaction-2', guaranteedWalletReturnSats: 19_000n,
+            maximumWalletDebitSats: 1_000n },
+        }],
+      },
+    };
+    const calls: string[] = [];
+    h.mock.service.providerPreparePsbtGroup = vi.fn(async () => preparedGroup as never);
+    h.mock.service.providerRevalidatePreparedPsbtGroup = vi.fn(async () => {
+      calls.push('revalidate');
+    });
+    h.mock.service.providerSignPreparedPsbtGroup = vi.fn(async () => {
+      calls.push('sign');
+      return [{ psbtBase64: 'cHNidP8=' }, { psbtBase64: 'cHNidP9=' }];
+    });
+
+    page.send(request('signMultipleTransactions', groupNonce, {
+      network: { type: 'Signet' }, message: 'Sign transaction group',
+      psbts: psbts.map((psbtBase64, index) => ({
+        psbtBase64,
+        inputsToSign: [{
+          address: 'tb1qpaymentaddress', signingIndexes: [0], sigHash: 131,
+        }],
+        expectedTxid: expectedTxids[index],
+      })),
+    }));
+    await tick();
+
+    expect(h.mock.service.providerPreparePsbtGroup).toHaveBeenCalledWith(expect.objectContaining({
+      items: [
+        expect.objectContaining({
+          nodeId: 'transaction-1', expectedUnsignedTxid: expectedTxids[0],
+        }),
+        expect.objectContaining({
+          nodeId: 'transaction-2', expectedUnsignedTxid: expectedTxids[1],
+        }),
+      ],
+    }));
+    expect(h.mock.service.providerPreparePsbtBatch).not.toHaveBeenCalled();
+    const approvalSnapshot = await h.controller.approvalCommand({
+      type: 'drey:approval', protocolVersion: 1, command: 'snapshot',
+    });
+    expect(approvalSnapshot.request?.review).toMatchObject({
+      kind: 'batch', linked: true, branchEconomicsExact: true,
+      alternativeOutcomeGroups: [{
+        settlements: [{ nodeId: 'transaction-1', guaranteedWalletReturnSats: '20000',
+          maximumWalletDebitSats: '0' }],
+        recovery: { nodeId: 'transaction-2', guaranteedWalletReturnSats: '19000',
+          maximumWalletDebitSats: '1000' },
+      }],
+    });
+
+    h.advance(APPROVAL_SWITCH_COOLDOWN_MS);
+    await h.controller.approvalCommand({
+      type: 'drey:approval', protocolVersion: 1, command: 'resolve',
+      requestNonce: groupNonce, approved: true,
+    });
+
+    expect(calls.filter((call) => call === 'revalidate').length).toBeGreaterThan(0);
+    expect(calls.at(-1)).toBe('sign');
+    expect(calls.filter((call) => call === 'sign')).toHaveLength(1);
+    expect(h.mock.service.providerSignPreparedPsbtGroup).toHaveBeenCalledWith(
+      preparedGroup,
+      expect.any(Function),
+    );
+    expect(page.messages.at(-1)).toMatchObject({
+      ok: true,
+      result: [{ psbtBase64: 'cHNidP8=' }, { psbtBase64: 'cHNidP9=' }],
+    });
+
+    const previewNonce = '123e4567-e89b-42d3-a456-426614174222';
+    const previewGroup = structuredClone(preparedGroup);
+    previewGroup.provider.requestNonce = previewNonce;
+    for (const item of previewGroup.items) {
+      item.plan.provider.requestNonce = previewNonce;
+    }
+    const inscriptionId = `${'ab'.repeat(32)}i0`;
+    const txid = 'cd'.repeat(32);
+    const previewPlan = previewGroup.items[0]!.plan as unknown as ProviderPsbtPlanV3;
+    previewPlan.analysis.assetEffects.inscriptions = [{
+      inscriptionId, satpoint: `${txid}:0:0`, outpoint: { txid, vout: 0 },
+      inputIndex: 0, inputOffset: 0n, outputIndex: 0, outputOffset: 0n,
+      inputOwnership: 'wallet', outputOwnership: 'external', movement: 'sent',
+      coLocationGroup: `${txid}:0:0`, qualifiedPartialAuthorization: false,
+    }];
+    previewPlan.inscriptionPreviews!.items = [{
+      metadata: {
+        inscriptionId, satpoint: `${txid}:0:0`, outpoint: { txid, vout: 0 },
+        classificationRevision: 'rev-1', number: null, contentType: 'text/html',
+        contentLength: 10, confirmations: 1, parent: null, delegate: null,
+        reinscription: false, cursed: false,
+      },
+      preview: {
+        disposition: 'placeholder', reason: 'active_content', requestedInscriptionId: inscriptionId,
+        sourceInscriptionId: inscriptionId, resolvedInscriptionId: inscriptionId,
+        delegateInscriptionId: null, sourceContentSha256: '66'.repeat(32),
+        declaredMime: 'text/html', declaredContentLength: 10, detectedMime: null,
+        detectedFormat: null, sourceContentLength: 10, policyRevision: 'm9p-preview-v2',
+        rendererRevision: 'test-v1', pngSha256: null, pngWidth: null,
+        pngHeight: null, pngByteLength: null,
+      },
+    }];
+    h.mock.service.providerPreparePsbtGroup = vi.fn(async () => previewGroup as never);
+    page.send(request('signMultipleTransactions', previewNonce, {
+      network: { type: 'Signet' }, message: 'Preview acknowledgement group',
+      psbts: psbts.map((psbtBase64, index) => ({
+        psbtBase64,
+        inputsToSign: [{
+          address: 'tb1qpaymentaddress', signingIndexes: [0], sigHash: 131,
+        }],
+        expectedTxid: expectedTxids[index],
+      })),
+    }));
+    await tick();
+    page.messages.length = 0;
+    h.advance(APPROVAL_SWITCH_COOLDOWN_MS);
+    await h.controller.approvalCommand({
+      type: 'drey:approval', protocolVersion: 1, command: 'resolve',
+      requestNonce: previewNonce, approved: true,
+    });
+    expect(h.mock.service.providerSignPreparedPsbtGroup).toHaveBeenCalledTimes(1);
+    expect(page.messages.at(-1)).toMatchObject({
+      ok: false,
+      error: expect.objectContaining({ data: { dreyCode: 'ERR_UNSUPPORTED_BY_ACCOUNT' } }),
+    });
+
+    const expiryNonce = '123e4567-e89b-42d3-a456-426614174223';
+    const expiryGroup = structuredClone(preparedGroup);
+    expiryGroup.provider.requestNonce = expiryNonce;
+    for (const item of expiryGroup.items) item.plan.provider.requestNonce = expiryNonce;
+    h.mock.service.providerPreparePsbtGroup = vi.fn(async () => expiryGroup as never);
+    h.mock.service.providerSignPreparedPsbtGroup = vi.fn(async () => {
+      h.advance(300_001);
+      return [{ psbtBase64: 'cHNidP8=' }, { psbtBase64: 'cHNidP9=' }];
+    });
+    page.send(request('signMultipleTransactions', expiryNonce, {
+      network: { type: 'Signet' }, message: 'Expiring transaction group',
+      psbts: psbts.map((psbtBase64, index) => ({
+        psbtBase64,
+        inputsToSign: [{
+          address: 'tb1qpaymentaddress', signingIndexes: [0], sigHash: 131,
+        }],
+        expectedTxid: expectedTxids[index],
+      })),
+    }));
+    await tick();
+    page.messages.length = 0;
+    h.advance(APPROVAL_SWITCH_COOLDOWN_MS);
+    await h.controller.approvalCommand({
+      type: 'drey:approval', protocolVersion: 1, command: 'resolve',
+      requestNonce: expiryNonce, approved: true,
+    });
+    expect(page.messages.at(-1)).toMatchObject({
+      ok: false,
+      error: expect.objectContaining({ data: { dreyCode: 'ERR_REQUEST_EXPIRED' } }),
+    });
+    expect(JSON.stringify(page.messages)).not.toContain('psbtBase64');
+  });
+
+  it('returns no partial transaction-group result when atomic signing fails', async () => {
+    const h = harness();
+    const page = fakePort();
+    h.controller.attach(page.port, authority);
+    const connectNonce = '123e4567-e89b-42d3-a456-426614174218';
+    page.send(request('wallet_connect', connectNonce, null));
+    await tick();
+    await h.controller.approvalCommand({
+      type: 'drey:approval', protocolVersion: 1, command: 'resolve',
+      requestNonce: connectNonce, approved: true,
+    });
+
+    const groupNonce = '123e4567-e89b-42d3-a456-426614174219';
+    const plan = {
+      ...h.mock.preparedTransfer(),
+      provider: {
+        ...authority, requestNonce: groupNonce,
+        providerMethod: 'signMultipleTransactions' as const,
+      },
+      kind: 'provider_psbt' as const, broadcast: false,
+    };
+    const preparedGroup = {
+      version: 1 as const, groupId: 'atomic-failure', groupHash: '66'.repeat(32),
+      createdAt: h.now(), expiresAt: h.now() + 300_000,
+      network: 'signet' as const, vaultId: 'vault-1',
+      sessionId: '123e4567-e89b-42d3-a456-426614174001',
+      accountId: `acct_signet_${'1'.repeat(64)}`, account: 0,
+      provider: plan.provider, approvalGeneration: 0,
+      items: [0, 1].map((index) => ({
+        nodeId: `transaction-${index + 1}`, plan, requestedInputIndexes: [0],
+        inputsToSign: [{
+          address: 'tb1qpaymentaddress', signingIndexes: [0], sigHash: 131 as const,
+        }],
+      })),
+      aggregate: { encodedPsbtChars: 16, inputs: 2, outputs: 2, selectedInputs: 2 },
+      approvalSummary: {
+        linked: false, branchEconomicsExact: true,
+        walletInputSats: 20_000n, walletOutputSats: 19_000n, feeExposureSats: 1_000n,
+        maximumWalletDebitSats: 1_000n, maximumFeeExposureSats: 1_000n,
+        externalConflicts: [], alternativeOutcomes: [],
+      },
+    };
+    h.mock.service.providerPreparePsbtGroup = vi.fn(async () => preparedGroup as never);
+    h.mock.service.providerSignPreparedPsbtGroup = vi.fn(async () => {
+      throw new RpcError('ERR_PLAN_CHANGED', 'group changed during signing');
+    });
+    const psbt = flexiblePsbt();
+    page.send(request('signMultipleTransactions', groupNonce, {
+      network: { type: 'Signet' }, message: 'Atomic failure',
+      psbts: [0, 1].map(() => ({
+        psbtBase64: psbt,
+        inputsToSign: [{
+          address: 'tb1qpaymentaddress', signingIndexes: [0], sigHash: 131,
+        }],
+      })),
+    }));
+    await tick();
+    page.messages.length = 0;
+    h.advance(APPROVAL_SWITCH_COOLDOWN_MS);
+    await h.controller.approvalCommand({
+      type: 'drey:approval', protocolVersion: 1, command: 'resolve',
+      requestNonce: groupNonce, approved: true,
+    });
+
+    expect(page.messages).toEqual([expect.objectContaining({
+      ok: false,
+      error: expect.objectContaining({ data: { dreyCode: 'ERR_STALE_CONTEXT' } }),
+    })]);
+    expect(JSON.stringify(page.messages)).not.toContain('psbtBase64');
+  });
+
+  it('marks every marketplace item delivered only after a grouped result reaches the page', async () => {
+    const h = harness();
+    const markDelivered = vi.mocked(h.mock.service.providerMarkMarketplaceGroupDelivered);
+    const page = fakePort();
+    h.controller.attach(page.port, authority);
+    const connectNonce = '123e4567-e89b-42d3-a456-426614174213';
+    page.send(request('wallet_connect', connectNonce, null));
+    await tick();
+    await h.controller.approvalCommand({
+      type: 'drey:approval', protocolVersion: 1, command: 'resolve',
+      requestNonce: connectNonce, approved: true,
+    });
+
+    const groupNonce = '123e4567-e89b-42d3-a456-426614174214';
+    const plans = [0, 1].map((index) => ({
+      ...h.mock.preparedTransfer(),
+      planId: `marketplace-group-plan-${index}`,
+      accountId: `acct_signet_${'1'.repeat(64)}`,
+      provider: {
+        ...authority,
+        requestNonce: groupNonce,
+        providerMethod: 'signMultipleTransactions' as const,
+      },
+      broadcast: false,
+      marketplace: {
+        context: {
+          version: 1 as const, marketplaceId: 'ordnet' as const, templateVersion: 'drey-1',
+          action: 'offer' as const, role: 'buyer' as const, assetKind: 'inscription' as const,
+          workflowId: 'group-delivery', step: index + 1, stepCount: 2,
+          broadcaster: 'site' as const,
+        },
+        resolution: {
+          status: 'recognized' as const, marketplaceId: 'ordnet' as const,
+          displayName: 'ord.net', templateId: 'ordnet-offer', templateVersion: 'drey-1',
+          flexible: false, reason: 'test fixture',
+        },
+        selectedInputIndexes: [0],
+      },
+    }));
+    const preparedGroup = {
+      version: 1 as const,
+      groupId: 'marketplace-group', groupHash: '88'.repeat(32),
+      createdAt: h.now(), expiresAt: h.now() + 300_000,
+      network: 'signet' as const, vaultId: 'vault-1',
+      sessionId: '123e4567-e89b-42d3-a456-426614174001',
+      accountId: `acct_signet_${'1'.repeat(64)}`, account: 0,
+      provider: plans[0]!.provider, approvalGeneration: 0,
+      items: plans.map((plan, index) => ({
+        nodeId: `transaction-${index + 1}`, plan, requestedInputIndexes: [0],
+        inputsToSign: [{ address: 'tb1qpaymentaddress', signingIndexes: [0], sigHash: 131 }],
+      })),
+      aggregate: {
+        encodedPsbtChars: 16, inputs: 2, outputs: 2, selectedInputs: 2,
+        walletInputSats: 21_000n, walletOutputSats: 20_000n, feeExposureSats: 1_000n,
+      },
+      approvalSummary: {
+        linked: false, branchEconomicsExact: true,
+        walletInputSats: 21_000n, walletOutputSats: 20_000n, feeExposureSats: 1_000n,
+        maximumWalletDebitSats: 1_000n, maximumFeeExposureSats: 1_000n,
+        externalConflicts: [], alternativeOutcomes: [],
+      },
+    };
+    h.mock.service.providerPreparePsbtGroup = vi.fn(async () => preparedGroup as never);
+    h.mock.service.providerSignPreparedPsbtGroup = vi.fn(async () => [
+      { psbtBase64: 'cHNidP8=' }, { psbtBase64: 'cHNidP9=' },
+    ]);
+
+    const psbt = flexiblePsbt();
+    page.send(request('signMultipleTransactions', groupNonce, {
+      network: { type: 'Signet' }, message: 'Marketplace group',
+      psbts: plans.map(() => ({
+        psbtBase64: psbt,
+        inputsToSign: [{
+          address: 'tb1qpaymentaddress', signingIndexes: [0], sigHash: 131,
+        }],
+      })),
+    }));
+    await tick();
+    h.advance(APPROVAL_SWITCH_COOLDOWN_MS);
+    await h.controller.approvalCommand({
+      type: 'drey:approval', protocolVersion: 1, command: 'resolve',
+      requestNonce: groupNonce, approved: true,
+    });
+
+    expect(page.messages.at(-1)).toMatchObject({
+      ok: true,
+      result: [{ psbtBase64: 'cHNidP8=' }, { psbtBase64: 'cHNidP9=' }],
+    });
+    expect(markDelivered).toHaveBeenCalledWith(preparedGroup);
+
+    const failedDeliveryNonce = '123e4567-e89b-42d3-a456-426614174215';
+    page.send(request('signMultipleTransactions', failedDeliveryNonce, {
+      network: { type: 'Signet' }, message: 'Marketplace group without a receiver',
+      psbts: plans.map(() => ({
+        psbtBase64: psbt,
+        inputsToSign: [{
+          address: 'tb1qpaymentaddress', signingIndexes: [0], sigHash: 131,
+        }],
+      })),
+    }));
+    await tick();
+    page.setThrowOnPost(true);
+    h.advance(APPROVAL_SWITCH_COOLDOWN_MS);
+    await h.controller.approvalCommand({
+      type: 'drey:approval', protocolVersion: 1, command: 'resolve',
+      requestNonce: failedDeliveryNonce, approved: true,
+    });
+    expect(markDelivered).toHaveBeenCalledTimes(1);
   });
 
   it('prepares one quiet message-batch review and returns every signature in order or none', async () => {
@@ -890,7 +1366,7 @@ describe('ProviderController authority, disclosure and approvals', () => {
     expect(page.messages).toEqual([expect.objectContaining({
       ok: true,
       result: expect.objectContaining({
-        version: '0.14.12',
+        version: '0.14.16',
         platform: 'web',
         supports: ['WBIP001', 'WBIP004'],
         capabilities: [
@@ -1049,6 +1525,83 @@ describe('ProviderController authority, disclosure and approvals', () => {
     expect(h.mock.service.providerPreparePsbt).not.toHaveBeenCalled();
   });
 
+  it('rejects a transaction group that mixes recognized marketplace and contextless items', async () => {
+    const h = harness();
+    h.mock.setContext({
+      vaultId: 'vault-1', vaultName: 'Primary wallet',
+      sessionId: '123e4567-e89b-42d3-a456-426614174001',
+      network: 'mainnet', accountId: `acct_mainnet_${'1'.repeat(64)}`, account: 0,
+      payment: {
+        address: 'bc1qpaymentaddress', publicKeyHex: `02${'11'.repeat(32)}`,
+        path: "m/84'/0'/0'/0/0",
+      },
+      ordinals: {
+        address: 'bc1pordinaladdress', publicKeyHex: `03${'22'.repeat(32)}`,
+        path: "m/86'/0'/0'/0/0",
+      },
+    });
+    const ordnetAuthority = {
+      ...authority, origin: 'https://ord.net', url: 'https://ord.net/market',
+    };
+    const page = fakePort();
+    h.controller.attach(page.port, ordnetAuthority);
+    const connectNonce = '123e4567-e89b-42d3-a456-426614174070';
+    page.send(request('wallet_connect', connectNonce, null));
+    await tick();
+    await h.controller.approvalCommand({
+      type: 'drey:approval', protocolVersion: 1, command: 'resolve',
+      requestNonce: connectNonce, approved: true,
+    });
+    page.messages.length = 0;
+
+    h.mock.service.providerPreparePsbtGroup = vi.fn(async (input) => {
+      expect(input.items[0]).toMatchObject({
+        marketplace: {
+          resolution: { status: 'recognized', templateId: 'ordnet-list' },
+        },
+      });
+      expect(input.items[1]).not.toHaveProperty('marketplace');
+      throw new RpcError(
+        'ERR_UNSAFE_TRANSACTION',
+        'provider group cannot mix recognized marketplace and contextless workflows',
+      );
+    });
+    const groupNonce = '123e4567-e89b-42d3-a456-426614174071';
+    const declared = {
+      address: 'bc1qpaymentaddress', signingIndexes: [0], sigHash: 131,
+    };
+    page.send(request('signMultipleTransactions', groupNonce, {
+      network: { type: 'Mainnet' }, message: 'Mixed marketplace group',
+      psbts: [
+        {
+          psbtBase64: flexiblePsbt('cc'.repeat(32)), inputsToSign: [declared],
+          marketplaceContext: {
+            version: 1, marketplaceId: 'ordnet', templateVersion: 'drey-1',
+            action: 'list', role: 'seller', assetKind: 'inscription',
+            workflowId: 'ordnet-listing-1', step: 2, stepCount: 3,
+            identifiers: {
+              inscriptionId: `${'11'.repeat(32)}i0`,
+              preflightHandle: '66666666-6666-6666-6666-666666666666',
+            },
+            economics: {
+              sellerProceedsSats: '20000', payoutAddress: 'bc1qexamplemarketplacepayout',
+            },
+            broadcaster: 'site',
+          },
+        },
+        { psbtBase64: flexiblePsbt('dd'.repeat(32)), inputsToSign: [declared] },
+      ],
+    }));
+    await tick();
+
+    expect(h.mock.service.providerPreparePsbtGroup).toHaveBeenCalledTimes(1);
+    expect(page.messages).toEqual([expect.objectContaining({
+      ok: false,
+      error: expect.objectContaining({ data: { dreyCode: 'ERR_UNSUPPORTED_BY_ACCOUNT' } }),
+    })]);
+    expect(h.open).toHaveBeenCalledTimes(1);
+  });
+
   it('surfaces proven generic-listing proceeds and flexibility in the approval snapshot', async () => {
     const h = harness();
     const page = fakePort();
@@ -1126,7 +1679,7 @@ describe('ProviderController authority, disclosure and approvals', () => {
     expect(h.open).not.toHaveBeenCalled();
   });
 
-  it('allows Advanced review when only an unselected external input is flexible', async () => {
+  it('reviews an unselected flexible external input without provider-specific friction', async () => {
     const h = harness();
     const page = fakePort();
     h.controller.attach(page.port, authority);
@@ -1158,12 +1711,12 @@ describe('ProviderController authority, disclosure and approvals', () => {
     }));
     const snapshot = await h.controller.approvalCommand({ type: 'drey:approval', protocolVersion: 1, command: 'snapshot' });
     expect(snapshot.request).toMatchObject({
-      method: 'signPsbt', requiresPassword: true, confirmationPhrase: 'SIGN PSBT',
+      method: 'signPsbt', requiresPassword: false, confirmationPhrase: null,
     });
     await h.controller.approvalWindowClosed();
   });
 
-  it('keeps an advanced request open after a mistyped password', async () => {
+  it('keeps a globally password-confirmed request open after a mistyped password', async () => {
     const h = harness();
     const page = fakePort();
     h.controller.attach(page.port, authority);
@@ -1184,6 +1737,11 @@ describe('ProviderController authority, disclosure and approvals', () => {
       requiresAdvanced: true,
       selectedInputIndexes: [1],
       provider: input.binding,
+    }));
+    h.mock.service.getConfig = vi.fn(async () => ({
+      idleTimeoutMs: 3_600_000,
+      highSecurityMode: true,
+      advancedPsbtSigning: false,
     }));
     const psbtNonce = '123e4567-e89b-42d3-a456-426614174069';
     page.send(request('signPsbt', psbtNonce, {
@@ -1240,6 +1798,11 @@ describe('ProviderController authority, disclosure and approvals', () => {
       requiresAdvanced: true,
       selectedInputIndexes: [1],
       provider: input.binding,
+    }));
+    h.mock.service.getConfig = vi.fn(async () => ({
+      idleTimeoutMs: 3_600_000,
+      highSecurityMode: true,
+      advancedPsbtSigning: false,
     }));
     const psbtNonce = '123e4567-e89b-42d3-a456-426614174071';
     page.send(request('signPsbt', psbtNonce, {
@@ -1723,8 +2286,8 @@ describe('ProviderController authority, disclosure and approvals', () => {
         planHash: '33'.repeat(32),
         analysisHash: '22'.repeat(32),
         psbtHash: '11'.repeat(32),
+        psbtBytes: 5,
         hardViolations: [],
-        rawPsbtHex: '70736274ff',
       },
     });
     expect(page.messages.some((message) => JSON.stringify(message).includes('10000'))).toBe(false);
@@ -1796,6 +2359,93 @@ describe('ProviderController authority, disclosure and approvals', () => {
     expect((await h.controller.approvalCommand({
       type: 'drey:approval', protocolVersion: 1, command: 'snapshot',
     })).request?.method).toBe('sendTransfer');
+  });
+
+  it('validates and normalizes callback sighash declarations before planning a direct PSBT request', async () => {
+    const h = harness();
+    const page = fakePort();
+    h.controller.attach(page.port, authority);
+    const connectNonce = '123e4567-e89b-42d3-a456-426614174128';
+    page.send(request('wallet_connect', connectNonce, null));
+    await tick();
+    await h.controller.approvalCommand({
+      type: 'drey:approval', protocolVersion: 1, command: 'resolve',
+      requestNonce: connectNonce, approved: true,
+    });
+    const prepared = h.mock.preparedTransfer() as unknown as ProviderPsbtPlanV3;
+    vi.mocked(h.mock.service.providerPreparePsbt).mockResolvedValueOnce(prepared);
+    vi.mocked(h.mock.service.providerEnsureSpendReady).mockClear();
+    vi.mocked(h.mock.service.providerPreparePsbt).mockClear();
+    const transaction = Transaction.fromPSBT(
+      Uint8Array.from(Buffer.from(flexiblePsbt(), 'base64')),
+    );
+    transaction.updateInput(0, { sighashType: SigHash.ALL });
+
+    page.send(request('signPsbt', '123e4567-e89b-42d3-a456-426614174129', {
+      psbt: bytesToBase64(transaction.toPSBT()),
+      inputsToSign: [{
+        address: 'tb1qpaymentaddress', signingIndexes: [0], sigHash: SigHash.ALL,
+      }],
+      broadcast: false,
+    }));
+    await tick();
+
+    expect(h.mock.service.providerEnsureSpendReady).toHaveBeenCalledOnce();
+    expect(h.mock.service.providerPreparePsbt).toHaveBeenCalledOnce();
+    expect(h.mock.service.providerPreparePsbt).toHaveBeenCalledWith(expect.objectContaining({
+      selectedInputIndexes: [0],
+      signInputBindings: [{ address: 'tb1qpaymentaddress', inputIndexes: [0] }],
+    }));
+    expect(vi.mocked(h.mock.service.providerEnsureSpendReady).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(h.mock.service.providerPreparePsbt).mock.invocationCallOrder[0]!);
+    expect((await h.controller.approvalCommand({
+      type: 'drey:approval', protocolVersion: 1, command: 'snapshot',
+    })).request?.method).toBe('signPsbt');
+  });
+
+  it.each([
+    {
+      caseName: 'a sighash mismatch', psbt: flexiblePsbt(), signingIndexes: [0], sigHash: SigHash.ALL,
+    },
+    {
+      caseName: 'an out-of-range index', psbt: flexiblePsbt(), signingIndexes: [1],
+      sigHash: SigHash.SINGLE_ANYONECANPAY,
+    },
+    {
+      caseName: 'malformed PSBT bytes', psbt: 'cHNidP8=', signingIndexes: [0], sigHash: SigHash.ALL,
+    },
+  ])('rejects callback $caseName before wallet refresh or PSBT planning', async ({
+    psbt, signingIndexes, sigHash,
+  }) => {
+    const h = harness();
+    const page = fakePort();
+    h.controller.attach(page.port, authority);
+    const connectNonce = '123e4567-e89b-42d3-a456-426614174130';
+    page.send(request('wallet_connect', connectNonce, null));
+    await tick();
+    await h.controller.approvalCommand({
+      type: 'drey:approval', protocolVersion: 1, command: 'resolve',
+      requestNonce: connectNonce, approved: true,
+    });
+    page.messages.length = 0;
+    vi.mocked(h.mock.service.providerEnsureSpendReady).mockClear();
+    vi.mocked(h.mock.service.providerPreparePsbt).mockClear();
+
+    page.send(request('signPsbt', '123e4567-e89b-42d3-a456-426614174131', {
+      psbt,
+      inputsToSign: [{
+        address: 'tb1qpaymentaddress', signingIndexes, sigHash,
+      }],
+      broadcast: false,
+    }));
+    await tick();
+
+    expect(page.messages).toEqual([expect.objectContaining({
+      ok: false,
+      error: expect.objectContaining({ code: -32602 }),
+    })]);
+    expect(h.mock.service.providerEnsureSpendReady).not.toHaveBeenCalled();
+    expect(h.mock.service.providerPreparePsbt).not.toHaveBeenCalled();
   });
 
   it('reports wallet-data staleness before approval without planning or broadcasting', async () => {
