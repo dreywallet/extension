@@ -1366,7 +1366,7 @@ describe('ProviderController authority, disclosure and approvals', () => {
     expect(page.messages).toEqual([expect.objectContaining({
       ok: true,
       result: expect.objectContaining({
-        version: '0.14.16',
+        version: '0.14.17',
         platform: 'web',
         supports: ['WBIP001', 'WBIP004'],
         capabilities: [

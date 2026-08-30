@@ -5505,7 +5505,7 @@ export class WalletService {
           : null;
         const nowMs = this.deps.vaultDeps.now();
         const freshness: FreshnessReport = cachedStatus
-          ? evaluateFreshness(cachedStatus.status, nowMs)
+          ? evaluateFreshness(cachedStatus.status, nowMs, cachedStatus.verifiedAtMs)
           : { commonTip: false, heartbeatFresh: false, revisionActive: false, spendEligible: false };
         const ctx: EligibilityContext = {
           // A recorded source conflict makes preserved cache display-only.
@@ -7590,7 +7590,7 @@ export class WalletService {
       ? await loadCachedStatus(this.deps.session, this.deps.gateway.endpoint, this.deps.gateway.protocolVersions)
       : null;
     const freshness = cached
-      ? evaluateFreshness(cached.status, this.deps.vaultDeps.now())
+      ? evaluateFreshness(cached.status, this.deps.vaultDeps.now(), cached.verifiedAtMs)
       : { commonTip: false, heartbeatFresh: false, revisionActive: false, spendEligible: false };
     const meta = await this.loadAccountsMetaLocked(dek, vaultId);
     const lockedOutpoints = await this.loadLockedOutpointsLocked(dek, vaultId);

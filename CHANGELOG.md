@@ -3,6 +3,16 @@
 Notable user-facing changes to Drey are recorded here. For earlier releases,
 see the production release tags in the repository.
 
+## 0.14.17
+
+### Security
+
+- Tighten fee, destination, signature, freshness, permission, scan-history,
+  preview, and duplicate-input checks in wallet planning and signing paths.
+- Improve fragmented-input fee selection and preserve the successful source
+  identity when a vault scan safely retries.
+- Consume `@drey/core` v0.19.2 and bind its reproducible recovery source digest.
+
 ## 0.14.16
 
 ### Added
