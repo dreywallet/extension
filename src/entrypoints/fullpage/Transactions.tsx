@@ -92,7 +92,9 @@ function resultTitle(
       return t('ordinal.result.batch.title', { count: result.inscriptionCount ?? 0 });
     }
     if (result.kind === 'ordinal_postage_manage') return t('ordinal.postage.resultTitle');
-    if (result.kind === 'rescue') return t('ordinal.result.rescue.title');
+    // A mempool acceptance is not a confirmation. Use the existing submitted
+    // title here instead of claiming the rescue has already settled.
+    if (result.kind === 'rescue') return t('ordinal.result.title.accepted');
     if (result.kind === 'ordinal_sweep') return t('ordinal.result.sweep.title');
   }
   const ordinal = result.kind === 'ordinal_transfer' || result.kind === 'ordinal_batch_transfer' ||
@@ -1298,7 +1300,7 @@ export function Transactions(props: {
                   : undefined}
                 acknowledgementChecked={previewUnavailableAcknowledged}
                 onAcknowledgementChange={setPreviewUnavailableAcknowledged}
-                compact={review.ordinalAction !== null}
+                compact={review.ordinalAction !== null && review.ordinalAction.action !== 'rescue'}
               />
             )}
             {review.ordinalAction?.action === 'manage_postage' ? (
@@ -1431,10 +1433,12 @@ export function Transactions(props: {
                     <dt>{t('send.review.fee')}</dt>
                     <dd>{BigInt(review.ordinalAction.feeSats).toLocaleString(lang)} sats</dd>
                   </div>
-                  <div>
-                    <dt>{t('send.review.total')}</dt>
-                    <dd>{BigInt(review.totalSats).toLocaleString(lang)} sats</dd>
-                  </div>
+                  {review.ordinalAction.action !== 'rescue' ? (
+                    <div>
+                      <dt>{t('send.review.total')}</dt>
+                      <dd>{BigInt(review.totalSats).toLocaleString(lang)} sats</dd>
+                    </div>
+                  ) : null}
                   <div>
                     <dt>{t('ordinal.review.returned')}</dt>
                     <dd>{BigInt(review.ordinalAction.returnedBtcSats).toLocaleString(lang)} sats</dd>

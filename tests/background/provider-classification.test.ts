@@ -96,4 +96,31 @@ describe('provider group classification', () => {
     })).rejects.toMatchObject({ code: 'ERR_DATA_STALE' });
     expect(calls).toBe(2);
   });
+
+  it('preserves explicitly unknown future inputs only when the caller opts in', async () => {
+    const requested = [
+      { txid: 'aa'.repeat(32), vout: 0 },
+      { txid: 'bb'.repeat(32), vout: 1 },
+      { txid: 'cc'.repeat(32), vout: 2 },
+    ];
+    const classify = (async () => ({
+      ok: true as const,
+      value: {
+        ...status,
+        classifications: [classification(requested[1]!.txid, requested[1]!.vout)],
+        unknownOutpoints: [requested[2]!, requested[0]!],
+      },
+      verifiedAtMs: Date.parse(status.timestamp),
+    })) as GatewayClient['classifyOutpoints'];
+
+    await expect(classifyProviderOutpointsChunked({
+      network: 'mainnet', requested, classify,
+    })).rejects.toMatchObject({ code: 'ERR_DATA_STALE' });
+    await expect(classifyProviderOutpointsChunked({
+      network: 'mainnet', requested, classify, allowUnknown: true,
+    })).resolves.toMatchObject({
+      classifications: [{ txid: requested[1]!.txid, vout: requested[1]!.vout }],
+      unknownOutpoints: [requested[0], requested[2]],
+    });
+  });
 });

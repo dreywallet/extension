@@ -378,6 +378,139 @@ describe('provider approval window', () => {
     expect(screen.getByText('Up to 600 sats may leave your wallet.')).toBeInTheDocument();
   });
 
+  it('shows Foundry recipients, unlock times, fees, and no-broadcast behavior together', async () => {
+    let listener: ((message: unknown) => void) | null = null;
+    const port = {
+      postMessage: vi.fn(), disconnect: vi.fn(),
+      onMessage: {
+        addListener: (next: (message: unknown) => void) => { listener = next; },
+        removeListener: vi.fn(),
+      },
+      onDisconnect: { addListener: vi.fn(), removeListener: vi.fn() },
+    };
+    (globalThis as { chrome?: unknown }).chrome = { runtime: { connect: () => port } };
+    renderApproval();
+    const item = (index: number) => ({
+      index, authorization: 'complete', feeSats: String(330 + index),
+      walletInputSats: '663', walletOutputSats: '333', externalOutputSats: '0',
+      netWalletDebitSats: String(330 + index), economicClaims: [],
+      outputs: [{
+        index: 0, address: `bc1pfoundryrecipient${index}`, valueSats: '333',
+        ownership: 'wallet', role: 'ordinal_change', committed: true,
+      }],
+    });
+    (listener as unknown as (message: unknown) => void)({
+      type: 'drey:approval:snapshot', protocolVersion: 1,
+      request: {
+        requestNonce: '123e4567-e89b-42d3-a456-426614174297',
+        method: 'signMultipleTransactions', origin: 'https://ord.net',
+        unicodeOrigin: 'https://ord.net', warnings: [], createdAt: 1,
+        expiresAt: 300_001, approveAfter: 1,
+        review: {
+          kind: 'batch', walletName: 'Primary wallet', account: 0, network: 'mainnet',
+          transactionCount: 2, walletInputSats: '1326', walletOutputSats: '666',
+          netWalletDebitSats: '661', feeExposureSats: '661',
+          transactions: [item(0), item(1)],
+        },
+        details: {
+          approvalModelVersion: 1,
+          transactions: [
+            {
+              ordnetFoundryPresale: {
+                recipientAddress: 'bc1pfoundryrecipient0', unlockAt: 1_788_098_400,
+                feeReserveSats: '330', inputStatus: 'future_delivery',
+              },
+            },
+            {
+              ordnetFoundryPresale: {
+                recipientAddress: 'bc1pfoundryrecipient1', unlockAt: 1_784_865_600,
+                feeReserveSats: '331', inputStatus: 'classified',
+              },
+            },
+          ],
+        },
+        requiresPassword: false, confirmationPhrase: null, approvalError: null,
+      },
+    });
+
+    const review = await screen.findByTestId('approval-foundry-presale');
+    expect(review).toHaveTextContent('Verified Foundry presale withdrawals');
+    expect(review).toHaveTextContent('bc1pfoundryrecipient0');
+    expect(review).toHaveTextContent('bc1pfoundryrecipient1');
+    expect(review).toHaveTextContent('Unlocks');
+    expect(review).toHaveTextContent('330 sats');
+    expect(review).toHaveTextContent('Future delivery inputs will be checked again before signing.');
+    expect(review).toHaveTextContent('authoritative inscription and fee-reserve checks');
+    expect(review).toHaveTextContent('Drey signs these withdrawals but never broadcasts them.');
+  });
+
+  it('describes the complete OMB listing group as one approval', async () => {
+    let listener: ((message: unknown) => void) | null = null;
+    const port = {
+      postMessage: vi.fn(), disconnect: vi.fn(),
+      onMessage: {
+        addListener: (next: (message: unknown) => void) => { listener = next; },
+        removeListener: vi.fn(),
+      },
+      onDisconnect: { addListener: vi.fn(), removeListener: vi.fn() },
+    };
+    (globalThis as { chrome?: unknown }).chrome = { runtime: { connect: () => port } };
+    renderApproval();
+    const transaction = {
+      authorization: 'complete', feeSats: '0', walletInputSats: '10000',
+      walletOutputSats: '10000', externalOutputSats: '0', netWalletDebitSats: '0',
+      economicClaims: [],
+      outputs: [{
+        index: 0, address: 'bc1pomblistingoutput', valueSats: '10000', ownership: 'wallet',
+        role: 'ordinal_change', committed: true,
+      }],
+    };
+    (listener as unknown as (message: unknown) => void)({
+      type: 'drey:approval:snapshot', protocolVersion: 1,
+      request: {
+        requestNonce: '123e4567-e89b-42d3-a456-426614174296',
+        method: 'signMultipleTransactions', origin: 'https://ordinalmaxibiz.wiki',
+        unicodeOrigin: 'https://ordinalmaxibiz.wiki', warnings: [], createdAt: 1,
+        expiresAt: 300_001, approveAfter: 1,
+        review: {
+          kind: 'batch', walletName: 'Primary wallet', account: 0, network: 'mainnet',
+          transactionCount: 3, walletInputSats: '30000', walletOutputSats: '29000',
+          netWalletDebitSats: '1000', feeExposureSats: '1000', linked: true,
+          maximumWalletDebitSats: '1000', maximumFeeExposureSats: '1000',
+          branchEconomicsExact: true, sharedFundingConflictCount: 0,
+          alternativeOutcomeGroups: [{
+            settlements: [{
+              nodeId: 'transaction-2', guaranteedWalletReturnSats: '9000',
+              maximumWalletDebitSats: '0',
+            }],
+            recovery: {
+              nodeId: 'transaction-3', guaranteedWalletReturnSats: '10000',
+              maximumWalletDebitSats: '1000',
+            },
+          }],
+          transactions: [0, 1, 2].map((index) => ({ index, ...transaction })),
+        },
+        details: {
+          approvalModelVersion: 1,
+          transactions: [psbtExplanation(), psbtExplanation({ flexible: true }), psbtExplanation()],
+          marketplace: {
+            status: 'recognized', id: 'ordnet', name: 'OMB Wiki · ord.net',
+            templateId: 'omb-wiki-ordnet-list-v1', templateVersion: 'omb-wiki-ordnet-list-v1',
+            action: 'list', role: 'seller', assetKind: 'inscription', step: 1, stepCount: 3,
+            groupedStepCount: 3, broadcaster: 'site', flexible: false,
+          },
+        },
+        requiresPassword: false, confirmationPhrase: null, approvalError: null,
+      },
+    });
+
+    expect(await screen.findByRole('heading', { name: 'List inscription?' })).toBeInTheDocument();
+    expect(screen.getByText((_content, node) => node?.tagName === 'P' &&
+      node.textContent?.includes('3 linked steps · one approval') === true)).toBeInTheDocument();
+    expect(screen.getByText('The site receives the signed PSBT and controls submission.'))
+      .toBeInTheDocument();
+  });
+
   it('compresses 50 identical signature effects into one readable rule', () => {
     const explanation = {
       ...psbtExplanation({ flexible: true }),

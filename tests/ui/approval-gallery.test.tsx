@@ -76,6 +76,23 @@ describe('approval gallery', () => {
     );
     expect(screen.queryByText('All outputs are fixed')).toBeNull();
 
+    await userEvent.click(screen.getByRole('button', { name: /Foundry presale withdrawals/iu }));
+    expect(await screen.findByTestId('approval-foundry-presale')).toHaveTextContent(
+      'Verified Foundry presale withdrawals',
+    );
+    expect(screen.getByText('bc1pfoundryrecipient0')).toBeInTheDocument();
+    expect(screen.getByText('bc1pfoundryrecipient1')).toBeInTheDocument();
+    expect(screen.getByText(/never broadcasts them/iu)).toBeInTheDocument();
+    expect(screen.getByTestId('approval-approve')).toBeEnabled();
+
+    await userEvent.click(screen.getByRole('button', { name: /OMB listing/iu }));
+    expect(await screen.findByRole('heading', { name: 'List inscription?' }))
+      .toBeInTheDocument();
+    expect(screen.getByText((_content, node) => node?.tagName === 'P' &&
+      node.textContent?.includes('3 linked steps · one approval') === true)).toBeInTheDocument();
+    expect(screen.getByText('The site receives the signed PSBT and controls submission.'))
+      .toBeInTheDocument();
+
     await userEvent.click(screen.getByRole('button', { name: /Fee warning/iu }));
     expect(await screen.findByRole('heading', { name: 'Send bitcoin?' })).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('high compared with the payment');

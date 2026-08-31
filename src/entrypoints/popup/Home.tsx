@@ -92,6 +92,7 @@ export function Home(props: {
   onReceive: () => void;
   onSend?: () => void;
   onManageUtxos?: () => void;
+  onReviewWrongLane?: () => void;
   onViewOrdinals?: () => void;
   onOpenCollectible?: (inscriptionId: string) => void;
   continuous?: boolean;
@@ -328,7 +329,7 @@ export function Home(props: {
           <button
             type="button"
             className={styles['statusBannerAction']}
-            onClick={props.onManageUtxos}
+            onClick={props.onReviewWrongLane ?? props.onManageUtxos}
           >
             {t('home.wrongLane.review')}
           </button>

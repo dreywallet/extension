@@ -987,9 +987,12 @@ const marketplaceWorkflowGroupJournalSchema = z.object({
   if (new Set(group.entries.map((entry) => entry.nodeId)).size !== group.entries.length) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'duplicate marketplace group node' });
   }
-  if (group.entries.some((entry) =>
-    entry.journal.workflow.workflowId !== group.workflowId ||
-    entry.journal.workflow.step !== group.step)) {
+  const ombLinkedListing = group.entries.length === 3 && group.step === 1 &&
+    group.entries.every((entry, index) =>
+      entry.journal.workflow.templateId === 'omb-wiki-ordnet-list-v1' &&
+      entry.journal.workflow.step === index + 1);
+  if (group.entries.some((entry) => entry.journal.workflow.workflowId !== group.workflowId) ||
+      (!ombLinkedListing && group.entries.some((entry) => entry.journal.workflow.step !== group.step))) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'marketplace group workflow differs' });
   }
 });
@@ -3690,6 +3693,7 @@ export class WalletService {
     response: OutpointsClassifyResponse,
     requested: Array<{ txid: string; vout: number }>,
     expectedPlan?: ProviderPsbtPlanV3,
+    allowUnknown = false,
   ): Promise<Map<string, UtxoClassification>> {
     const gateway = this.deps.gateway;
     if (!gateway) throw new RpcError('ERR_DATA_STALE', 'gateway unavailable');
@@ -3708,8 +3712,8 @@ export class WalletService {
       throw new RpcError('ERR_PLAN_CHANGED', 'provider classification source changed');
     }
     const expected = new Set(requested.map((item) => `${item.txid}:${item.vout}`));
-    if (expected.size !== requested.length || response.unknownOutpoints.length > 0 ||
-        response.classifications.length !== expected.size) {
+    if (expected.size !== requested.length || (!allowUnknown && response.unknownOutpoints.length > 0) ||
+        response.classifications.length + response.unknownOutpoints.length !== expected.size) {
       throw new RpcError('ERR_DATA_STALE', 'classification response incomplete');
     }
     const byOutpoint = new Map<string, UtxoClassification>();
@@ -3721,6 +3725,14 @@ export class WalletService {
         throw new RpcError('ERR_DATA_STALE', 'classification response is not authoritative');
       }
       byOutpoint.set(key, classification);
+    }
+    const unknown = new Set<string>();
+    for (const candidate of response.unknownOutpoints) {
+      const key = `${candidate.txid}:${candidate.vout}`;
+      if (!expected.has(key) || byOutpoint.has(key) || unknown.has(key)) {
+        throw new RpcError('ERR_DATA_STALE', 'classification response is not authoritative');
+      }
+      unknown.add(key);
     }
     if (expectedPlan && expectedPlan.inputs.some((planInput) => {
       const fresh = byOutpoint.get(`${planInput.txid}:${planInput.vout}`);
@@ -3759,15 +3771,22 @@ export class WalletService {
         candidate.txid === item.txid && candidate.vout === item.vout) === index)
       .sort((left, right) => left.txid.localeCompare(right.txid) || left.vout - right.vout);
     if (requested.length === 0) throw new RpcError('ERR_PLAN_CHANGED', 'provider group has no external roots');
+    const prospective = new Set(plan.preparation?.prospectiveOutpoints ?? []);
     const [view, classified] = await Promise.all([
       this.gatewayStatus({ forceRefresh: true }),
       classifyProviderOutpointsChunked({
         network: plan.network,
         requested,
         classify: (request) => gateway.classifyOutpoints(request),
+        allowUnknown: prospective.size > 0,
       }),
     ]);
-    const fresh = await this.assertProviderClassificationBatch(classified, requested);
+    const fresh = await this.assertProviderClassificationBatch(
+      classified,
+      requested,
+      undefined,
+      prospective.size > 0,
+    );
     const source = plan.items[0]!.plan.source;
     if (classified.instanceId !== source.instanceId ||
         classified.classificationRevision !== source.classificationRevision ||
@@ -3775,10 +3794,19 @@ export class WalletService {
         !tipsEqual(classified.indexTip, source.indexTip)) {
       throw new RpcError('ERR_PLAN_CHANGED', 'provider group classification source changed');
     }
+    const freshUnknown = new Set(classified.unknownOutpoints.map((candidate) =>
+      `${candidate.txid}:${candidate.vout}`));
     for (const root of requested) {
+      const key = `${root.txid}:${root.vout}`;
+      if (prospective.has(key)) {
+        if (!freshUnknown.has(key) || fresh.has(key)) {
+          throw new RpcError('ERR_PLAN_CHANGED', 'future Foundry input is no longer unknown');
+        }
+        continue;
+      }
       const expected = plan.items.flatMap((item) => item.plan.inputs).find((candidate) =>
         candidate.txid === root.txid && candidate.vout === root.vout);
-      const current = fresh.get(`${root.txid}:${root.vout}`);
+      const current = fresh.get(key);
       if (!expected || !current || !providerFactsEqual(current, expected)) {
         throw new RpcError('ERR_PLAN_CHANGED', 'provider group root classification changed');
       }
@@ -3843,6 +3871,10 @@ export class WalletService {
       // already proven its value, asset projection, and active-account
       // control from the immutable parent transaction and group preparation.
       if (plan.linkedGroup?.inputProvenance[index]?.kind === 'linked_output') continue;
+      if (plan.linkedGroup?.inputProvenance[index]?.kind === 'ordnet_foundry_future') continue;
+      const provenance = plan.linkedGroup?.inputProvenance[index];
+      if (provenance?.kind === 'gateway' &&
+          provenance.walletControl === 'ordnet_foundry_script_path') continue;
       const current = byOutpoint.get(`${planned.txid}:${planned.vout}`);
       if (!current || current.accountId !== plan.accountId || current.account !== plan.account ||
           current.valueSats !== planned.valueSats ||
@@ -4180,16 +4212,24 @@ export class WalletService {
       throw new RpcError('ERR_INVALID_PAYLOAD', 'unsupported PSBT transaction group input count');
     }
     input.guard?.();
+    const nativeOrdnet = input.binding.origin === 'https://ord.net' ||
+      input.binding.origin === 'https://www.ord.net';
     const [gatewayView, classified] = await Promise.all([
       this.gatewayStatus({ forceRefresh: true }),
       classifyProviderOutpointsChunked({
         network: this.deps.network,
         requested: inspected.externalOutpoints,
         classify: (request) => gateway.classifyOutpoints(request),
+        allowUnknown: nativeOrdnet,
         ...(input.guard === undefined ? {} : { guard: input.guard }),
       }),
     ]);
-    await this.assertProviderClassificationBatch(classified, inspected.externalOutpoints);
+    await this.assertProviderClassificationBatch(
+      classified,
+      inspected.externalOutpoints,
+      undefined,
+      nativeOrdnet,
+    );
     input.guard?.();
     return this.runExclusive(() => this.withSessionDek(
       { expectedVaultId: accountView.vaultId, expectedSessionId: accountView.sessionId },
@@ -4236,6 +4276,8 @@ export class WalletService {
             groupId: this.deps.newSessionId(),
             items: preparationItems,
             externalClassifications: classified.classifications,
+            prospectiveOutpoints: classified.unknownOutpoints.map((candidate) =>
+              `${candidate.txid}:${candidate.vout}`),
             source,
             walletControl: {
               network: this.deps.network,
@@ -4253,6 +4295,10 @@ export class WalletService {
               );
               return { scriptPubKey, output: { valueSats: 0n, scriptPubKey, address, role, derivation } };
             });
+          const policyBoundPreparation = !inspected.topology.independent ||
+            preparation.prospectiveOutpoints.length > 0 || preparation.items.some((preparedItem) =>
+              preparedItem.provenance.some((entry) =>
+                entry.walletControl === 'ordnet_foundry_script_path'));
           const externalWalletInputs = utxos
             .filter((utxo) => utxo.accountId === accountView.accountId &&
               inspected.externalOutpoints.some((root) => outpointKey(utxo.outpoint) === `${root.txid}:${root.vout}`))
@@ -4295,7 +4341,7 @@ export class WalletService {
                 ...item.marketplace,
                 selectedInputIndexes,
               } }),
-              ...(inspected.topology.independent ? {} : { linkedGroup: linkedBinding.linkedGroup }),
+              ...(policyBoundPreparation ? { linkedGroup: linkedBinding.linkedGroup } : {}),
             });
             for (const selection of item.inputsToSign) {
               const lane = addressLane.get(selection.address);
@@ -4341,7 +4387,7 @@ export class WalletService {
             groupId: preparation.groupId,
             now: this.deps.vaultDeps.now(),
             approvalGeneration: input.approvalGeneration,
-            ...(inspected.topology.independent ? {} : { preparation }),
+            ...(policyBoundPreparation ? { preparation } : {}),
           });
           input.guard?.();
           await this.persistMarketplaceGroupPreparedLocked(
@@ -9949,11 +9995,13 @@ export class WalletService {
     const step = first.marketplace!.context.step;
     const templateId = first.marketplace!.resolution.templateId;
     const broadcaster = first.marketplace!.context.broadcaster;
-    if (marketplaceItems.some((item) =>
+    const linkedOmbListing = templateId === 'omb-wiki-ordnet-list-v1';
+    if (marketplaceItems.some((item, index) =>
       item.plan.marketplace!.context.workflowId !== workflowId ||
-      item.plan.marketplace!.context.step !== step ||
+      item.plan.marketplace!.context.step !== (linkedOmbListing ? index + 1 : step) ||
       item.plan.marketplace!.resolution.templateId !== templateId ||
-      item.plan.marketplace!.context.broadcaster !== broadcaster)) {
+      item.plan.marketplace!.context.broadcaster !== broadcaster) ||
+      (linkedOmbListing && (marketplaceItems.length !== 3 || step !== 1))) {
       throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow steps require separate approvals');
     }
     const cache = this.requireCache();
@@ -9976,7 +10024,11 @@ export class WalletService {
         if (!entry || entry.nodeId !== item.nodeId) {
           throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow group was replayed or changed');
         }
-        const workflow = this.assertMarketplaceWorkflowJournal(entry.journal, item.plan, step);
+        const workflow = this.assertMarketplaceWorkflowJournal(
+          entry.journal,
+          item.plan,
+          linkedOmbListing ? index + 1 : step,
+        );
         if (workflow.state !== 'prepared' || workflow.planHash !== item.plan.planHash ||
             workflow.psbtHash !== item.plan.psbtHash ||
             workflow.requestHash !== marketplaceRequestHash(item.plan)) {
@@ -9986,7 +10038,7 @@ export class WalletService {
       return;
     }
     const existingSingles = await this.marketplaceWorkflowJournalsLocked(dek, first);
-    if (existingSingles.some((journal) => {
+    if (linkedOmbListing ? existingSingles.length > 0 : existingSingles.some((journal) => {
       try {
         this.assertMarketplaceWorkflowJournal(journal, first, step, true);
         return true;
@@ -9995,11 +10047,11 @@ export class WalletService {
       throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow group was replayed or changed');
     }
     const existingGroups = await this.marketplaceWorkflowGroupsLocked(dek, first);
-    if (existingGroups.some((group) =>
+    if (linkedOmbListing ? existingGroups.length > 0 : existingGroups.some((group) =>
       this.marketplaceGroupAuthorityMatches(group, first, step, true))) {
       throw new RpcError('ERR_PLAN_CHANGED', 'marketplace workflow group was replayed or changed');
     }
-    const priorSignedHash = step > 1
+    const priorSignedHash = !linkedOmbListing && step > 1
       ? await this.marketplacePriorSignedHashLocked(dek, first, step - 1)
       : null;
     const now = this.deps.vaultDeps.now();
@@ -10012,7 +10064,7 @@ export class WalletService {
         nodeId: item.nodeId,
         journal: this.marketplaceWorkflowJournal(
           item.plan,
-          this.preparedMarketplaceWorkflow(item.plan, priorSignedHash, now),
+          this.preparedMarketplaceWorkflow(item.plan, linkedOmbListing ? null : priorSignedHash, now),
         ),
       })),
       createdAt: now,

@@ -503,6 +503,59 @@
   margin-top: .15rem;
 }
 
+.message .foundryList {
+  list-style: none;
+  padding-left: 0;
+}
+
+.foundryList li {
+  border-bottom: 1px solid var(--color-border);
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-2) 0;
+}
+
+.foundryList li:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.foundryList dl,
+.foundryList dd {
+  margin: 0;
+}
+
+.foundryList dl {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.foundryList dl > div {
+  display: grid;
+  gap: .1rem;
+}
+
+.foundryList dt {
+  color: var(--color-text-muted);
+  font-size: .7rem;
+}
+
+.foundryList dd {
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.foundryList code {
+  font-size: .72rem;
+  word-break: break-all;
+}
+
+.foundryInputStatus {
+  color: var(--color-text-muted);
+  font-size: .72rem !important;
+  margin: 0 !important;
+}
+
 .connection ul {
   display: grid;
   gap: 0 var(--space-4);

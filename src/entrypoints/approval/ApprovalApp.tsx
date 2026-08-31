@@ -456,6 +456,25 @@ export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {})
     ? details['transactions'].filter((item): item is Record<string, unknown> =>
         item !== null && typeof item === 'object' && !Array.isArray(item))
     : [];
+  const foundryWithdrawals = batchTransactionDetails.flatMap((item, index) => {
+    const raw = item['ordnetFoundryPresale'];
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
+    const foundry = raw as Record<string, unknown>;
+    if (typeof foundry['recipientAddress'] !== 'string' ||
+        typeof foundry['unlockAt'] !== 'number' || !Number.isSafeInteger(foundry['unlockAt']) ||
+        typeof foundry['feeReserveSats'] !== 'string' ||
+        !/^(0|[1-9][0-9]*)$/u.test(foundry['feeReserveSats']) ||
+        (foundry['inputStatus'] !== 'future_delivery' && foundry['inputStatus'] !== 'classified')) {
+      return [];
+    }
+    return [{
+      index,
+      recipientAddress: foundry['recipientAddress'],
+      unlockAt: foundry['unlockAt'],
+      feeReserveSats: foundry['feeReserveSats'],
+      inputStatus: foundry['inputStatus'],
+    }];
+  });
   const marketplace = details?.['marketplace'] && typeof details['marketplace'] === 'object'
     ? details['marketplace'] as Record<string, unknown>
     : null;
@@ -709,6 +728,41 @@ export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {})
       {review.kind === 'batch' && surfaceSignatureRules ? (
           <ProviderSighashEffects explanations={validBatchApprovalEntries} />
         ) : null}
+      {review.kind === 'batch' && foundryWithdrawals.length > 0 ? (
+        <section className={`${styles['message']} ${styles['marketplace']}`}
+          data-testid="approval-foundry-presale">
+          <strong>{t('approval.foundry.title')}</strong>
+          <p>{t('approval.foundry.body')}</p>
+          <ul className={styles['foundryList']}>
+            {foundryWithdrawals.map((withdrawal) => (
+              <li key={`${withdrawal.index}:${withdrawal.recipientAddress}`}>
+                <strong>{t('approval.foundry.withdrawal', { number: withdrawal.index + 1 })}</strong>
+                <dl>
+                  <div>
+                    <dt>{t('approval.foundry.recipient')}</dt>
+                    <dd><code>{withdrawal.recipientAddress}</code></dd>
+                  </div>
+                  <div>
+                    <dt>{t('approval.foundry.unlocks')}</dt>
+                    <dd>{new Intl.DateTimeFormat(lang, {
+                      dateStyle: 'medium', timeStyle: 'short',
+                    }).format(new Date(withdrawal.unlockAt * 1000))}</dd>
+                  </div>
+                  <div>
+                    <dt>{t('approval.networkFee')}</dt>
+                    <dd>{formatSats(withdrawal.feeReserveSats)}</dd>
+                  </div>
+                </dl>
+                <p className={styles['foundryInputStatus']}>{t(
+                  withdrawal.inputStatus === 'future_delivery'
+                    ? 'approval.foundry.futureInputs' : 'approval.foundry.classifiedInputs',
+                )}</p>
+              </li>
+            ))}
+          </ul>
+          <p>{t('approval.foundry.noBroadcast')}</p>
+        </section>
+      ) : null}
       {review.kind === 'transaction' && sharedApproval !== null && surfaceSignatureRules ? (
           <ProviderSighashEffects explanation={sharedApproval} deferredFee={deferredFee} />
         ) : null}
@@ -805,10 +859,14 @@ export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {})
           <strong>{t('approval.marketplace.verified')}</strong>
           <p>
             {String(marketplace['name'])} · {String(marketplace['role'])} · {String(marketplace['assetKind'])}
-            {' · '}{t('approval.marketplace.step', {
-              step: String(marketplace['step']),
-              count: String(marketplace['stepCount']),
-            })}
+            {' · '}{typeof marketplace['groupedStepCount'] === 'number'
+              ? t('approval.marketplace.linkedSteps', {
+                  count: String(marketplace['groupedStepCount']),
+                })
+              : t('approval.marketplace.step', {
+                  step: String(marketplace['step']),
+                  count: String(marketplace['stepCount']),
+                })}
           </p>
           <p>{marketplace['broadcaster'] === 'wallet'
             ? t('approval.marketplace.walletBroadcasts')

@@ -406,7 +406,8 @@ requests. The PSBT fixtures include P2WPKH ALL, P2TR DEFAULT,
 ALL|ANYONECANPAY, SINGLE, SINGLE|ANYONECANPAY listing, mixed sighashes, a
 blocked NONE request, and a two-transaction batch. The gallery
 also includes linked settlement/recovery branches, shared-funding alternatives,
-and deferred zero-fee signing. Signature rules remain visible while raw PSBT
+Foundry presale withdrawals, the OMB Wiki three-step listing approval, and
+deferred zero-fee signing. Signature rules remain visible while raw PSBT
 details stay collapsed. The gallery
 imports the real approval component but lives outside `src/entrypoints`, builds
 only to `.output/approval-gallery`, and replaces approval actions with local

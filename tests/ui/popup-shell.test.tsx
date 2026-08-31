@@ -257,6 +257,32 @@ describe('popup shell navigation', () => {
     });
   });
 
+  it('opens the Ordinals attention surface from the wrong-lane alert', async () => {
+    installFakeChrome({
+      'gateway.status': () => ({ ok: true, result: gateway }),
+      'wallet.home': () => ({
+        ok: true,
+        result: { ...home, wrongLaneCount: 1 },
+      }),
+      'gallery.list': () => ({
+        ok: true,
+        result: { accountId: ACCOUNT_ID, items: [], refreshedAt: 1_752_969_600_000 },
+      }),
+    });
+    const createTab = vi.fn(async () => ({}));
+    (chrome.tabs as unknown as { create: typeof createTab }).create = createTab;
+
+    render(
+      <Providers>
+        <Shell session={session(() => undefined)} />
+      </Providers>,
+    );
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Review coins' }));
+    expect(await screen.findByRole('heading', { name: 'Ordinals' })).toBeInTheDocument();
+    expect(createTab).not.toHaveBeenCalled();
+  });
+
   it('separates Settings and Lock from the persistent primary navigation', async () => {
     const refresh = vi.fn();
     const lockPayloads: unknown[] = [];

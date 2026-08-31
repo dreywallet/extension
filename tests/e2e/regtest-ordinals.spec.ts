@@ -206,6 +206,11 @@ test('@ordinals rescues a real wrong-lane inscription and returns directly to Ga
   const rescueReview = popup.page.getByRole('heading', { name: 'Rescue this inscription?' });
   await expect(rescueReview).toBeVisible({ timeout: 45_000 });
   const rescueSection = rescueReview.locator('xpath=ancestor::section[1]');
+  await expect(
+    rescueSection
+      .getByLabel('Immutable inscription ID')
+      .getByText(wrongLaneFixture.inscriptionId, { exact: true }),
+  ).toBeVisible();
   await expect(rescueSection).toContainText(ordinalAddress);
   await expect(rescueSection.getByText('Owned by this wallet', { exact: true })).toBeVisible();
   await expect(rescueSection.getByText('10,000 sats', { exact: true })).toBeVisible();
@@ -215,7 +220,7 @@ test('@ordinals rescues a real wrong-lane inscription and returns directly to Ga
   if (await rescueAcknowledgement.count() > 0) await rescueAcknowledgement.check();
   await rescueSection.getByRole('button', { name: 'Rescue inscription' }).click();
 
-  await expect(popup.page.getByRole('heading', { name: 'Inscription rescued' })).toBeVisible({
+  await expect(popup.page.getByRole('heading', { name: 'Ordinals transaction sent' })).toBeVisible({
     timeout: 45_000,
   });
   const rescueTxid = checkedTxid(await popup.page.locator('a[href*="/tx/"] code').textContent());

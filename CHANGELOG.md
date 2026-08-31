@@ -3,6 +3,22 @@
 Notable user-facing changes to Drey are recorded here. For earlier releases,
 see the production release tags in the repository.
 
+## 0.14.18
+
+### Added
+
+- Add one linked Drey approval for OMB Wiki ord.net listings, covering escrow,
+  sale authorization, and seller recovery without wallet broadcasting.
+- Support canonical ord.net Foundry presale withdrawals for same-wallet and
+  split-recipient batches, with recipient, unlock time, fee, and input status
+  shown in the approval.
+
+### Security
+
+- Revalidate complete listing groups and Foundry timelock paths immediately
+  before signing, then release every signature together or none.
+- Consume `@drey/core` v0.19.4 and bind its reproducible recovery digest.
+
 ## 0.14.17
 
 ### Security

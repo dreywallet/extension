@@ -113,7 +113,13 @@ the published ORD.NET Trading API 1.0.0 OpenAPI 3.1 document
 and its reference pages: per-step sighash tables, preflight handle plus
 expected-txid echo binding (the retired preflight `revision` model was
 replaced), 409 stale-state semantics, and self-service BIP-322 wallet auth.
-Known residual risks, accepted for this release: the vendor publishes no
+Known residual risks, accepted for this release: the drey-1 buyer buy, offer,
+and accept-counter callbacks do not bind a complete promised asset and exact
+wallet debit into the analyzed PSBT. Those shapes remain compatible, but the
+approval presents independently computed generic transaction facts instead of
+the ord.net verified-workflow label or context-supplied economics. Fully branded
+buyer approval requires a later exact per-field contract comparable to the OMB
+Wiki adapter. The vendor also publishes no
 rotation or detection contract for the pinned sale co-signer key (rotation
 therefore hard-fails signing until re-review), no live-trade evidence exists
 yet, ord.net auth requires a payment address holding at least 0.01 BTC

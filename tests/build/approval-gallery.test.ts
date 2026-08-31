@@ -19,6 +19,8 @@ describe('local approval gallery', () => {
         'mixed-sighash',
         'blocked-none',
         'transaction-batch',
+        'foundry-presale-withdrawals',
+        'linked-listing-group',
       ]),
     );
 

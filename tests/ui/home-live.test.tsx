@@ -96,6 +96,7 @@ function renderHome(
   result: WalletHomeResult,
   gateway: GatewayStatusView = connectedView,
   onManageUtxos = () => undefined,
+  onReviewWrongLane = onManageUtxos,
 ) {
   installFakeChrome({
     'wallet.home': () => ({ ok: true, result }),
@@ -107,6 +108,7 @@ function renderHome(
         expectation={EXPECTATION}
         onReceive={() => undefined}
         onManageUtxos={onManageUtxos}
+        onReviewWrongLane={onReviewWrongLane}
       />
     </Providers>,
   );
@@ -327,12 +329,19 @@ describe('Home with live balances (§10.2)', () => {
 
   it('shows the §12.1 wrong-lane alert', async () => {
     const onManageUtxos = vi.fn();
-    renderHome(homeResult({ wrongLaneCount: 1 }), connectedView, onManageUtxos);
+    const onReviewWrongLane = vi.fn();
+    renderHome(
+      homeResult({ wrongLaneCount: 1 }),
+      connectedView,
+      onManageUtxos,
+      onReviewWrongLane,
+    );
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Drey found 1 coin holding a collectible at a Bitcoin address.',
     );
     fireEvent.click(screen.getByRole('button', { name: 'Review coins' }));
-    expect(onManageUtxos).toHaveBeenCalledOnce();
+    expect(onReviewWrongLane).toHaveBeenCalledOnce();
+    expect(onManageUtxos).not.toHaveBeenCalled();
   });
 
   it('reconciles §12.2 reserved value inside the combined disclosure', async () => {

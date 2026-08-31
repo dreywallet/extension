@@ -212,11 +212,14 @@ compile-time template.
 
 ord.net single-inscription trading (authenticate, list, buy, offer, counter,
 accept offer, accept counter) can use the published ORD.NET Trading API 1.0.0
-context contract. When the callback supplies that context, Drey binds the
-preflight handle and expected transaction IDs and can name the verified
-workflow. Current Sats Connect callbacks may supply only PSBTs, signing inputs,
-network, and a message. Those requests use the same signing engine but receive
-a conservative transaction review instead of an unverified marketplace label.
+context contract. Drey uses it to select the exact compiled transaction and
+sighash policy. Seller flows whose inscription, payout, and proceeds are bound
+to the analyzed plan can be named in approval. The drey-1 buyer buy, offer, and
+accept-counter callbacks do not bind a complete asset-and-debit contract, so
+they deliberately receive the same conservative exact-transaction review as a
+contextless deterministic request: actual wallet debit, outputs, and fees,
+without an unverified marketplace label or page-supplied price claim. This does
+not add another prompt or disable compatible signing.
 
 `signMultipleTransactions` supports independent batches, internally linked
 transaction graphs, and shared-funding alternatives when every PSBT carries an

@@ -24,7 +24,7 @@ assert(registry.includes(createHash('sha256').update(manifest).digest('hex')),
 const reviewedEnabledTemplates = new Set([
   'ordnet-auth', 'ordnet-list', 'ordnet-buy', 'ordnet-offer', 'ordnet-counter',
   'ordnet-accept-offer', 'ordnet-accept-counter', 'omb-wiki-ordnet-buy',
-  'omb-wiki-satflow-secure-buy',
+  'omb-wiki-satflow-secure-buy', 'omb-wiki-ordnet-list-v1',
 ]);
 const enabledTemplates = new Set();
 assert(registry.includes("providerMethod: input.steps.length === 0 ? 'signMessage' : 'signPsbt'"),

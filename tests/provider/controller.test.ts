@@ -236,6 +236,16 @@ function flexiblePsbt(txid = 'aa'.repeat(32)): string {
   return bytesToBase64(tx.toPSBT());
 }
 
+function deterministicPsbt(txid = 'aa'.repeat(32)): string {
+  const tx = new Transaction({ lowR: true });
+  tx.addInput({
+    txid, index: 0, sighashType: SigHash.ALL,
+    witnessUtxo: { script: hexToBytes(`0014${'11'.repeat(20)}`), amount: 30_000n },
+  });
+  tx.addOutput({ script: hexToBytes(`0014${'22'.repeat(20)}`), amount: 29_000n });
+  return bytesToBase64(tx.toPSBT());
+}
+
 function mixedBuyerPsbt(): string {
   const tx = Transaction.fromPSBT(Uint8Array.from(Buffer.from(flexiblePsbt(), 'base64')));
   tx.addInput({
@@ -1366,13 +1376,15 @@ describe('ProviderController authority, disclosure and approvals', () => {
     expect(page.messages).toEqual([expect.objectContaining({
       ok: true,
       result: expect.objectContaining({
-        version: '0.14.17',
+        version: '0.14.18',
         platform: 'web',
         supports: ['WBIP001', 'WBIP004'],
         capabilities: [
           'community-vault-v1',
           'community-vault-offers-v1',
           'community-vault-position-transfer-v1',
+          'marketplace-ordnet-list-v1',
+          'marketplace-ordnet-foundry-presale-v1',
         ],
         methods: expect.arrayContaining(['getInfo', 'wallet_connect', 'signPsbt']),
       }),
@@ -1651,6 +1663,83 @@ describe('ProviderController authority, disclosure and approvals', () => {
     expect(snapshot.request?.details).toMatchObject({
       genericListing: { guaranteedProceedsSats: '25000', flexible: true },
     });
+  });
+
+  it('keeps incomplete ord.net buyer semantics on exact generic transaction review', async () => {
+    const h = harness();
+    h.mock.setContext({
+      vaultId: 'vault-1', vaultName: 'Primary wallet',
+      sessionId: '123e4567-e89b-42d3-a456-426614174001',
+      network: 'mainnet', accountId: `acct_mainnet_${'1'.repeat(64)}`, account: 0,
+      payment: {
+        address: 'bc1qpaymentaddress', publicKeyHex: `02${'11'.repeat(32)}`,
+        path: "m/84'/0'/0'/0/0",
+      },
+      ordinals: {
+        address: 'bc1pordinaladdress', publicKeyHex: `03${'22'.repeat(32)}`,
+        path: "m/86'/0'/0'/0/0",
+      },
+    });
+    const page = fakePort();
+    const ordnetAuthority = {
+      ...authority,
+      origin: 'https://ord.net',
+      url: 'https://ord.net/market',
+    };
+    h.controller.attach(page.port, ordnetAuthority);
+    const connectNonce = '123e4567-e89b-42d3-a456-426614174280';
+    page.send(request('wallet_connect', connectNonce, null));
+    await tick();
+    await h.controller.approvalCommand({
+      type: 'drey:approval', protocolVersion: 1, command: 'resolve',
+      requestNonce: connectNonce, approved: true,
+    });
+
+    const prepared = await h.mock.service.providerPrepareTransfer({
+      recipients: [{ address: 'bc1qrecipientaddress', amount: 10_000 }],
+      binding: { ...ordnetAuthority, requestNonce: connectNonce, providerMethod: 'sendTransfer' },
+    });
+    prepared.network = 'mainnet';
+    prepared.kind = 'provider_psbt';
+    prepared.broadcast = false;
+    prepared.requiresAdvanced = false;
+    prepared.selectedInputIndexes = [0];
+    h.mock.service.providerPreparePsbt = vi.fn(async (input) => {
+      prepared.provider = input.binding;
+      return prepared;
+    });
+    const requestNonce = '123e4567-e89b-42d3-a456-426614174281';
+    page.send(request('signPsbt', requestNonce, {
+      psbt: deterministicPsbt(), signInputs: { bc1qpaymentaddress: [0] }, broadcast: false,
+      marketplaceContext: {
+        version: 1, marketplaceId: 'ordnet', templateVersion: 'drey-1',
+        action: 'buy', role: 'buyer', assetKind: 'inscription', workflowId: 'buy-1',
+        step: 1, stepCount: 1,
+        identifiers: { preflightHandle: '77777777-7777-7777-7777-777777777777' },
+        economics: {
+          totalSats: '999999999',
+          assetDestination: 'bc1pownedordinalsdestination',
+        },
+        expectedTxids: ['aa'.repeat(32)], broadcaster: 'site',
+      },
+    }));
+    await tick();
+
+    const snapshot = await h.controller.approvalCommand({
+      type: 'drey:approval', protocolVersion: 1, command: 'snapshot',
+    });
+    expect(h.mock.service.providerPreparePsbt).toHaveBeenCalledWith(expect.objectContaining({
+      marketplace: expect.objectContaining({
+        context: expect.objectContaining({ action: 'buy' }),
+      }),
+    }));
+    expect(snapshot.request?.review).toMatchObject({
+      kind: 'transaction',
+      netWalletDebitSats: '10500',
+      economicClaims: [],
+    });
+    expect(snapshot.request?.details).not.toHaveProperty('marketplace');
+    expect(JSON.stringify(snapshot)).not.toContain('999999999');
   });
 
   it('rejects generic wallet broadcasting before preparing or opening an approval', async () => {

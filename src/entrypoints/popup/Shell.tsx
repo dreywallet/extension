@@ -196,6 +196,10 @@ export function Shell(props: {
                   setOverlay('send');
                 }}
                 onManageUtxos={() => openFullpage(FULLPAGE_HASH.utxos)}
+                onReviewWrongLane={() => {
+                  setTargetInscriptionId(null);
+                  setDestination('ordinals');
+                }}
                 onViewOrdinals={() => {
                   setTargetInscriptionId(null);
                   setDestination('ordinals');

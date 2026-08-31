@@ -45,6 +45,7 @@ export async function classifyProviderOutpointsChunked(input: {
   network: Network;
   requested: Outpoint[];
   classify: GatewayClient['classifyOutpoints'];
+  allowUnknown?: boolean;
   guard?: () => void;
 }): Promise<OutpointsClassifyResponse> {
   const requestedKeys = input.requested.map((item) => `${item.txid}:${item.vout}`);
@@ -54,6 +55,7 @@ export async function classifyProviderOutpointsChunked(input: {
   let first: OutpointsClassifyResponse | null = null;
   let source: EvidenceSource | null = null;
   const byOutpoint = new Map<string, UtxoClassification>();
+  const unknown = new Map<string, Outpoint>();
   for (let offset = 0; offset < input.requested.length; offset += CLASSIFY_MAX_OUTPOINTS) {
     input.guard?.();
     const chunk = input.requested.slice(offset, offset + CLASSIFY_MAX_OUTPOINTS);
@@ -67,8 +69,8 @@ export async function classifyProviderOutpointsChunked(input: {
     first ??= classified.value;
     source ??= chunkSource;
     const expected = new Set(chunk.map((item) => `${item.txid}:${item.vout}`));
-    if (classified.value.unknownOutpoints.length > 0 ||
-        classified.value.classifications.length !== expected.size) {
+    if ((!input.allowUnknown && classified.value.unknownOutpoints.length > 0) ||
+        classified.value.classifications.length + classified.value.unknownOutpoints.length !== expected.size) {
       throw new RpcError('ERR_DATA_STALE', 'classification response incomplete');
     }
     for (const record of classified.value.classifications) {
@@ -80,17 +82,26 @@ export async function classifyProviderOutpointsChunked(input: {
       }
       byOutpoint.set(key, record);
     }
+    for (const record of classified.value.unknownOutpoints) {
+      const key = `${record.txid}:${record.vout}`;
+      if (!expected.has(key) || byOutpoint.has(key) || unknown.has(key)) {
+        throw new RpcError('ERR_DATA_STALE', 'classification response is not authoritative');
+      }
+      unknown.set(key, record);
+    }
   }
-  if (first === null || byOutpoint.size !== input.requested.length) {
+  if (first === null || byOutpoint.size + unknown.size !== input.requested.length) {
     throw new RpcError('ERR_DATA_STALE', 'classification response incomplete');
   }
   return {
     ...first,
-    classifications: input.requested.map((item) => {
+    classifications: input.requested.flatMap((item) => {
       const record = byOutpoint.get(`${item.txid}:${item.vout}`);
-      if (!record) throw new RpcError('ERR_DATA_STALE', 'classification response incomplete');
-      return record;
+      return record ? [record] : [];
     }),
-    unknownOutpoints: [],
+    unknownOutpoints: input.requested.flatMap((item) => {
+      const record = unknown.get(`${item.txid}:${item.vout}`);
+      return record ? [record] : [];
+    }),
   };
 }

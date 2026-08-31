@@ -857,6 +857,106 @@ describe('transaction screen orchestration', () => {
     });
   });
 
+  it('reviews a rescue as an owned move and reports acceptance without claiming confirmation', async () => {
+    const inscriptionId = `${'a'.repeat(64)}i0`;
+    const sourceTxid = 'b'.repeat(64);
+    const feeTxid = 'c'.repeat(64);
+    const destination = 'bc1pownedordinaldestination';
+    installFakeChrome({
+      'fees.quote': () => ({ ok: true, result: QUOTE }),
+      'transaction.plan': () => ({
+        ok: true,
+        result: {
+          planId: 'rescue-plan',
+          planHash: 'd'.repeat(64),
+          expiresAt: Date.now() + 60_000,
+          review: {
+            kind: 'rescue', network: 'mainnet', accountId: ACCOUNT_ID,
+            recipients: [{ address: destination, valueSats: '10000', role: 'postage' }],
+            inputs: [
+              { txid: sourceTxid, vout: 0, valueSats: '10000',
+                classification: 'inscribed', path: "m/84'/0'/0'/0/1" },
+              { txid: feeTxid, vout: 1, valueSats: '19000',
+                classification: 'cardinal_clean', path: "m/84'/0'/0'/0/0" },
+            ],
+            change: [{ address: 'bc1qpaymentchange', valueSats: '18000', role: 'payment_change' }],
+            amountSats: '10000', feeSats: '1000', totalSats: '11000',
+            vsize: '200', feeRateSatPerKvB: '5000', feeRateSatPerVb: '5',
+            urgency: 'recommended', rbf: false, psbtHash: 'e'.repeat(64),
+            standardModeMissingProtections: [], requiresReauth: false, reauthReasons: [],
+            effectCount: 1, requiresPreviewAcknowledgement: false,
+            ordinalAction: {
+              action: 'rescue',
+              inscriptionId,
+              destination: { address: destination, valueSats: '10000', ownership: 'wallet' },
+              postageSats: '10000',
+              feeSats: '1000',
+              protectedSource: { txid: sourceTxid, vout: 0, valueSats: '10000' },
+              fundingInputs: [{ txid: feeTxid, vout: 1, valueSats: '19000' }],
+              retainedInscriptionIds: [],
+              returnedBtcSats: '18000',
+              requiresNonTaprootAcknowledgement: false,
+            },
+            inscriptions: [{
+              inscriptionId,
+              number: 123,
+              satpoint: `${sourceTxid}:0:0`,
+              outpoint: { txid: sourceTxid, vout: 0 },
+              inputIndex: 0,
+              inputOffset: '0',
+              outputIndex: 0,
+              outputOffset: '0',
+              movement: 'retained',
+              coLocationGroup: `${sourceTxid}:0:0`,
+              qualifiedPartialAuthorization: false,
+              contentType: 'image/png',
+              preview: {
+                kind: 'raster', rasterBase64: 'AA==', pngSha256: 'f'.repeat(64),
+                pngWidth: 1, pngHeight: 1,
+              },
+            }],
+          },
+        },
+      }),
+      'transaction.approve': () => ({
+        ok: true,
+        result: {
+          planId: 'rescue-plan', txid: '1'.repeat(64), status: 'accepted', detail: null,
+        },
+      }),
+    });
+    render(
+      <Providers>
+        <Transactions
+          accountId={ACCOUNT_ID}
+          expectedVaultId="vault-1"
+          expectedSessionId={SESSION_1}
+          capabilities={CAPABILITIES}
+          initialSection="send"
+          initialOrdinalAction={{
+            kind: 'rescue',
+            outpoint: { txid: sourceTxid, vout: 0 },
+          }}
+          onNavigate={() => undefined}
+        />
+      </Providers>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Review transaction' }));
+    expect(await screen.findByRole('heading', { name: 'Rescue this inscription?' }))
+      .toBeInTheDocument();
+    expect(screen.getByRole('article', { name: 'Immutable inscription ID' }))
+      .toHaveTextContent(inscriptionId);
+    expect(screen.getByText('Owned by this wallet')).toBeInTheDocument();
+    expect(screen.queryByText('Total')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rescue inscription' }));
+    expect(await screen.findByRole('heading', { name: 'Ordinals transaction sent' }))
+      .toBeInTheDocument();
+    expect(screen.getByText('The network accepted this Ordinals transaction.'))
+      .toBeInTheDocument();
+  });
+
   it('loads each visible data section once and does not refetch from fee-form renders', async () => {
     let quotes = 0;
     const utxoRates: number[] = [];

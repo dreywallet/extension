@@ -62,7 +62,7 @@ export const VAULT_STANDALONE_TOOL_DIGEST_UNPUBLISHED = '00'.repeat(32);
  *
  * Reproduce both values from a clean checkout:
  *
- *   git clone --branch v0.19.2 https://github.com/dreywallet/core.git
+ *   git clone --branch v0.19.4 https://github.com/dreywallet/core.git
  *   cd core && pnpm install --frozen-lockfile && pnpm recovery:verify
  *
  * The artifact digest is deliberately the narrower claim. It stayed
@@ -117,11 +117,15 @@ export const VAULT_STANDALONE_TOOL_DIGEST_UNPUBLISHED = '00'.repeat(32);
  * shared-funding-alternative, and deferred zero-fee provider signing policy.
  * v0.19.2 changes the recovery artifact to honor the configured destination
  * ownership search depth and binds the reviewed source to wallet safety fixes.
+ * v0.19.3 hardens recovery-file writes and keeps recovery planning linear while
+ * preserving compatibility with historical version-1 kits. v0.19.4 keeps the
+ * artifact byte-identical while adding ord.net marketplace compatibility to
+ * the separately reviewed provider-signing policy.
  */
 export const VAULT_STANDALONE_TOOL_RELEASE = Object.freeze({
-  coreTag: 'v0.19.2',
-  sourceDigest: 'b227b192264978ca2bcb374b41e7f70dea3fa48fbd5a4285c83ef454c0e43c32',
-  artifactDigest: '9c873afcb701d8f433d87611c6cfcc9d75c9048faf12532f8175ae3b6a404bb2',
+  coreTag: 'v0.19.4',
+  sourceDigest: '1c7c39bc3d13b7ad6dcb0b5c2c3e2b603a70662da25fa2d7b22f9325017d5913',
+  artifactDigest: '2750ce4852b10e56214100f74f01cc7bfd15ef6c81f967be0921b5c339a4aa1e',
 });
 
 /**

@@ -1,5 +1,6 @@
 import { bip322MessageHash } from '@drey/core/domain/transactions/bip322';
 import { base64ToBytes, bytesToBase64, bytesToHex, hexToBytes } from '@drey/core/domain/vault/encoding';
+import { Transaction } from '@scure/btc-signer';
 import { RpcError } from './errors';
 import { VaultError } from '@drey/core/domain/vault/errors';
 import type { WalletService } from './wallet-service';
@@ -29,6 +30,7 @@ import {
 import {
   isProviderMethod,
   normalizeProviderConnectionRequest,
+  ordnetMarketplaceProviderCapabilities,
   PROVIDER_METHODS,
   PROVIDER_OPERATIONS,
   providerNetworkResult,
@@ -43,6 +45,7 @@ import type { ProviderAuthority } from '../provider/authority';
 import type { ApprovalCommand, ApprovalSnapshot } from '../provider/approval';
 import {
   providerPsbtPlanPreviews,
+  type ProviderPsbtInputSelection,
   type ProviderPsbtPlanV3,
 } from '@drey/core/domain/transactions/provider-psbt';
 import { assertProviderPsbtSighashDeclarations } from
@@ -59,6 +62,7 @@ import {
   requiresPreviewAcknowledgement,
 } from '@drey/core/domain/transactions/inscription-previews';
 import { MarketplaceProviderError } from '@drey/core/domain/marketplaces/errors';
+import { marketplaceApprovalPresentation } from '@drey/core/domain/marketplaces/contracts';
 import {
   inspectMarketplacePsbt,
   resolveMarketplaceRequest,
@@ -169,6 +173,14 @@ interface PendingApproval {
   approvalError?: string;
 }
 
+function approvalMayNameMarketplace(pending: PendingApproval): boolean {
+  return pending.marketplace !== undefined &&
+    marketplaceApprovalPresentation(
+      pending.marketplace.context,
+      pending.marketplace.resolution,
+    ) === 'verified_workflow';
+}
+
 class ProviderConnectionLimitError extends Error {
   constructor() {
     super('provider connection limit reached');
@@ -243,6 +255,19 @@ function providerAddresses(
       walletType: 'software' as const,
     },
   ];
+}
+
+function providerInputSelections(
+  selections: NonNullable<SignMultipleTransactionsParams['psbts'][number]['inputsToSign']>,
+): ProviderPsbtInputSelection[] {
+  return selections.map((selection) => ({
+    address: selection.address,
+    signingIndexes: selection.signingIndexes,
+    ...(selection.publicKey === undefined ? {} : { publicKey: selection.publicKey }),
+    ...(selection.disableTweakSigner === undefined
+      ? {} : { disableTweakSigner: selection.disableTweakSigner }),
+    ...(selection.sigHash === undefined ? {} : { sigHash: selection.sigHash }),
+  }));
 }
 
 function providerOutputCommitted(plan: ProviderPsbtPlanV3, index: number): boolean {
@@ -344,6 +369,25 @@ function providerTransactionDetails(
 ) {
   const previews = providerPsbtPlanPreviews(plan);
   const inscriptions = approvalInscriptionItems(plan.analysis, previews);
+  const foundryControls = plan.linkedGroup?.inputProvenance.filter((entry) =>
+    entry.walletControl === 'ordnet_foundry_script_path') ?? [];
+  const foundryPresale = foundryControls.length === 0 ? null : (() => {
+    const transaction = Transaction.fromPSBT(hexToBytes(plan.psbtHex), {
+      lowR: true,
+      allowUnknownInputs: true,
+      allowUnknownOutputs: true,
+    });
+    const recipientAddress = plan.outputs[0]?.address;
+    if (!recipientAddress) throw new Error('verified Foundry recipient is missing');
+    return {
+      recipientAddress,
+      unlockAt: transaction.lockTime,
+      feeReserveSats: plan.feeSats.toString(),
+      inputStatus: foundryControls.every((entry) => entry.kind === 'ordnet_foundry_future')
+        ? 'future_delivery' as const
+        : 'classified' as const,
+    };
+  })();
   return {
     account: plan.account,
     network: plan.network,
@@ -392,6 +436,7 @@ function providerTransactionDetails(
     effectCount: inscriptions.length,
     inscriptions,
     requiresPreviewAcknowledgement: requiresPreviewAcknowledgement(previews),
+    ...(foundryPresale === null ? {} : { ordnetFoundryPresale: foundryPresale }),
   };
 }
 
@@ -1138,7 +1183,7 @@ export class ProviderController {
             items: batch.psbts.map((item, index) => ({
               nodeId: `transaction-${index + 1}`,
               psbtBase64: item.psbtBase64,
-              inputsToSign: item.inputsToSign!,
+              inputsToSign: providerInputSelections(item.inputsToSign!),
               ...(item.expectedTxid === undefined ? {} : { expectedUnsignedTxid: item.expectedTxid }),
               ...(marketplaceItems[index] === undefined ? {} : { marketplace: {
                 context: marketplaceItems[index]!.context,
@@ -1156,7 +1201,8 @@ export class ProviderController {
           pending.preparedBatch = await this.deps.service.providerPreparePsbtBatch({
             items: batch.psbts.map((item) => ({
               psbtBase64: item.psbtBase64,
-              ...(item.inputsToSign === undefined ? {} : { inputsToSign: item.inputsToSign }),
+              ...(item.inputsToSign === undefined
+                ? {} : { inputsToSign: providerInputSelections(item.inputsToSign) }),
             })),
             binding,
             approvalGeneration: pending.approvalGeneration,
@@ -1219,6 +1265,7 @@ export class ProviderController {
           'community-vault-v1',
           'community-vault-offers-v1',
           'community-vault-position-transfer-v1',
+          ...ordnetMarketplaceProviderCapabilities(),
         ],
       };
     }
@@ -1499,6 +1546,9 @@ export class ProviderController {
 
   private snapshot(): ApprovalSnapshot {
     const pending = this.active;
+    const presentedMarketplace = pending && approvalMayNameMarketplace(pending)
+      ? pending.marketplace
+      : undefined;
     const preparedTransactions = pending?.preparedGroup?.items ?? pending?.preparedBatch?.items ?? null;
     let batchDetails: Array<ReturnType<typeof providerTransactionDetails>> | null = null;
     if (pending && preparedTransactions) {
@@ -1590,7 +1640,7 @@ export class ProviderController {
           ...providerTransactionReview(pending.preparedPsbt),
           economicClaims: providerEconomicClaims(
             pending.preparedPsbt,
-            pending.marketplace?.context.economics,
+            presentedMarketplace?.context.economics,
           ),
         }
       : pending?.method === 'signMessage'
@@ -1725,22 +1775,26 @@ export class ProviderController {
                     pending.preparedGroup.approvalSummary.feeExposureSats.toString(),
                 },
               },
-              ...(pending.marketplace ? { marketplace: {
-                status: pending.marketplace.resolution.status,
-                id: pending.marketplace.resolution.marketplaceId,
-                name: pending.marketplace.resolution.displayName,
-                templateId: pending.marketplace.resolution.templateId,
-                templateVersion: pending.marketplace.resolution.templateVersion,
-                action: pending.marketplace.context.action,
-                role: pending.marketplace.context.role,
-                assetKind: pending.marketplace.context.assetKind,
-                step: pending.marketplace.context.step,
-                stepCount: pending.marketplace.context.stepCount,
-                economics: pending.marketplace.context.economics ?? null,
-                identifiers: pending.marketplace.context.identifiers ?? null,
-                expiresAt: pending.marketplace.context.expiresAt ?? null,
-                broadcaster: pending.marketplace.context.broadcaster,
-                flexible: pending.marketplace.resolution.flexible,
+              ...(presentedMarketplace ? { marketplace: {
+                status: presentedMarketplace.resolution.status,
+                id: presentedMarketplace.resolution.marketplaceId,
+                name: presentedMarketplace.resolution.displayName,
+                templateId: presentedMarketplace.resolution.templateId,
+                templateVersion: presentedMarketplace.resolution.templateVersion,
+                action: presentedMarketplace.context.action,
+                role: presentedMarketplace.context.role,
+                assetKind: presentedMarketplace.context.assetKind,
+                step: presentedMarketplace.context.step,
+                stepCount: presentedMarketplace.context.stepCount,
+                economics: presentedMarketplace.context.economics ?? null,
+                identifiers: presentedMarketplace.context.identifiers ?? null,
+                expiresAt: presentedMarketplace.context.expiresAt ?? null,
+                broadcaster: presentedMarketplace.context.broadcaster,
+                flexible: presentedMarketplace.resolution.flexible,
+                groupedStepCount:
+                  presentedMarketplace.resolution.templateId === 'omb-wiki-ordnet-list-v1'
+                    ? pending.preparedGroup.items.length
+                    : null,
               } } : {}),
               transactions: batchDetails ?? [],
             }
@@ -1752,22 +1806,22 @@ export class ProviderController {
                   pending.preparedPsbt.genericListing.commitment.guaranteedProceedsSats.toString(),
                 flexible: true,
               } } : {}),
-              ...(pending.marketplace ? { marketplace: {
-                status: pending.marketplace.resolution.status,
-                id: pending.marketplace.resolution.marketplaceId,
-                name: pending.marketplace.resolution.displayName,
-                templateId: pending.marketplace.resolution.templateId,
-                templateVersion: pending.marketplace.resolution.templateVersion,
-                action: pending.marketplace.context.action,
-                role: pending.marketplace.context.role,
-                assetKind: pending.marketplace.context.assetKind,
-                step: pending.marketplace.context.step,
-                stepCount: pending.marketplace.context.stepCount,
-                economics: pending.marketplace.context.economics ?? null,
-                identifiers: pending.marketplace.context.identifiers ?? null,
-                expiresAt: pending.marketplace.context.expiresAt ?? null,
-                broadcaster: pending.marketplace.context.broadcaster,
-                flexible: pending.marketplace.resolution.flexible,
+              ...(presentedMarketplace ? { marketplace: {
+                status: presentedMarketplace.resolution.status,
+                id: presentedMarketplace.resolution.marketplaceId,
+                name: presentedMarketplace.resolution.displayName,
+                templateId: presentedMarketplace.resolution.templateId,
+                templateVersion: presentedMarketplace.resolution.templateVersion,
+                action: presentedMarketplace.context.action,
+                role: presentedMarketplace.context.role,
+                assetKind: presentedMarketplace.context.assetKind,
+                step: presentedMarketplace.context.step,
+                stepCount: presentedMarketplace.context.stepCount,
+                economics: presentedMarketplace.context.economics ?? null,
+                identifiers: presentedMarketplace.context.identifiers ?? null,
+                expiresAt: presentedMarketplace.context.expiresAt ?? null,
+                broadcaster: presentedMarketplace.context.broadcaster,
+                flexible: presentedMarketplace.resolution.flexible,
               } } : {}),
               ...(pending.preparedPsbt.communityVaultAcquisition ? {
                 communityVaultAcquisition: pending.preparedPsbt.communityVaultAcquisition,
@@ -1795,22 +1849,22 @@ export class ProviderController {
               ...(pending.method === 'wallet_connect'
                 ? { requested: normalizeProviderConnectionRequest(pending.params as ConnectParams) }
                 : {}),
-              ...(pending.marketplace ? { marketplace: {
-                status: pending.marketplace.resolution.status,
-                id: pending.marketplace.resolution.marketplaceId,
-                name: pending.marketplace.resolution.displayName,
-                templateId: pending.marketplace.resolution.templateId,
-                templateVersion: pending.marketplace.resolution.templateVersion,
-                action: pending.marketplace.context.action,
-                role: pending.marketplace.context.role,
-                assetKind: pending.marketplace.context.assetKind,
-                step: pending.marketplace.context.step,
-                stepCount: pending.marketplace.context.stepCount,
-                economics: pending.marketplace.context.economics ?? null,
-                identifiers: pending.marketplace.context.identifiers ?? null,
-                expiresAt: pending.marketplace.context.expiresAt ?? null,
-                broadcaster: pending.marketplace.context.broadcaster,
-                flexible: pending.marketplace.resolution.flexible,
+              ...(presentedMarketplace ? { marketplace: {
+                status: presentedMarketplace.resolution.status,
+                id: presentedMarketplace.resolution.marketplaceId,
+                name: presentedMarketplace.resolution.displayName,
+                templateId: presentedMarketplace.resolution.templateId,
+                templateVersion: presentedMarketplace.resolution.templateVersion,
+                action: presentedMarketplace.context.action,
+                role: presentedMarketplace.context.role,
+                assetKind: presentedMarketplace.context.assetKind,
+                step: presentedMarketplace.context.step,
+                stepCount: presentedMarketplace.context.stepCount,
+                economics: presentedMarketplace.context.economics ?? null,
+                identifiers: presentedMarketplace.context.identifiers ?? null,
+                expiresAt: presentedMarketplace.context.expiresAt ?? null,
+                broadcaster: presentedMarketplace.context.broadcaster,
+                flexible: presentedMarketplace.resolution.flexible,
               } } : {}),
             },
         requiresPassword: pending.requiresTransactionPassword === true ||
