@@ -75,7 +75,7 @@ function request(method: string, nonce: string, params?: unknown) {
   };
 }
 
-function mockService() {
+function mockService(now: () => number) {
   let locked = false;
   let context: ProviderAccountView = {
     vaultId: 'vault-1', vaultName: 'Primary wallet',
@@ -90,7 +90,7 @@ function mockService() {
   let next = 1;
   const preparedTransfer = (feeRateSatPerVb = 5) => ({
     version: 4 as const,
-    planId: 'plan-1', createdAt: 1, expiresAt: 300_001,
+    planId: 'plan-1', createdAt: now(), expiresAt: now() + 300_000,
     network: 'signet' as const, vaultId: 'vault-1',
     sessionId: '123e4567-e89b-42d3-a456-426614174001', account: 0,
     kind: 'provider_transfer' as const,
@@ -199,12 +199,12 @@ function mockService() {
 }
 
 function harness(area = fakeArea(), evaluatePhishing?: ProviderControllerDeps['evaluatePhishing']) {
-  const mock = mockService();
+  let now = 1_800_000_000_000;
+  const mock = mockService(() => now);
   const open = vi.fn(async () => undefined);
   const close = vi.fn(async () => undefined);
   const openCommunityVaultSetup = vi.fn(async () => undefined);
   const requestUnlock = vi.fn(async () => true);
-  let now = 1_800_000_000_000;
   const controller = new ProviderController({
     service: mock.service, sessionStorage: area, now: () => now,
     requestUnlock, openOrFocusApproval: open, closeApproval: close,
@@ -1376,7 +1376,7 @@ describe('ProviderController authority, disclosure and approvals', () => {
     expect(page.messages).toEqual([expect.objectContaining({
       ok: true,
       result: expect.objectContaining({
-        version: '0.14.18',
+        version: '0.15.8',
         platform: 'web',
         supports: ['WBIP001', 'WBIP004'],
         capabilities: [

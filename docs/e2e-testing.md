@@ -231,7 +231,7 @@ during review. The unqualified command runs both payment profiles plus the
 real-Ordinals journey.
 
 This command rebuilds the loopback-only development extension and refuses to
-run unless its manifest targets only `127.0.0.1:18480`, its network is regtest,
+run unless its manifest targets only the chosen project’s `127.0.0.1` gateway port, its network is regtest,
 and Vault coordination is disabled. One secret-safe Playwright worker then:
 
 - creates a fresh disposable wallet without retaining its phrase or profile;
@@ -536,3 +536,57 @@ persists. Real wallet create/restore, lock/unlock, locked-state restart privacy,
 the visible Developer Mode reload button, pin placement, reset, and recovery
 remain manual clean-profile gates. Never put pilot recovery material into this
 or any other automation.
+
+
+### Isolated Rune acceptance
+
+`pnpm test:e2e:regtest:runes -- --project drey-runes-task` selects the project,
+builds the extension against that project's gateway and ord explorer ports,
+checks the manifest and public-key binding, and runs the `@runes` group with
+all secret-safe artifact settings. `DREY_REGTEST_PROJECT=drey-runes-task` is the
+alternative environment selection; supplying conflicting values fails closed.
+The runner owns `--project` for the chain; Playwright remains one fixed
+`regtest-secret-safe` worker. Default invocations retain `drey-regtest`.
+
+The project must already have been initialized and started from `gateway/`.
+The build and harness read only its protected `compose.env` and the public
+response key; network origins are constructed as literal `127.0.0.1` with
+validated unprivileged ports. Other build channels ignore these local ports.
+There is no runtime origin override or connection to a public chain.
+
+The Rune harness creates fixtures using the pinned ord controller and compares
+signed Bitcoin transaction bytes, exact reviewed fees/postage, and independently
+indexed ord allocations. The fixture helper's intentional cenotaph case burns
+only a selected output owned by its dedicated disposable source wallet.
+Current scenario coverage and measured results belong in the implementation
+validation record; the existence of this group does not imply all twelve
+planned acceptance scenarios have passed.
+
+
+### Rune navigation and send polish
+
+Normal popup and `#/runes` entry always show the token list. A saved transfer
+is resumed explicitly; the expand action uses `#/runes/resume` to continue a
+meaningful draft in the full page. A selected token or empty Send form alone
+is not a draft. Receive Runes renders no address-role selector, even with the
+real browser styles, and always requests the asset address.
+
+The Rune lifecycle scenario checks that receiving role, review focus, and exact
+partial/Max allocations. The narrow-layout scenario checks reopening at the
+list, explicit resume, expansion, saved fee choices, and English/Spanish layout.
+A fresh Core regtest chain may return “Insufficient data or no feerate found.”
+These scenarios use the visible Custom fee path only after the UI reports that
+recommended rates are unavailable; they do not substitute a quote or weaken
+production validation. Quoted tier choices are also covered by the focused
+component tests.
+
+Run the two focused packaged scenarios on an initialized isolated project:
+
+```bash
+pnpm test:e2e:regtest:headed -- --project <project> --grep 'receives, combines|lays out send'
+```
+
+The existing runner audits and removes its output and temporary profiles. Rune
+UI regression tests also cover draft races and write failures, expired reviews,
+wrong-password recovery with fresh authority, absent approval responses, specific
+funding/address errors, hidden-token undo, and combined activity history.

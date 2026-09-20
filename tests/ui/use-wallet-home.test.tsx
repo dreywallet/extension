@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  vi.restoreAllMocks();
   Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
 });
 import { useWalletHome } from '../../src/ui/hooks/use-wallet-home';
@@ -66,6 +67,28 @@ function homeResult(availableSats: string): WalletHomeResult {
 }
 
 describe('useWalletHome vault-switch guard', () => {
+  it('remembers the balance and shares the scan cooldown across tab remounts', async () => {
+    const start = vi.fn(() => ({ ok: true, result: { scanId: 'scan-2' } }));
+    let fail = false;
+    installFakeChrome({
+      'wallet.home': () => fail ? { ok: false, code: 'ERR_INTERNAL' } : { ok: true, result: homeResult('321') },
+      'scan.status': () => ({ ok: true, result: { ...homeResult('0').scan, kind: 'completed', scanId: 'scan-1' } }),
+      'scan.start': start,
+    });
+    const first = renderHook(() => useWalletHome(VAULT_A, ACCOUNT_ID), { wrapper: Providers });
+    await waitFor(() => expect(first.result.current.home?.balances.availableSats).toBe('321'));
+    await waitFor(() => expect(start).toHaveBeenCalledOnce());
+    first.unmount();
+    fail = true;
+    const next = renderHook(() => useWalletHome(VAULT_A, ACCOUNT_ID), { wrapper: Providers });
+    expect(next.result.current.home?.balances.availableSats).toBe('321');
+    await waitFor(() => expect(next.result.current.status).toBe('error'));
+    expect(next.result.current.home?.balances.availableSats).toBe('321');
+    expect(start).toHaveBeenCalledOnce();
+    act(() => emitRuntimeMessage({ type: 'squirrel:session-state-changed', locked: true }));
+    expect(next.result.current.home).toBeNull();
+  });
+
   it('hydrates the exact session snapshot while live Home revalidates silently', async () => {
     let resolveLive: (value: unknown) => void = () => undefined;
     const live = new Promise((resolve) => { resolveLive = resolve; });
@@ -103,7 +126,7 @@ describe('useWalletHome vault-switch guard', () => {
     expect(result.current.home?.balances.availableSats).toBe('222');
   });
 
-  it('removes a hydrated snapshot when live verification fails', async () => {
+  it('retains the hydrated balance when background verification fails', async () => {
     let resolveLive: (value: unknown) => void = () => undefined;
     const live = new Promise((resolve) => { resolveLive = resolve; });
     installFakeChrome({
@@ -118,11 +141,13 @@ describe('useWalletHome vault-switch guard', () => {
 
     resolveLive({ ok: false, code: 'ERR_DATA_STALE' });
     await waitFor(() => expect(result.current.status).toBe('error'));
-    expect(result.current.home).toBeNull();
+    expect(result.current.home?.balances.availableSats).toBe('111');
   });
 
-  it('starts a targeted live refresh on mount and visible-window resume', async () => {
+  it('avoids repeated scans on brief focus changes and refreshes after the background interval', async () => {
     const starts: unknown[] = [];
+    let now = Date.now();
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
     let scanKind: WalletHomeResult['scan']['kind'] = 'completed';
     installFakeChrome({
       'wallet.home': () => ({ ok: true, result: homeResult('10000') }),
@@ -148,23 +173,31 @@ describe('useWalletHome vault-switch guard', () => {
       window.dispatchEvent(new Event('focus'));
       document.dispatchEvent(new Event('visibilitychange'));
     });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(starts).toHaveLength(1);
+    now += 60_000;
+    act(() => window.dispatchEvent(new Event('focus')));
     await waitFor(() => expect(starts).toHaveLength(2));
 
+    now += 60_000;
     scanKind = 'running';
     act(() => window.dispatchEvent(new Event('focus')));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(starts).toHaveLength(2);
 
+    now += 60_000;
     scanKind = 'failed';
     act(() => window.dispatchEvent(new Event('focus')));
     await waitFor(() => expect(starts).toHaveLength(3));
     expect(starts[2]).toEqual({ mode: 'resume', ...VAULT_A });
 
+    now += 60_000;
     scanKind = 'interrupted';
     act(() => window.dispatchEvent(new Event('focus')));
     await waitFor(() => expect(starts).toHaveLength(4));
     expect(starts[3]).toEqual({ mode: 'resume', ...VAULT_A });
 
+    now += 60_000;
     scanKind = 'awaiting_extend';
     act(() => window.dispatchEvent(new Event('focus')));
     await new Promise((resolve) => setTimeout(resolve, 0));

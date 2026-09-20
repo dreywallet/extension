@@ -40,7 +40,7 @@ async function createFundableWallet(
   await onboarding.createDisposable({ password: TEST_PASSWORD, name });
   await popup.open();
   await expect(popup.page.getByText('Regtest', { exact: true })).toBeVisible();
-  await popup.page.getByRole('button', { name: 'Receive' }).click();
+  await popup.page.getByRole('button', { name: 'Receive Bitcoin', exact: true }).click();
   const address = checkedRegtestAddress(
     await popup.page.getByTestId('receive-address').textContent(),
   );

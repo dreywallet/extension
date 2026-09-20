@@ -27,6 +27,8 @@ export type WalletCacheRecordType =
   | 'publicAccountDefinition'
   | 'accountSigningBinding'
   | 'plans'
+  | 'runeTransfers'
+  | 'runePreferences'
   | 'broadcastRecovery'
   | 'providerBroadcastRecovery'
   | 'marketplaceWorkflows'

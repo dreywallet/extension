@@ -62,7 +62,7 @@ test('@ordinals receives, verifies, displays, and transfers a real inscription',
   await popup.open();
   await expect(popup.page.getByText('Regtest', { exact: true })).toBeVisible();
 
-  await popup.page.getByRole('button', { name: 'Receive' }).click();
+  await popup.page.getByRole('button', { name: 'Receive Bitcoin', exact: true }).click();
   const paymentAddress = await receiveAddress(popup.page, 'Bitcoin');
   await popup.page.getByRole('radio', { name: 'Ordinals' }).click();
   const ordinalAddress = await receiveAddress(popup.page, 'Ordinals');
@@ -164,7 +164,7 @@ test('@ordinals rescues a real wrong-lane inscription and returns directly to Ga
   });
   await popup.open();
 
-  await popup.page.getByRole('button', { name: 'Receive' }).click();
+  await popup.page.getByRole('button', { name: 'Receive Bitcoin', exact: true }).click();
   const paymentAddress = await receiveAddress(popup.page, 'Bitcoin');
   await popup.page.getByRole('radio', { name: 'Ordinals' }).click();
   const ordinalAddress = await receiveAddress(popup.page, 'Ordinals');
@@ -255,7 +255,7 @@ test('@ordinals safely reduces real inscription postage and returns excess bitco
   });
 
   await popup.open();
-  await popup.page.getByRole('button', { name: 'Receive' }).click();
+  await popup.page.getByRole('button', { name: 'Receive Bitcoin', exact: true }).click();
   const paymentAddress = await receiveAddress(popup.page, 'Bitcoin');
   await popup.page.getByRole('radio', { name: 'Ordinals' }).click();
   const ordinalAddress = await receiveAddress(popup.page, 'Ordinals');
@@ -333,7 +333,7 @@ test('@ordinals batch-sends two real inscriptions with isolated postage and clea
   });
   await popup.open();
 
-  await popup.page.getByRole('button', { name: 'Receive' }).click();
+  await popup.page.getByRole('button', { name: 'Receive Bitcoin', exact: true }).click();
   const paymentAddress = await receiveAddress(popup.page, 'Bitcoin');
   await popup.page.getByRole('radio', { name: 'Ordinals' }).click();
   const ordinalAddress = await receiveAddress(popup.page, 'Ordinals');
@@ -423,7 +423,7 @@ test('@ordinals sweeps real excess bitcoin while retaining calm fixed postage', 
   });
   await popup.open();
 
-  await popup.page.getByRole('button', { name: 'Receive' }).click();
+  await popup.page.getByRole('button', { name: 'Receive Bitcoin', exact: true }).click();
   await popup.page.getByRole('radio', { name: 'Ordinals' }).click();
   const ordinalAddress = await receiveAddress(popup.page, 'Ordinals');
   await popup.page.getByRole('button', { name: 'Close' }).click();

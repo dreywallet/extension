@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { readRegtestProject, selectRegtestProject } from './lib/regtest-project.mjs';
 import { readFileSync, rmSync } from 'node:fs';
 import { fileURLToPath, URL } from 'node:url';
 
@@ -9,12 +10,17 @@ const metadataPath = fileURLToPath(new URL('../.output/regtest/m8t-channel.json'
 const reportPath = fileURLToPath(new URL('../playwright-report', import.meta.url));
 const resultsPath = fileURLToPath(new URL('../test-results/e2e', import.meta.url));
 
+const selection = selectRegtestProject(process.argv.slice(2), process.env.DREY_REGTEST_PROJECT);
+const configuration = readRegtestProject(fileURLToPath(new URL('../../gateway/regtest/.state', import.meta.url)), selection.project);
+
 function assertBuild() {
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   const metadata = JSON.parse(readFileSync(metadataPath, 'utf8'));
-  if (JSON.stringify(manifest.host_permissions) !== JSON.stringify(['http://127.0.0.1:18480/*']) ||
+  if (JSON.stringify(manifest.host_permissions) !== JSON.stringify([`${configuration.gatewayOrigin}/*`]) ||
       metadata.channel !== 'development' || metadata.network !== 'regtest' ||
-      metadata.gatewayOrigin !== 'http://127.0.0.1:18480' ||
+      metadata.gatewayOrigin !== configuration.gatewayOrigin ||
+      metadata.gatewayPublicKeyHex !== configuration.publicKey ||
+      metadata.regtestExplorerOrigin !== configuration.ordOrigin ||
       metadata.vaultCoordinatorEnabled !== false) {
     throw new Error('regtest E2E requires the loopback-only development build with Vault coordination disabled');
   }
@@ -28,12 +34,15 @@ function run(command, args, environment = process.env) {
 
 rmSync(reportPath, { recursive: true, force: true });
 rmSync(resultsPath, { recursive: true, force: true });
+const buildStatus = run('pnpm', ['build:regtest'], { ...process.env, DREY_REGTEST_PROJECT: configuration.project });
+if (buildStatus !== 0) process.exit(buildStatus);
 assertBuild();
 
 const status = run('pnpm', [
-  'exec', 'playwright', 'test', '--config', 'playwright.regtest.config.ts', ...process.argv.slice(2),
+  'exec', 'playwright', 'test', '--config', 'playwright.regtest.config.ts', ...selection.args,
 ], {
   ...process.env,
+  DREY_REGTEST_PROJECT: configuration.project,
   DREY_E2E_EXTENSION_PATH: buildRoot,
   DREY_E2E_REPORT_MODE: 'secret-safe',
   // Playwright 1.61 writes an automatic ARIA snapshot on every failure even

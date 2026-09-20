@@ -1,4 +1,6 @@
 export const FULLPAGE_HASH = {
+  runes: '#/runes',
+  runesResume: '#/runes/resume',
   settings: '#/settings',
   walletAccounts: '#/settings/wallets-accounts',
   accounts: '#/settings/accounts',
@@ -21,6 +23,10 @@ export type PrimaryFullpageView = TransactionSection | 'settings';
 
 export function fullpageViewFromHash(hash: string): FullpageView {
   switch (hash) {
+    case FULLPAGE_HASH.runesResume:
+      return 'runesResume';
+    case FULLPAGE_HASH.runes:
+      return 'runes';
     case FULLPAGE_HASH.walletAccounts:
       return 'walletAccounts';
     case FULLPAGE_HASH.recovery:

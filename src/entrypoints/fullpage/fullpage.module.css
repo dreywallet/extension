@@ -1703,6 +1703,8 @@
    rule that separates top-level blocks. */
 .utxo {
   border-bottom: 1px solid var(--color-border);
+  contain-intrinsic-size: auto 4.5rem;
+  content-visibility: auto;
   padding: var(--space-2) 0;
 }
 
@@ -2127,10 +2129,24 @@
   display: none;
 }
 
+.utxoAddressSummary {
+  align-items: baseline;
+  color: var(--color-text-faint);
+  display: inline-flex;
+  flex-wrap: wrap;
+  font-size: var(--text-xs);
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+}
+
+.utxoAddressSummary code {
+  color: inherit;
+  font-family: var(--font-mono);
+}
+
 .utxoOutpoint {
   color: var(--color-text-faint);
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
 }
 
 .utxoSummary::before {
@@ -2146,8 +2162,8 @@
   content: '▾';
 }
 
-.utxoSummary:hover .utxoOutpoint,
-.utxoSummary:focus-visible .utxoOutpoint {
+.utxoSummary:hover .utxoAddressSummary,
+.utxoSummary:focus-visible .utxoAddressSummary {
   color: var(--color-text);
 }
 
@@ -2167,6 +2183,19 @@
 .utxoFacts dd {
   font-size: var(--text-sm);
   margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.utxoAddressFact {
+  align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.utxoAddress {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
   overflow-wrap: anywhere;
 }
 

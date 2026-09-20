@@ -1,4 +1,5 @@
 import type { BrowserContext, Page } from '@playwright/test';
+import { gatewayOrigin } from './regtest';
 import { test, expect, type OnboardingPage, type PopupPage } from './fixtures';
 import { fillPrivate } from './pages';
 import { terminateExtensionWorker, wakeExtensionWorker } from './worker';
@@ -66,7 +67,7 @@ async function createFundedWallet(input: {
   await input.onboarding.createDisposable({ password: TEST_PASSWORD, name: input.name });
   await input.popup.open();
   await expect(input.popup.page.getByText('Regtest', { exact: true })).toBeVisible();
-  await input.popup.page.getByRole('button', { name: 'Receive' }).click();
+  await input.popup.page.getByRole('button', { name: 'Receive Bitcoin', exact: true }).click();
   const address = checkedRegtestAddress(
     await input.popup.page.getByTestId('receive-address').textContent(),
   );
@@ -193,6 +194,9 @@ test('sends a two-recipient high-fee payment after explicit password confirmatio
       ],
       { min: 2.77, max: 2.78 },
     );
+    // The only confirmed input is now spent, but its exact wallet-created
+    // change must remain visible and available before a block confirms it.
+    await expectPopupBalance(popup, wallet.totalSats - 2_003 - broadcast.feeSats);
     await confirmTransaction(txid);
     await expectPopupBalance(popup, wallet.totalSats - 2_003 - broadcast.feeSats);
   } finally {
@@ -330,7 +334,7 @@ test('@extended spends only the coin the user selected', async ({
       name: coinSelectionName(selected),
     }).check();
     await expect(wallet.page.getByText('1 selected · 85,000 sats')).toBeVisible();
-    await wallet.page.getByRole('button', { name: 'Send', exact: true }).click();
+    await wallet.page.getByRole('button', { name: 'Send selected', exact: true }).click();
     await expect(wallet.page.getByText('1 manually selected inputs')).toBeVisible();
 
     const destination = await freshExternalAddress();
@@ -550,7 +554,7 @@ test('@extended preserves an unknown broadcast without retrying after a lost res
     if (await password.count() > 0) await fillPrivate(password, TEST_PASSWORD);
     const before = await mempoolTransactionIds();
     let broadcastRequests = 0;
-    const broadcastUrl = 'http://127.0.0.1:18480/v1/transactions/broadcast';
+    const broadcastUrl = `${gatewayOrigin}/v1/transactions/broadcast`;
 
     await extensionContext.route(broadcastUrl, async (route) => {
       broadcastRequests += 1;

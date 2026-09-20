@@ -35,14 +35,30 @@ test('labels a UTXO through every editor state (§14.4)', async ({
   // disclosure rather than costing every row a line of its own.
   const rowDisclosure = page.getByLabel(/^Details for coin/u).first();
   await expect(rowDisclosure).toBeVisible();
+  const sendSelected = page.getByRole('button', { name: 'Send selected', exact: true });
+  await expect(sendSelected).toBeDisabled();
+  const firstCoin = page.getByRole('checkbox', { name: /^Select coin/u }).first();
+  await firstCoin.check();
+  await expect(sendSelected).toBeEnabled();
+  await firstCoin.uncheck();
   const addLabel = page.getByRole('button', { name: 'Add label' }).first();
   await expect(addLabel).toBeHidden();
   await rowDisclosure.click();
 
+  await expect(page.getByText('Primary receive address', { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Copy address' }).first()).toBeVisible();
+  await expect(page.getByText('Effective value', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText(/not the final transaction fee/u).first()).toBeVisible();
+
   // Unlabeled state carries no chip at all — only the affordance.
   await expect(addLabel).toBeVisible();
   await expect(page.getByText('Exchange withdrawal · Kraken, January')).toHaveCount(0);
-  await page.screenshot({ path: 'test-results/e2e/label-01-unlabeled.png', fullPage: true });
+  const walletData = page.locator('code, [data-testid="utxo-summary-outpoint"]');
+  await page.screenshot({
+    path: 'test-results/e2e/label-01-unlabeled.png',
+    fullPage: true,
+    mask: [walletData],
+  });
 
   // Editing state: presets are a keyboard-navigable radiogroup.
   await addLabel.click();
@@ -63,14 +79,22 @@ test('labels a UTXO through every editor state (§14.4)', async ({
     .evaluate((node) => getComputedStyle(node).color);
   expect(chipPaint.color).not.toBe(unselectedPaint);
   await page.getByLabel('Note (optional)').first().fill('Kraken, January');
-  await page.screenshot({ path: 'test-results/e2e/label-02-editing.png', fullPage: true });
+  await page.screenshot({
+    path: 'test-results/e2e/label-02-editing.png',
+    fullPage: true,
+    mask: [walletData],
+  });
 
   await page.getByRole('button', { name: 'Save' }).first().click();
 
   // Labeled state persists and renders as a chip.
   await expect(page.getByText('Exchange withdrawal · Kraken, January').first()).toBeVisible();
   await expect(page.getByRole('button', { name: 'Edit label' }).first()).toBeVisible();
-  await page.screenshot({ path: 'test-results/e2e/label-03-labeled.png', fullPage: true });
+  await page.screenshot({
+    path: 'test-results/e2e/label-03-labeled.png',
+    fullPage: true,
+    mask: [walletData],
+  });
 
   // Survives a reload — the label lives in its own encrypted cache record. The
   // chip stays on the collapsed row, so this needs no disclosure.
@@ -86,7 +110,11 @@ test('labels a UTXO through every editor state (§14.4)', async ({
   const overflow = await page.evaluate(() =>
     document.documentElement.scrollWidth <= document.documentElement.clientWidth);
   expect(overflow).toBe(true);
-  await page.screenshot({ path: 'test-results/e2e/label-04-long-note.png', fullPage: true });
+  await page.screenshot({
+    path: 'test-results/e2e/label-04-long-note.png',
+    fullPage: true,
+    mask: [walletData],
+  });
 
   // Removing returns the row to the unlabeled state.
   await page.getByRole('button', { name: 'Edit label' }).first().click();

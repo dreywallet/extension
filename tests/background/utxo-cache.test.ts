@@ -35,7 +35,7 @@ function utxo(txid: string, valueSats: bigint, chain: 0 | 1): WalletUtxo {
     accountId: ACCOUNT_ID,
     outpoint: { txid, vout: 0 },
     valueSats,
-    scriptPubKey: `0014${'11'.repeat(20)}`,
+    scriptPubKey: `0014${txid.slice(0, 40)}`,
     account: 0,
     lane: 'payment',
     chain,
@@ -76,7 +76,11 @@ describe('wallet-wide UTXO cache reads', () => {
     const dek = base64ToBytes(session.dekB64);
     const staleSpent = utxo('a'.repeat(64), 10_000n, 0);
     const liveChange = utxo('b'.repeat(64), 7_266n, 1);
-    const distinctLegacy = utxo('c'.repeat(64), 5_000n, 0);
+    const distinctLegacy: WalletUtxo = {
+      ...utxo('c'.repeat(64), 5_000n, 0),
+      scriptPubKey: `a914${'d'.repeat(40)}87`,
+      recoveryOnly: true,
+    };
     const coinciding = xverseManifest('signet').entries.find(
       (entry) => entry.purpose === 84 && entry.lane === 'payment',
     );
@@ -100,14 +104,22 @@ describe('wallet-wide UTXO cache reads', () => {
     const listed = await harness.service.listUtxos({ feeRateSatPerKvB: 1000, ...expectation });
     expect(listed.utxos).toEqual(expect.arrayContaining([
       expect.objectContaining({ txid: liveChange.outpoint.txid, valueSats: '7266' }),
-      expect.objectContaining({ txid: distinctLegacy.outpoint.txid, valueSats: '5000' }),
+      expect.objectContaining({
+        txid: distinctLegacy.outpoint.txid,
+        valueSats: '5000',
+        effectiveValueSats: '0',
+        addressRole: 'recovered',
+        eligible: false,
+        reasons: expect.arrayContaining(['recovery_only']),
+      }),
     ]));
     expect(listed.utxos).toHaveLength(2);
     expect(listed.utxos).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ txid: staleSpent.outpoint.txid }),
     ]));
     const home = await harness.service.homeView(expectation);
-    expect(home.balances.availableSats).toBe('12266');
+    expect(home.balances.availableSats).toBe('7266');
+    expect(home.balances.unavailableCleanSats).toBe('5000');
   });
 });
 
@@ -323,9 +335,15 @@ describe('local UTXO labels (§14.4)', () => {
 
   it('reports the §8.1 stable receive address as a wallet-wide note', async () => {
     const { harness, expectation, write } = await labelHarness();
-    await write([utxo('a'.repeat(64), 10_000n, 0)], 1);
+    await write([
+      utxo('a'.repeat(64), 10_000n, 0),
+      utxo('b'.repeat(64), 20_000n, 1),
+    ], 1);
 
     const listed = await harness.service.listUtxos({ feeRateSatPerKvB: 1000, ...expectation });
     expect(listed.privacyNotes).toEqual(['stable_receive_address']);
+    expect(listed.utxos.map(({ addressRole }) => addressRole)).toEqual(['primary', 'change']);
+    expect(listed.utxos.every(({ address }) => address.startsWith('tb1q'))).toBe(true);
+    expect(new Set(listed.utxos.map(({ address }) => address)).size).toBe(2);
   });
 });

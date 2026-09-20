@@ -46,14 +46,14 @@ export class PopupPage {
   }
 
   async lock(): Promise<void> {
-    await this.page.getByRole('button', { name: 'Lock' }).click();
+    await this.page.getByRole('button', { name: 'Lock', exact: true }).click();
     await expect(this.page.getByRole('heading', { name: 'Unlock Drey' })).toBeVisible();
   }
 
   async unlock(password: string): Promise<void> {
     await fillPrivate(this.page.getByLabel('App password'), password);
     await this.page.getByRole('button', { name: 'Unlock', exact: true }).click();
-    await expect(this.page.getByRole('button', { name: 'Lock' })).toBeVisible();
+    await expect(this.page.getByRole('button', { name: 'Lock', exact: true })).toBeVisible();
   }
 }
 

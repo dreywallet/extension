@@ -15,6 +15,7 @@ import { EXTENSION_OP_SCHEMAS } from '../../src/messaging/extension-ops';
 import { PASSKEY_OP_SCHEMAS } from '../../src/messaging/passkey-ops';
 import { VAULT_COORDINATOR_OP_SCHEMAS } from '../../src/messaging/vault-coordinator-ops';
 import { COMMUNITY_VAULT_OP_SCHEMAS } from '../../src/messaging/community-vault-ops';
+import { RUNE_OP_SCHEMAS } from '../../src/messaging/rune-ops';
 import { makeHarness } from './service-helpers';
 
 beforeAll(installTestCryptoProvider);
@@ -51,12 +52,14 @@ describe('vault coordinator op registry', () => {
     for (const op of OPS) {
       expect(op in OP_SCHEMAS, op).toBe(false);
       expect(op in PASSKEY_OP_SCHEMAS, op).toBe(false);
+      expect(op in RUNE_OP_SCHEMAS, op).toBe(false);
       expect(op in EXTENSION_OP_SCHEMAS, op).toBe(true);
     }
     // The composed registry is the union, with nothing lost in the merge.
     expect(Object.keys(EXTENSION_OP_SCHEMAS)).toHaveLength(
       Object.keys(OP_SCHEMAS).length + Object.keys(PASSKEY_OP_SCHEMAS).length +
-        OPS.length + Object.keys(COMMUNITY_VAULT_OP_SCHEMAS).length + 5,
+        OPS.length + Object.keys(COMMUNITY_VAULT_OP_SCHEMAS).length +
+        Object.keys(RUNE_OP_SCHEMAS).length + 5,
     );
   });
 

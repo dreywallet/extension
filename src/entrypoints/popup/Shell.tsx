@@ -12,6 +12,7 @@ import { Home } from './Home';
 import { Gallery } from './Gallery';
 import { PopupIcon, type PopupIconName } from './PopupIcon';
 import { Receive } from './Receive';
+import { Runes } from './Runes';
 import {
   FULLPAGE_HASH,
   transactionFullpageHash,
@@ -27,7 +28,7 @@ const SendTransactions = lazy(async () => {
 });
 
 type Destination = 'bitcoin' | 'ordinals' | 'activity';
-type Overlay = 'none' | 'receive' | 'send';
+type Overlay = 'none' | 'receive' | 'send' | 'runes';
 
 function openFullpage(hash: string): void {
   void chrome.tabs.create({ url: chrome.runtime.getURL(`/fullpage.html${hash}`) });
@@ -58,7 +59,7 @@ export function Shell(props: {
   }, [destination, overlay, synchronizeGalleryOnMount]);
 
   const destinations: { id: Destination; icon: PopupIconName; label: string }[] = [
-    { id: 'bitcoin', icon: 'bitcoin', label: t('nav.bitcoin') },
+    { id: 'bitcoin', icon: 'bitcoin', label: t('runes.wallet') },
     { id: 'ordinals', icon: 'ordinals', label: t('nav.ordinals') },
     { id: 'activity', icon: 'activity', label: t('nav.activity') },
   ];
@@ -170,6 +171,8 @@ export function Shell(props: {
               />
             </Suspense>
           </>
+        ) : overlay === 'runes' && props.session.expectation !== null && props.session.activeAccountId !== null ? (
+          <Runes key={props.session.activeAccountId} expectation={props.session.expectation} accountId={props.session.activeAccountId} accountName={props.session.accountSummaries.find((item) => item.accountId === props.session.activeAccountId)?.name} onClose={() => setOverlay('none')} onExpand={(resume) => openFullpage(resume ? FULLPAGE_HASH.runesResume : FULLPAGE_HASH.runes)} />
         ) : overlay === 'receive' ? (
           props.session.expectation !== null && props.session.activeAccountId !== null ? (
             <Receive
@@ -183,10 +186,12 @@ export function Shell(props: {
           <>
             {destination === 'bitcoin' && props.session.expectation !== null && props.session.activeAccountId !== null ? (
               <Home
+                key={`${props.session.expectation.expectedSessionId}:${props.session.activeAccountId}`}
                 gateway={gateway}
                 expectation={props.session.expectation}
                 activeAccountId={props.session.activeAccountId}
                 continuous={!persistent}
+                onRunes={() => setOverlay('runes')}
                 onReceive={() => {
                   setReceiveKind('payment');
                   setOverlay('receive');

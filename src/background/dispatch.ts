@@ -5,6 +5,7 @@
  * Chrome-agnostic: it only touches the injected WalletService and the registry.
  */
 import { VaultError } from '@drey/core/domain/vault/errors';
+import type { RuneListRequest, RunePrepareRequest, RuneApproveRequest, RuneCancelRequest, RuneVisibilityRequest } from '../messaging/rune-ops';
 import type { MessageEnvelope } from '@drey/core/messaging/envelope';
 import {
   EXTENSION_OP_SCHEMAS,
@@ -169,6 +170,13 @@ async function handle(op: string, payload: unknown, service: WalletService): Pro
   // op has already been confirmed present in the registry; the known ops route
   // to typed methods, any custom (test-injected) op falls through to internal.
   switch (op as Op | ExtensionLocalOp | PasskeyOp | VaultCoordinatorOp | CommunityVaultOp) {
+    case 'runes.draft': return service.runeDraft(payload as RuneListRequest & { draft?: import('../messaging/rune-ops').RuneDraft | null });
+    case 'runes.snapshot': return service.runeSnapshot(payload as RuneListRequest);
+    case 'runes.list': return service.runeList(payload as RuneListRequest);
+    case 'runes.visibility': return service.runeVisibility(payload as RuneVisibilityRequest);
+    case 'runes.prepare': return service.runePrepare(payload as RunePrepareRequest);
+    case 'runes.approve': return service.runeApprove(payload as RuneApproveRequest);
+    case 'runes.cancel': return service.runeCancel(payload as RuneCancelRequest);
     case 'wallet.home.snapshot':
       return service.homeSnapshot(payload as ActiveSessionRequest & { accountId: string });
     case 'gallery.home.cached':

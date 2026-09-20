@@ -2,10 +2,10 @@
  * One row of the §14.4 UTXO manager.
  *
  * The collapsed row carries only what distinguishes this coin from the next:
- * amount, a short outpoint, and whichever single fact the group header has not
- * already stated. §10.3 puts derivation paths and other technical detail behind
- * the disclosure, and the per-row actions live there too so an ordinary row is
- * two lines tall.
+ * amount, its address role plus a shortened verified address, and whichever
+ * single fact the group header has not already stated. Technical detail stays
+ * behind the disclosure, and the per-row actions live there too so an ordinary
+ * row remains compact.
  *
  * The privacy signals rendered here are advisory only — they never gate
  * selection, and eligibility comes solely from `utxo.eligible`/`utxo.reasons`,
@@ -29,6 +29,7 @@ import type { UtxoLabel, UtxoLabelPreset } from '@drey/core/domain/classificatio
 import styles from './fullpage.module.css';
 import type { ActiveSessionExpectation } from '../../ui/hooks/use-session';
 import { UtxoInscriptionThumbnail } from './UtxoInscriptionThumbnail';
+import { CopyButton } from '../../ui/components/CopyButton';
 
 type Utxo = OpResult<'utxo.list'>['utxos'][number];
 
@@ -48,7 +49,17 @@ const PRESET_KEYS: Record<UtxoLabelPreset, MessageKey> = {
   mining: 'utxos.label.preset.mining',
 };
 
+const ADDRESS_ROLE_KEYS: Record<Utxo['addressRole'], MessageKey> = {
+  primary: 'utxos.addressRole.primary',
+  recovered: 'utxos.addressRole.recovered',
+  change: 'utxos.addressRole.change',
+};
+
 const LABEL_TEXT_MAX = 64;
+
+function shortAddress(address: string): string {
+  return address.length <= 22 ? address : `${address.slice(0, 12)}…${address.slice(-8)}`;
+}
 
 export interface UtxoRowProps {
   utxo: Utxo;
@@ -170,23 +181,42 @@ export function UtxoRow(props: UtxoRowProps): React.ReactElement {
         : null}
 
       <details className={styles['utxoDetails']}>
-        {/* The visible text is the outpoint alone; the label says what opening
-            it does without dropping the identifier from the announcement. */}
+        {/* The compact summary identifies the owning address and outpoint; the
+            accessible label says what opening it does without dropping the
+            technical identifier from the announcement. */}
         <summary
           className={styles['utxoSummary']}
           aria-label={t('utxos.rowDetails', { outpoint })}
         >
-          <span className={styles['utxoOutpoint']}>{outpoint}</span>
+          <span className={styles['utxoAddressSummary']} title={utxo.address}>
+            <span>{t(ADDRESS_ROLE_KEYS[utxo.addressRole])}</span>
+            <code>{shortAddress(utxo.address)}</code>
+            <span
+              className={styles['utxoOutpoint']}
+              data-testid="utxo-summary-outpoint"
+            >
+              {outpoint}
+            </span>
+          </span>
         </summary>
 
         <dl className={styles['utxoFacts']}>
+          <dt>{t('utxos.address')}</dt>
+          <dd className={styles['utxoAddressFact']}>
+            <span>{t(ADDRESS_ROLE_KEYS[utxo.addressRole])}</span>
+            <code className={styles['utxoAddress']}>{utxo.address}</code>
+            <CopyButton
+              value={utxo.address}
+              kind="address"
+              label={t('utxos.copyAddress')}
+            />
+          </dd>
           <dt>{t('utxos.outpoint')}</dt>
           <dd><code className={styles['code']}>{utxo.txid}:{utxo.vout}</code></dd>
-          <dt>{t('utxos.path')}</dt>
-          <dd>{utxo.path}</dd>
           <dt>{t('utxos.valueAfterFee')}</dt>
           <dd>{BigInt(utxo.effectiveValueSats).toLocaleString(props.lang)} sats</dd>
         </dl>
+        <p className={styles['labelHelp']}>{t('utxos.valueAfterFee.help')}</p>
 
         {/* What this particular protection means. The group header can only
             state what the whole band shares. */}

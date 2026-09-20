@@ -1,0 +1,12 @@
+.row { min-width: 0; }
+.row summary { cursor: pointer; }
+.row summary > span:nth-child(2) strong { overflow-wrap: anywhere; }
+.row summary > span:nth-child(2) small { color: var(--color-text-muted); font-size: var(--text-xs); }
+.amount { max-width: 45%; }
+.amount > strong { white-space: normal; overflow-wrap: anywhere; }
+.details { min-width: 0; padding: 14px; border: 2px solid var(--color-border); }
+.details dl { display: grid; gap: 5px; margin: 0; }
+.details dt { color: var(--color-text-muted); font-size: var(--text-xs); }
+.details dd { overflow-wrap: anywhere; margin: 0 0 10px; font-variant-numeric: tabular-nums; }
+.txid { font-size: var(--text-xs); }
+.explorer { display: inline-block; color: var(--color-text); font-weight: 700; padding: 8px 0; }

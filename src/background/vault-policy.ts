@@ -62,7 +62,7 @@ export const VAULT_STANDALONE_TOOL_DIGEST_UNPUBLISHED = '00'.repeat(32);
  *
  * Reproduce both values from a clean checkout:
  *
- *   git clone --branch v0.19.4 https://github.com/dreywallet/core.git
+ *   git clone --branch v0.20.5 https://github.com/dreywallet/core.git
  *   cd core && pnpm install --frozen-lockfile && pnpm recovery:verify
  *
  * The artifact digest is deliberately the narrower claim. It stayed
@@ -120,12 +120,19 @@ export const VAULT_STANDALONE_TOOL_DIGEST_UNPUBLISHED = '00'.repeat(32);
  * v0.19.3 hardens recovery-file writes and keeps recovery planning linear while
  * preserving compatibility with historical version-1 kits. v0.19.4 keeps the
  * artifact byte-identical while adding ord.net marketplace compatibility to
- * the separately reviewed provider-signing policy.
+ * the separately reviewed provider-signing policy. v0.19.5 keeps the artifact
+ * byte-identical while binding position-transfer funding and change to the
+ * seller-authorized buyer identity. v0.19.6 makes one-signature recovery review
+ * usable and escapes terminal controls without changing historical kit bytes.
+ * v0.20.0 and v0.20.1 add native Rune transfers and bounded history. v0.20.4
+ * adds conservative pending-change and coin-control metadata, and v0.20.5
+ * aligns legacy recovery-only address roles. Both preserve the standalone
+ * artifact; each source digest binds its release.
  */
 export const VAULT_STANDALONE_TOOL_RELEASE = Object.freeze({
-  coreTag: 'v0.19.4',
-  sourceDigest: '1c7c39bc3d13b7ad6dcb0b5c2c3e2b603a70662da25fa2d7b22f9325017d5913',
-  artifactDigest: '2750ce4852b10e56214100f74f01cc7bfd15ef6c81f967be0921b5c339a4aa1e',
+  coreTag: 'v0.20.5',
+  sourceDigest: '198e6cb89b2a8ad49499606631edbd3c3ff7016fc68ac40d834108c9884a0b43',
+  artifactDigest: 'ac5b7efbd241fa7ca0e3b88e2780165e847a2ca3c4f1b5243b829d9a737d23a8',
 });
 
 /**

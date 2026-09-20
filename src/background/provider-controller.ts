@@ -1539,7 +1539,13 @@ export class ProviderController {
         !pending.state.nonces.has(pending.request.requestNonce)) {
       throw new RpcError('ERR_PLAN_CHANGED', 'provider authority changed');
     }
-    if (this.deps.now() >= pending.createdAt + REQUEST_TTL_MS) {
+    const deadline = Math.min(
+      pending.createdAt + REQUEST_TTL_MS,
+      pending.preparedPsbt?.expiresAt ?? Number.MAX_SAFE_INTEGER,
+      pending.preparedBatch?.expiresAt ?? Number.MAX_SAFE_INTEGER,
+      pending.preparedGroup?.expiresAt ?? Number.MAX_SAFE_INTEGER,
+    );
+    if (this.deps.now() >= deadline) {
       throw new RpcError('ERR_PLAN_EXPIRED', 'provider request expired');
     }
   }

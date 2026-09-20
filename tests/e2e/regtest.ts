@@ -1,3 +1,4 @@
+import { readRegtestProject, selectRegtestProject } from '../../scripts/lib/regtest-project.mjs';
 import { createHash, createPublicKey, randomBytes, verify } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { readFile, stat } from 'node:fs/promises';
@@ -10,14 +11,13 @@ const gatewayState = path.join(gatewayRoot, 'regtest/.state');
 const regtestControllerPath = path.join(gatewayRoot, 'regtest/control.mjs');
 const rpcAuthPath = path.join(gatewayState, 'secrets/core-rpc.auth');
 const gatewayPublicKeyPath = path.join(gatewayState, 'response-signing.pub');
-const regtestProject = process.env.DREY_REGTEST_PROJECT;
-if (regtestProject !== undefined && !/^[a-z0-9][a-z0-9_-]{0,48}$/u.test(regtestProject)) {
-  throw new Error('DREY_REGTEST_PROJECT must name a valid isolated project');
-}
-const regtestProjectArgs = regtestProject === undefined ? [] : ['--project', regtestProject];
-const regtestConfirmation = regtestProject ?? 'drey-regtest';
-const rpcOrigin = 'http://127.0.0.1:18443';
-const gatewayOrigin = 'http://127.0.0.1:18480';
+const { project: regtestProject } = selectRegtestProject([], process.env.DREY_REGTEST_PROJECT);
+const configuration = readRegtestProject(gatewayState, regtestProject);
+const regtestProjectArgs = ['--project', regtestProject];
+const regtestConfirmation = regtestProject;
+const rpcOrigin = configuration.rpcOrigin;
+export const gatewayOrigin = configuration.gatewayOrigin;
+const ordOrigin = configuration.ordOrigin;
 const ordinalRecipientWallet = 'drey-regtest-ordinal-recipient';
 const cardinalFaucetWallet = 'drey-regtest-cardinal-faucet';
 const rareSinkWallet = 'drey-regtest-rare-sink';
@@ -241,7 +241,7 @@ async function protectedFile(file: string, pattern: RegExp, label: string): Prom
   return value;
 }
 
-async function coreRpc<T>(method: string, params: readonly unknown[] = [], wallet?: string): Promise<T> {
+export async function coreRpc<T>(method: string, params: readonly unknown[] = [], wallet?: string): Promise<T> {
   const auth = await protectedFile(rpcAuthPath, /^dreyregtest:[0-9a-f]{64}$/u, 'Core RPC identity');
   const target = wallet === undefined
     ? rpcOrigin
@@ -728,7 +728,7 @@ async function ordInscription(inscriptionId: string): Promise<OrdInscriptionReco
     throw new Error('inscription fixture returned a malformed identifier');
   }
   const response = await fetch(
-    `http://127.0.0.1:18481/r/inscription/${encodeURIComponent(inscriptionId)}`,
+    `${ordOrigin}/r/inscription/${encodeURIComponent(inscriptionId)}`,
     { signal: AbortSignal.timeout(15_000) },
   );
   if (!response.ok) throw new Error('local ord did not return the inscription fixture');

@@ -128,6 +128,10 @@ function displaySatPerVb(satPerKvB: number | string): string {
   return formatFeeRateSatPerVb(BigInt(satPerKvB));
 }
 
+function reviewChangeSats(review: PlanResult['review']): bigint {
+  return review.change.reduce((total, output) => total + BigInt(output.valueSats), 0n);
+}
+
 export function parseCustomFeeInput(text: string): ReturnType<typeof parseCustomFeeRate> | null {
   try {
     return parseCustomFeeRate(text);
@@ -305,8 +309,34 @@ export function Transactions(props: {
     { enabled: props.initialSection === 'activity' },
   );
 
+  const currentUtxoFeeRate = useCallback(() => {
+    const current = feeState.current;
+    return current.feeTier === 'custom'
+      ? Number(parseCustomFeeInput(current.customFee)?.satPerKvB ?? 1_000n)
+      : (
+          current.feeTier === 'priority'
+            ? current.quote?.prioritySatPerKvB
+            : current.feeTier === 'standard'
+              ? current.quote?.standardSatPerKvB
+              : current.quote?.economySatPerKvB
+        ) ?? 1000;
+  }, []);
+
+  const loadUtxos = useCallback(async () => {
+    const generation = ++utxoGeneration.current;
+    const feeRateSatPerKvB = currentUtxoFeeRate();
+    const response = await rpc('utxo.list', {
+      feeRateSatPerKvB, accountId: props.accountId, expectedVaultId, expectedSessionId,
+    });
+    if (generation === utxoGeneration.current && response.ok) {
+      setUtxos(response.result.utxos);
+      setPrivacyNotes(response.result.privacyNotes);
+    }
+  }, [currentUtxoFeeRate, expectedSessionId, expectedVaultId, props.accountId, rpc]);
+
   const loadQuote = useCallback(async () => {
     const generation = ++quoteGeneration.current;
+    const previousRate = currentUtxoFeeRate();
     setQuoteLoading(true);
     const response = await rpc('fees.quote', { expectedVaultId, expectedSessionId });
     if (generation !== quoteGeneration.current) return;
@@ -321,28 +351,11 @@ export function Transactions(props: {
       setQuoteUnavailable(true);
       setFeeTier((current) => current === 'custom' ? current : 'custom');
     }
-  }, [expectedSessionId, expectedVaultId, rpc]);
-
-  const loadUtxos = useCallback(async () => {
-    const generation = ++utxoGeneration.current;
-    const current = feeState.current;
-    const feeRateSatPerKvB = current.feeTier === 'custom'
-      ? Number(parseCustomFeeInput(current.customFee)?.satPerKvB ?? 1_000n)
-      : (
-          current.feeTier === 'priority'
-            ? current.quote?.prioritySatPerKvB
-            : current.feeTier === 'standard'
-              ? current.quote?.standardSatPerKvB
-              : current.quote?.economySatPerKvB
-        ) ?? 1000;
-    const response = await rpc('utxo.list', {
-      feeRateSatPerKvB, accountId: props.accountId, expectedVaultId, expectedSessionId,
-    });
-    if (generation === utxoGeneration.current && response.ok) {
-      setUtxos(response.result.utxos);
-      setPrivacyNotes(response.result.privacyNotes);
+    // Paint local coins immediately; only changed economics need a second read.
+    if (props.initialSection === 'utxos' && currentUtxoFeeRate() !== previousRate) {
+      void loadUtxos();
     }
-  }, [expectedSessionId, expectedVaultId, props.accountId, rpc]);
+  }, [currentUtxoFeeRate, expectedSessionId, expectedVaultId, loadUtxos, props.initialSection, rpc]);
 
   // One rule, both triggers. A selection is only usable while every coin in it
   // stays eligible *and* stays in the account the plan is built under: a higher
@@ -452,7 +465,10 @@ export function Transactions(props: {
       void loadQuote();
       if (postageDraftOutpoint !== null) void loadUtxos();
     }
-    if (props.initialSection === 'utxos') void loadQuote().then(loadUtxos);
+    if (props.initialSection === 'utxos') {
+      void loadUtxos();
+      void loadQuote();
+    }
     if (props.initialSection === 'activity') void loadTransactions();
   }, [loadQuote, loadTransactions, loadUtxos, postageDraftOutpoint, props.initialSection]);
   useEffect(() => {
@@ -537,7 +553,8 @@ export function Transactions(props: {
         if (props.initialSection === 'send') {
           void loadQuote();
         } else if (props.initialSection === 'utxos') {
-          void loadQuote().then(loadUtxos);
+          void loadUtxos();
+          void loadQuote();
           void requestLiveScan();
         } else {
           void loadTransactions();
@@ -1343,6 +1360,7 @@ export function Transactions(props: {
                 <details className={styles['ordinalTechnicalDetails']}>
                   <summary>{t('send.review.details')}</summary>
                   <p>{t('send.review.psbt')}</p>
+                  <p className={styles['labelHelp']}>{t('send.review.psbt.help')}</p>
                   <code className={styles['code']}>{review.psbtHash}</code>
                 </details>
               </>
@@ -1410,6 +1428,7 @@ export function Transactions(props: {
                     <div><dt>{t('send.review.inputs')}</dt><dd>{review.inputs.length}</dd></div>
                   </dl>
                   <p>{t('send.review.psbt')}</p>
+                  <p className={styles['labelHelp']}>{t('send.review.psbt.help')}</p>
                   <code className={styles['code']}>{review.psbtHash}</code>
                 </details>
               </>
@@ -1486,10 +1505,11 @@ export function Transactions(props: {
                     </div>
                   </dl>
                   <p>{t('send.review.psbt')}</p>
+                  <p className={styles['labelHelp']}>{t('send.review.psbt.help')}</p>
                   <code className={styles['code']}>{review.psbtHash}</code>
                   {review.inputs.map((input) => (
                     <code className={styles['code']} key={`${input.txid}:${input.vout}`}>
-                      {input.txid}:{input.vout} · {input.path} · {input.classification}
+                      {input.txid}:{input.vout} · {input.classification}
                     </code>
                   ))}
                 </details>
@@ -1499,6 +1519,7 @@ export function Transactions(props: {
                 <dl className={styles['details']}>
                   <div><dt>{t('send.review.amount')}</dt><dd>{BigInt(review.amountSats).toLocaleString(lang)} sats</dd></div>
                   <div><dt>{t('send.review.fee')}</dt><dd>{BigInt(review.feeSats).toLocaleString(lang)} sats</dd></div>
+                  <div><dt>{t('send.review.change')}</dt><dd>{reviewChangeSats(review).toLocaleString(lang)} sats</dd></div>
                   <div><dt>{t('send.review.total')}</dt><dd>{BigInt(review.totalSats).toLocaleString(lang)} sats</dd></div>
                   <div><dt>{t('send.review.rate')}</dt><dd>{displaySatPerVb(review.feeRateSatPerKvB)} sat/vB</dd></div>
                   <div><dt>{t('send.review.inputs')}</dt><dd>{review.inputs.length}</dd></div>
@@ -1531,11 +1552,28 @@ export function Transactions(props: {
                 ))}
                 <details>
                   <summary>{t('send.review.details')}</summary>
+                  {review.change.length > 0 ? (
+                    <>
+                      <p>{t('send.review.changeOutputs')}</p>
+                      {review.change.map((output, index) => (
+                        <div className={styles['output']} key={`${output.address}:${index}`}>
+                          <span>
+                            {t(output.role === 'ordinal_change'
+                              ? 'send.review.change.ordinal'
+                              : 'send.review.change.payment')}
+                            {' · '}{output.address}
+                          </span>
+                          <strong>{BigInt(output.valueSats).toLocaleString(lang)} sats</strong>
+                        </div>
+                      ))}
+                    </>
+                  ) : null}
                   <p>{t('send.review.psbt')}</p>
+                  <p className={styles['labelHelp']}>{t('send.review.psbt.help')}</p>
                   <code className={styles['code']}>{review.psbtHash}</code>
                   {review.inputs.map((input) => (
                     <code className={styles['code']} key={`${input.txid}:${input.vout}`}>
-                      {input.txid}:{input.vout} · {input.path} · {input.classification}
+                      {input.txid}:{input.vout} · {input.classification}
                     </code>
                   ))}
                 </details>
@@ -1941,6 +1979,7 @@ export function Transactions(props: {
             retryFailedInscriptionThumbnails(inscriptionPreviewScope);
             void loadUtxos();
           }}
+          onSendSelected={() => navigate.current('send')}
           onConsolidate={consolidate}
           onConsolidateSuggested={(coins) => {
             const next = new Set(coins.map((coin) => `${coin.txid}:${coin.vout}`));

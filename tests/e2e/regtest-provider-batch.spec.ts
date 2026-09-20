@@ -58,7 +58,7 @@ async function createProviderWallet(input: {
   await input.onboarding.createDisposable({ password: TEST_PASSWORD, name: input.name });
   await input.popup.open();
   await expect(input.popup.page.getByText('Regtest', { exact: true })).toBeVisible();
-  await input.popup.page.getByRole('button', { name: 'Receive' }).click();
+  await input.popup.page.getByRole('button', { name: 'Receive Bitcoin', exact: true }).click();
   const paymentAddress = checkedRegtestAddress(
     await input.popup.page.getByTestId('receive-address').textContent(),
   );

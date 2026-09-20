@@ -47,6 +47,27 @@ function page(
 }
 
 describe('useAccountActivity', () => {
+  it('remembers each account when returning while its refresh is pending', async () => {
+    const other = `acct_mainnet_${'2'.repeat(64)}`;
+    let pending = false;
+    installFakeChrome({ 'activity.list': (payload) => {
+      const accountId = (payload as { accountId: string }).accountId;
+      if (pending) return new Promise(() => undefined);
+      return { ok: true, result: { ...page([item(accountId === ACCOUNT_ID ? 'a' : 'b')], null).result, accountId } };
+    } });
+    const { result, rerender } = renderHook(({ account }) => useAccountActivity(EXPECTATION, account), {
+      initialProps: { account: ACCOUNT_ID }, wrapper: Providers,
+    });
+    await waitFor(() => expect(result.current.items?.[0]?.txid).toBe(item('a').txid));
+    rerender({ account: other });
+    await waitFor(() => expect(result.current.items?.[0]?.txid).toBe(item('b').txid));
+    pending = true;
+    rerender({ account: ACCOUNT_ID });
+    expect(result.current.items?.[0]?.txid).toBe(item('a').txid);
+    expect(result.current.loadState).toBe('ready');
+    expect(result.current.refreshing).toBe(true);
+  });
+
   it('retains the persistent partial-history advisory state', async () => {
     installFakeChrome({
       'activity.list': () => page([item('a')], null, false, false),

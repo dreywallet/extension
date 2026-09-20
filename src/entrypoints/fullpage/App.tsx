@@ -17,6 +17,7 @@ import { AddressBook } from './AddressBook';
 import { Unlock } from '../../ui/components/Unlock';
 import { Button } from '../../ui/components/Button';
 import { Transactions } from './Transactions';
+import { Runes } from '../popup/Runes';
 import { BlockedSiteSupport } from './BlockedSiteSupport';
 import { BrandMark } from '../../ui/components/BrandMark';
 import { FullpageNav } from './FullpageNav';
@@ -129,7 +130,9 @@ export function App(): ReactNode {
       {session.quarantinedVaultCount > 0 ? (
         <p role="alert">{t('common.error.quarantined')}</p>
       ) : null}
-      {view === 'recovery' && session.capabilities.canRevealSeed ? (
+      {(view === 'runes' || view === 'runesResume') && session.activeAccountId !== null ? (
+        <Runes resumeDraft={view === 'runesResume'} key={session.activeAccountId} expectation={session.expectation} accountId={session.activeAccountId} accountName={session.accountSummaries.find((item) => item.accountId === session.activeAccountId)?.name} onClose={navigateSettings} />
+      ) : view === 'recovery' && session.capabilities.canRevealSeed ? (
         <RecoverySettings
           key={`${session.expectation.expectedVaultId}:${session.expectation.expectedSessionId}`}
           expectation={session.expectation}

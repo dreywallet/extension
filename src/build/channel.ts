@@ -9,6 +9,8 @@ export type BuildChannel = (typeof BUILD_MODES)[number];
 
 export interface BuildEnvironment {
   DREY_REGTEST_GATEWAY_PUBLIC_KEY_HEX?: string;
+  DREY_REGTEST_GATEWAY_PORT?: string;
+  DREY_REGTEST_ORD_PORT?: string;
   DREY_PREVIEW_GATEWAY_ORIGIN?: string;
   DREY_PREVIEW_GATEWAY_PUBLIC_KEY_HEX?: string;
   DREY_PREVIEW_MANIFEST_PUBLIC_KEY?: string;
@@ -22,6 +24,7 @@ export interface BuildChannelConfiguration {
   network: 'mainnet' | 'signet' | 'regtest';
   gatewayOrigin: string;
   gatewayPublicKeyHex: string;
+  regtestExplorerOrigin?: string;
   gatewayProtocolVersions: readonly (1 | 2)[];
   liveGatewayEnabled: boolean;
   productionPackagingEnabled: boolean;
@@ -164,6 +167,14 @@ function previewGatewayKey(environment: BuildEnvironment): string {
   return value;
 }
 
+function regtestOrigin(port: string | undefined, fallback: string): string {
+  const value = port ?? fallback;
+  if (!/^[1-9][0-9]{3,4}$/u.test(value) || Number(value) < 1024 || Number(value) > 65535) {
+    throw new Error('regtest build ports must be unprivileged local TCP ports');
+  }
+  return `http://127.0.0.1:${value}`;
+}
+
 function regtestGatewayKey(environment: BuildEnvironment): string {
   const value = environment.DREY_REGTEST_GATEWAY_PUBLIC_KEY_HEX?.trim().toLowerCase();
   if (value === undefined || !/^[0-9a-f]{64}$/u.test(value)) {
@@ -198,9 +209,10 @@ export function resolveBuildChannel(
       return {
         channel: mode,
         name: 'Drey',
-        description: 'Non-custodial Bitcoin and Ordinals wallet',
+        description: 'Non-custodial Bitcoin, Ordinals and Runes wallet',
         network: 'regtest',
-        gatewayOrigin: LOOPBACK_GATEWAY_ORIGIN,
+        gatewayOrigin: regtestOrigin(environment.DREY_REGTEST_GATEWAY_PORT, '18480'),
+        regtestExplorerOrigin: regtestOrigin(environment.DREY_REGTEST_ORD_PORT, '18481'),
         gatewayPublicKeyHex: regtestGatewayKey(environment),
         gatewayProtocolVersions: [1, 2],
         liveGatewayEnabled: true,
@@ -283,7 +295,7 @@ export function resolveBuildChannel(
       return {
         channel: mode,
         name: 'Drey',
-        description: 'Non-custodial Bitcoin and Ordinals wallet',
+        description: 'Non-custodial Bitcoin, Ordinals and Runes wallet',
         network: 'mainnet',
         gatewayOrigin: PRODUCTION_GATEWAY_ORIGIN,
         gatewayPublicKeyHex: PRODUCTION_GATEWAY_PUBLIC_KEY_HEX,

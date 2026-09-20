@@ -1,6 +1,6 @@
 # Drey
 
-A non-custodial Bitcoin L1 and Ordinals browser extension (Chrome MV3), built with
+A non-custodial Bitcoin, Ordinals and Runes browser extension (Chrome MV3), built with
 [WXT](https://wxt.dev) and React.
 
 Drey holds keys locally, never transmits recovery material, and talks to a signing-aware
@@ -76,7 +76,7 @@ sibling core checkout and skip themselves when one is not present; to run them, 
 the core repository next to this one at the pinned tag:
 
 ```bash
-git clone --branch v0.19.4 https://github.com/dreywallet/core.git ../core
+git clone --branch v0.20.5 https://github.com/dreywallet/core.git ../core
 ```
 
 `pnpm test:marketplace-contracts` runs the marketplace contract suite from that sibling

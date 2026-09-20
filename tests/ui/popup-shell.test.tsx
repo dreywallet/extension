@@ -157,7 +157,7 @@ describe('popup shell navigation', () => {
     await userEvent.click(dock);
     await waitFor(() => expect(open).toHaveBeenCalledWith({ windowId: 12 }));
 
-    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Send Bitcoin' }));
     expect(screen.queryByRole('button', { name: 'Open in side panel' })).not.toBeInTheDocument();
 
     surface.unmount();
@@ -209,7 +209,7 @@ describe('popup shell navigation', () => {
       </Providers>,
     );
 
-    await userEvent.click(await screen.findByRole('button', { name: 'Send' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Send Bitcoin' }));
     expect(await screen.findByRole('heading', { name: 'Send Bitcoin' })).toBeInTheDocument();
     expect(screen.getByLabelText('Amount (BTC)')).toBeInTheDocument();
     expect(createTab).not.toHaveBeenCalled();
@@ -324,7 +324,7 @@ describe('popup shell navigation', () => {
     );
 
     const primaryNavigation = screen.getByRole('navigation', { name: 'Drey' });
-    const bitcoin = within(primaryNavigation).getByRole('button', { name: 'Bitcoin' });
+    const bitcoin = within(primaryNavigation).getByRole('button', { name: 'Wallet' });
     const ordinals = within(primaryNavigation).getByRole('button', { name: 'Ordinals' });
     const activity = within(primaryNavigation).getByRole('button', { name: 'Activity' });
     expect(bitcoin).toHaveAttribute('aria-current', 'page');

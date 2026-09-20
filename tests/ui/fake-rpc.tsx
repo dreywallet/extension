@@ -8,6 +8,8 @@ import type { MessageEnvelope } from '@drey/core/messaging/envelope';
 import { I18nProvider } from '../../src/ui/i18n';
 import { RpcProvider } from '../../src/ui/hooks/use-rpc';
 import { clearGalleryDataStore } from '../../src/ui/hooks/use-gallery-data';
+import { clearFiatPriceStore } from '../../src/ui/hooks/use-fiat-price';
+import { clearRunesStore } from '../../src/ui/hooks/use-runes';
 import { clearWalletHomeStore } from '../../src/ui/hooks/use-wallet-home';
 import { clearActivityPreviewStore } from '../../src/entrypoints/popup/ActivityList';
 import { clearAccountActivityStore } from '../../src/ui/hooks/use-account-activity';
@@ -33,6 +35,8 @@ export function installFakeChrome(handlers: Record<string, Handler>): Map<string
   // fake chrome is the harness equivalent of opening a fresh popup.
   clearGalleryDataStore();
   clearWalletHomeStore();
+  clearRunesStore();
+  clearFiatPriceStore();
   clearActivityPreviewStore();
   clearAccountActivityStore();
   const fake = {

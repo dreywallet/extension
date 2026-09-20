@@ -51,6 +51,7 @@ export interface ManageUtxosProps {
   feeChooser: ReactNode;
   consolidationSuggestionEnabled: boolean;
   onRefresh: () => void;
+  onSendSelected: () => void;
   onConsolidate: () => void;
   onConsolidateSuggested: (utxos: Utxo[]) => void;
   onFreeze: (utxo: Utxo) => void;
@@ -79,6 +80,7 @@ export function ManageUtxos(props: ManageUtxosProps): React.ReactElement {
 
   const selectedUtxos = rows.filter((utxo) => selected.has(outpointKeyOf(utxo)));
   const selectedTotal = totalSats(selectedUtxos);
+  const canSendSelected = selected.size > 0 && !props.busy;
   const canConsolidate = selected.size >= MIN_CONSOLIDATION_INPUTS && !props.busy;
   const suggestedCoins = selectable.filter((utxo) =>
     utxo.classification === 'cardinal_clean' && !utxo.frozen && !utxo.dustQuarantined);
@@ -210,6 +212,9 @@ export function ManageUtxos(props: ManageUtxosProps): React.ReactElement {
               {t('utxos.clearSelection')}
             </Button>
           ) : null}
+          <Button onClick={props.onSendSelected} disabled={!canSendSelected}>
+            {t('utxos.sendSelected')}
+          </Button>
           <Button onClick={props.onConsolidate} disabled={!canConsolidate}>
             {t('utxos.consolidate')}
           </Button>

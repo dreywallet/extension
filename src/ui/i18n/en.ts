@@ -273,11 +273,16 @@ export const en = {
     'The recipient and amount stay the same. Drey adds a follow-up transaction with a network fee to help both confirm sooner.',
   'send.review.amount': 'Sending',
   'send.review.fee': 'Fee',
+  'send.review.change': 'Change returning',
   'send.review.total': 'Total',
   'send.review.rate': 'Fee rate',
   'send.review.inputs': 'Inputs',
   'send.review.details': 'Technical details',
-  'send.review.psbt': 'Unsigned transaction hash',
+  'send.review.changeOutputs': 'Change outputs',
+  'send.review.change.payment': 'Bitcoin change',
+  'send.review.change.ordinal': 'Ordinals change',
+  'send.review.psbt': 'PSBT fingerprint',
+  'send.review.psbt.help': 'Identifier only — not transaction data.',
   'send.review.reauth': 'Please confirm with your app password to continue.',
   'send.review.reauth.highSecurity': 'High-security mode requires password confirmation for every transaction.',
   'send.review.reauth.highAbsoluteFee': 'The network fee is unusually high.',
@@ -566,6 +571,7 @@ export const en = {
   'utxos.freeze': 'Freeze',
   'utxos.freeze.help': 'Set this coin aside so no send can use it until you unfreeze it.',
   'utxos.unfreeze': 'Unfreeze',
+  'utxos.sendSelected': 'Send selected',
   'utxos.consolidate': 'Consolidate selected',
   'utxos.rescue': 'Rescue inscription',
   'utxos.sweep': 'Sweep excess bitcoin',
@@ -591,15 +597,21 @@ export const en = {
   'utxos.selectCoin': 'Select coin {outpoint}, {amount} sats',
   'utxos.clearSelection': 'Clear',
   'utxos.selectedSummary': '{count} selected · {total} sats',
-  'utxos.selectHint': 'Select two or more coins to combine them.',
+  'utxos.selectHint': 'Select coins to spend or combine.',
   // A transaction spends from one account. The coin is perfectly spendable —
   // just not alongside the ones this screen is building a selection from.
   'utxos.otherAccount': 'In another account, so it cannot join this selection.',
   'utxos.moreDetail': 'Details',
   'utxos.rowDetails': 'Details for coin {outpoint}',
   'utxos.outpoint': 'Coin',
-  'utxos.path': 'Derivation path',
-  'utxos.valueAfterFee': 'Value after fee',
+  'utxos.address': 'Address',
+  'utxos.addressRole.primary': 'Primary receive address',
+  'utxos.addressRole.recovered': 'Recovered address',
+  'utxos.addressRole.change': 'Change address',
+  'utxos.copyAddress': 'Copy address',
+  'utxos.valueAfterFee': 'Effective value',
+  'utxos.valueAfterFee.help':
+    'Coin value minus the estimated cost of adding this input at the selected fee rate. This is not the final transaction fee.',
   'utxos.verifying': 'Checking some coins against the asset index. This finishes on its own.',
 
   // Classification, in plain words. §10.3 keeps enum tokens out of the UI and
@@ -629,6 +641,8 @@ export const en = {
     'This coin holds more than one kind of asset at once. Drey cannot separate them safely, so it stays protected until a wallet that can split them is used.',
 
   // Reasons. A permanent condition must never borrow transient wording.
+  'utxos.reason.recoveryOnly':
+    'Legacy address — view only in Drey. Move this bitcoin with a wallet that supports nested SegWit.',
   'utxos.reason.protectedAsset': 'Holds a collectible, so it is never spent',
   'utxos.reason.checking': 'Still checking this coin',
   'utxos.reason.classificationStale': 'Asset verification is refreshing automatically',

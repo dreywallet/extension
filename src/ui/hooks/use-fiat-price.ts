@@ -5,13 +5,18 @@ import { useRpc } from './use-rpc';
 export const PRICE_POLL_INTERVAL_MS = 60_000;
 export const PRICE_MAX_STALE_MS = 600_000;
 
+// Public price only; retain the estimate across wallet tab changes. The age
+// checks below still hide an expired quote and label a stale one.
+let lastQuote: FiatPriceQuote | null = null;
+export function clearFiatPriceStore(): void { lastQuote = null; }
+
 export function useFiatPrice(enabled: boolean): {
   quote: FiatPriceQuote | null;
   stale: boolean;
   ageMinutes: number;
 } {
   const rpc = useRpc();
-  const [quote, setQuote] = useState<FiatPriceQuote | null>(null);
+  const [quote, setQuote] = useState<FiatPriceQuote | null>(() => enabled ? lastQuote : null);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const generation = useRef(0);
   const inFlight = useRef(false);
@@ -24,6 +29,9 @@ export function useFiatPrice(enabled: boolean): {
       .then((response) => {
         if (generation.current !== requestGeneration || !response.ok || response.result === null) {
           return;
+        }
+        if (lastQuote === null || Date.parse(response.result.observedAt) >= Date.parse(lastQuote.observedAt)) {
+          lastQuote = response.result;
         }
         setQuote((current) =>
           current === null || Date.parse(response.result!.observedAt) >= Date.parse(current.observedAt)
@@ -43,6 +51,7 @@ export function useFiatPrice(enabled: boolean): {
       setQuote(null);
       return undefined;
     }
+    setQuote(lastQuote);
     const update = (): void => {
       if (document.visibilityState === 'hidden') return;
       setNowMs(Date.now());

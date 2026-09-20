@@ -29,6 +29,8 @@ const RECEIVE_KINDS = ['payment', 'ordinals'] as const;
  * only ever encoded into the URI the user chooses to share.
  */
 export function Receive(props: {
+  runeContext?: boolean;
+  accountName?: string | undefined;
   initialKind: Kind;
   expectation: ActiveSessionExpectation;
   activeAccountId: string;
@@ -37,9 +39,12 @@ export function Receive(props: {
   const { t } = useI18n();
   const rpc = useRpc();
   const { expectedVaultId, expectedSessionId } = props.expectation;
-  const [kind, setKind] = useState<Kind>(props.initialKind);
-  const [address, setAddress] = useState<string | null>(null);
-  const [network, setNetwork] = useState<'mainnet' | 'signet' | 'regtest' | null>(null);
+  const [selectedKind, setKind] = useState<Kind>(props.initialKind);
+  const kind = props.runeContext ? 'ordinals' : selectedKind;
+  const identity = `${expectedVaultId}:${expectedSessionId}:${props.activeAccountId}:${kind}`;
+  const [received, setReceived] = useState<{ identity: string; address: string; network: 'mainnet' | 'signet' | 'regtest' } | null>(null);
+  const address = received?.identity === identity ? received.address : null;
+  const network = received?.identity === identity ? received.network : null;
   const [error, setError] = useState<string | null>(null);
   const [amount, setAmount] = useState('');
   const [label, setLabel] = useState('');
@@ -48,7 +53,7 @@ export function Receive(props: {
   const shareIdentityRef = useRef<string | null>(null);
 
   useEffect(() => {
-    setAddress(null);
+    setReceived(null);
     setError(null);
     let cancelled = false;
     void rpc('address.receive', {
@@ -58,17 +63,16 @@ export function Receive(props: {
       expectedSessionId,
     }).then((result) => {
       if (cancelled) return;
-      if (result.ok) {
-        setAddress(result.result.address);
-        setNetwork(result.result.network);
+      if (result.ok && result.result.accountId === props.activeAccountId && result.result.kind === kind) {
+        setReceived({ identity, address: result.result.address, network: result.result.network });
       } else {
-        setError(t(errorMessageKey(result.code)));
+        setError(t(result.ok ? 'runes.changed' : errorMessageKey(result.code)));
       }
     });
     return () => {
       cancelled = true;
     };
-  }, [expectedSessionId, expectedVaultId, kind, props.activeAccountId, rpc, t]);
+  }, [expectedSessionId, expectedVaultId, kind, props.activeAccountId, identity, rpc, t]);
 
   useEffect(() => () => {
     shareIdentityRef.current = null;
@@ -149,7 +153,9 @@ export function Receive(props: {
 
   return (
     <div className={styles['receiveCard']}>
-      <div className={styles['segmented']} role="radiogroup" aria-label={t('receive.title')}>
+      {props.runeContext ? <h1>{t('runes.receive')}</h1> : null}
+      {props.runeContext && props.accountName ? <p className={styles['explain']}>{props.accountName}</p> : null}
+      {!props.runeContext ? <div className={styles['segmented']} role="radiogroup" aria-label={t('receive.title')}>
         {RECEIVE_KINDS.map((option) => (
           <Button
             key={option}
@@ -163,7 +169,7 @@ export function Receive(props: {
             {option === 'payment' ? t('receive.tab.bitcoin') : t('receive.tab.ordinals')}
           </Button>
         ))}
-      </div>
+      </div> : null}
 
       {network !== null ? (
         <p className={styles['explain']}>
@@ -175,6 +181,7 @@ export function Receive(props: {
             : network === 'signet'
               ? t('home.network.signet')
               : t('home.network.mainnet');
+          if (props.runeContext) return t('runes.receiveHint', { network: networkLabel });
           return kind === 'payment'
             ? t('receive.bitcoin.explain', { network: networkLabel })
             : t('receive.ordinals.explain', { network: networkLabel });

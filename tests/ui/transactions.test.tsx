@@ -114,6 +114,8 @@ function utxoRow(overrides: Record<string, unknown> = {}) {
     accountId: ACCOUNT_ID,
     lane: 'payment',
     path: "m/86'/0'/0'/0/0",
+    address: 'tb1qexampleaddress',
+    addressRole: 'primary',
     classification: 'inscribed',
     eligible: false,
     reasons: ['not_cardinal_clean', 'classification_stale'],
@@ -141,8 +143,12 @@ function view(initialSection: 'send' | 'utxos' | 'activity', session = SESSION_1
   );
 }
 
-function NavigableTransactionsView() {
-  const [section, setSection] = useState<'send' | 'utxos' | 'activity'>('activity');
+function NavigableTransactionsView(props: {
+  initialSection?: 'send' | 'utxos' | 'activity';
+} = {}) {
+  const [section, setSection] = useState<'send' | 'utxos' | 'activity'>(
+    props.initialSection ?? 'activity',
+  );
   return (
     <Providers>
       <Transactions
@@ -329,6 +335,13 @@ describe('transaction screen orchestration', () => {
     const heading = await screen.findByRole('heading', { name: 'Review transaction' });
     const review = heading.closest('section');
     expect(review).not.toBeNull();
+    expect(review).toHaveTextContent('Change returning');
+    expect(review).toHaveTextContent('7,520 sats');
+    fireEvent.click(screen.getByText('Technical details'));
+    expect(review).toHaveTextContent('Bitcoin change · bc1qchange');
+    expect(review).toHaveTextContent('PSBT fingerprint');
+    expect(review).toHaveTextContent('Identifier only — not transaction data.');
+    expect(review).not.toHaveTextContent("m/84'");
     fireEvent.change(screen.getByLabelText('Confirm app password'), {
       target: { value: 'incorrect password' },
     });
@@ -957,7 +970,7 @@ describe('transaction screen orchestration', () => {
       .toBeInTheDocument();
   });
 
-  it('loads each visible data section once and does not refetch from fee-form renders', async () => {
+  it('loads local coins then current quote economics without refetching from fee-form renders', async () => {
     let quotes = 0;
     const utxoRates: number[] = [];
     let plans = 0;
@@ -982,7 +995,7 @@ describe('transaction screen orchestration', () => {
     });
 
     render(view('utxos'));
-    await waitFor(() => expect(utxoRates).toEqual([3500]));
+    await waitFor(() => expect(utxoRates).toEqual([1000, 3500]));
     await waitFor(() => expect(quotes).toBe(1));
     expect(plans).toBe(0);
     expect(approvals).toBe(0);
@@ -990,13 +1003,46 @@ describe('transaction screen orchestration', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'Custom' }));
     fireEvent.change(screen.getByLabelText('Fee rate (sat/vB)'), { target: { value: '17' } });
     await Promise.resolve();
-    expect(utxoRates).toEqual([3500]);
+    expect(utxoRates).toEqual([1000, 3500]);
 
     fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
-    await waitFor(() => expect(utxoRates).toEqual([3500, 17_000]));
+    await waitFor(() => expect(utxoRates).toEqual([1000, 3500, 17_000]));
     expect(quotes).toBe(1);
     expect(plans).toBe(0);
     expect(approvals).toBe(0);
+  });
+
+  it('shows local coins while fees are pending and refreshes economics only when the rate changes', async () => {
+    const utxoRates: number[] = [];
+    let resolveQuote!: (value: unknown) => void;
+    let quoteCalls = 0;
+    installFakeChrome({
+      'fees.quote': () => {
+        quoteCalls += 1;
+        return new Promise((resolve) => { resolveQuote = resolve; });
+      },
+      'utxo.list': (payload) => {
+        const rate = (payload as { feeRateSatPerKvB: number }).feeRateSatPerKvB;
+        utxoRates.push(rate);
+        return { ok: true, result: {
+          utxos: [utxoRow({ label: { preset: null, text: rate === 1000 ? 'Local coin' : 'Updated economics' } })],
+          privacyNotes: [],
+        } };
+      },
+    });
+    render(view('utxos'));
+    expect(await screen.findByText('Local coin')).toBeInTheDocument();
+    expect(utxoRates).toEqual([1000]);
+    await act(async () => { resolveQuote({ ok: true, result: QUOTE }); });
+    expect(await screen.findByText('Updated economics')).toBeInTheDocument();
+    expect(utxoRates).toEqual([1000, 3500]);
+
+    fireEvent.focus(window);
+    await waitFor(() => expect(quoteCalls).toBe(2));
+    expect(screen.getByText('Updated economics')).toBeInTheDocument();
+    expect(utxoRates).toEqual([1000, 3500, 3500]);
+    await act(async () => { resolveQuote({ ok: true, result: QUOTE }); });
+    expect(utxoRates).toEqual([1000, 3500, 3500]);
   });
 
   it('passes the selected automatic quote to UTXO economics without rounding sub-sat rates', async () => {
@@ -1014,7 +1060,7 @@ describe('transaction screen orchestration', () => {
 
     render(view('utxos'));
     await waitFor(() => expect(screen.getByText('0.471 sat/vB')).toBeInTheDocument());
-    await waitFor(() => expect(utxoRates).toEqual([471]));
+    await waitFor(() => expect(utxoRates).toEqual([1000, 471]));
   });
 
   it('explains dust quarantine in plain language without offering a misleading freeze action', async () => {
@@ -1032,6 +1078,8 @@ describe('transaction screen orchestration', () => {
             account: 0,
             lane: 'payment',
             path: "m/84'/0'/0'/0/0",
+            address: 'tb1qexampleaddress',
+            addressRole: 'primary',
             classification: 'cardinal_clean',
             eligible: false,
             reasons: ['dust_quarantined'],
@@ -1455,7 +1503,7 @@ describe('transaction screen orchestration', () => {
 
     render(view('utxos'));
     // A bare disabled button explains nothing, so the requirement is stated.
-    expect(await screen.findByText('Select two or more coins to combine them.'))
+    expect(await screen.findByText('Select coins to spend or combine.'))
       .toBeInTheDocument();
     const consolidate = screen.getByRole('button', { name: 'Consolidate selected' });
     expect(consolidate).toBeDisabled();
@@ -1468,6 +1516,41 @@ describe('transaction screen orchestration', () => {
     fireEvent.click(boxes[1]!);
     expect(screen.getByText('2 selected · 695,903 sats')).toBeInTheDocument();
     expect(consolidate).toBeEnabled();
+  });
+
+  it('shows the verified holding address and carries one selected coin into Send', async () => {
+    installFakeChrome({
+      'fees.quote': () => ({ ok: true, result: QUOTE }),
+      'utxo.list': () => ({
+        ok: true,
+        result: {
+          utxos: [utxoRow({
+            valueSats: '50000',
+            effectiveValueSats: '49762',
+            eligible: true,
+            reasons: [],
+            address: 'bc1qverifiedholdingaddress',
+            addressRole: 'change',
+          })],
+          privacyNotes: [],
+        },
+      }),
+    });
+
+    render(<NavigableTransactionsView initialSection="utxos" />);
+    fireEvent.click(await screen.findByLabelText('Details for coin aaaa…aaaa:0'));
+    expect(screen.getAllByText('Change address')).toHaveLength(2);
+    expect(screen.getByText('bc1qverifiedholdingaddress')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy address' })).toBeInTheDocument();
+    expect(screen.queryByText('Derivation path')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('checkbox'));
+    const sendSelected = screen.getByRole('button', { name: 'Send selected' });
+    expect(sendSelected).toBeEnabled();
+    fireEvent.click(sendSelected);
+
+    expect(await screen.findByRole('heading', { name: 'Send Bitcoin' })).toBeInTheDocument();
+    expect(screen.getByText('1 manually selected inputs')).toBeInTheDocument();
   });
 
   it('selects only spendable coins from the Available header and clears them again', async () => {
@@ -1492,7 +1575,7 @@ describe('transaction screen orchestration', () => {
     expect(screen.getByText('2 selected · 750 sats')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
-    expect(screen.getByText('Select two or more coins to combine them.')).toBeInTheDocument();
+    expect(screen.getByText('Select coins to spend or combine.')).toBeInTheDocument();
   });
 
   // utxo.list is wallet-wide, but selectCoins builds one plan under one
@@ -1595,8 +1678,8 @@ describe('transaction screen orchestration', () => {
               utxoRow({
                 txid: 'b'.repeat(64),
                 valueSats: '600',
-                eligible: loads === 1,
-                reasons: loads === 1 ? [] : ['uneconomic'],
+                eligible: loads <= 2,
+                reasons: loads <= 2 ? [] : ['uneconomic'],
               }),
             ],
             privacyNotes: [],
@@ -1685,7 +1768,7 @@ describe('transaction screen orchestration', () => {
     render(view('utxos'));
     await waitFor(() => {
       expect(quotes).toBe(1);
-      expect(utxoLoads).toBe(1);
+      expect(utxoLoads).toBe(2);
     });
     act(() => {
       window.dispatchEvent(new Event('focus'));
@@ -1693,7 +1776,7 @@ describe('transaction screen orchestration', () => {
     });
     await waitFor(() => {
       expect(quotes).toBe(2);
-      expect(utxoLoads).toBe(2);
+      expect(utxoLoads).toBe(3);
     });
   });
 

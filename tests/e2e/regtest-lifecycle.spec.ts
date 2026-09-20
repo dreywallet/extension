@@ -46,7 +46,7 @@ test('creates, funds, spends, and confirms a disposable wallet on real regtest',
   await popup.open();
   await expect(popup.page.getByText('Available to send')).toBeVisible({ timeout: 45_000 });
   await expect(popup.page.getByText('Regtest', { exact: true })).toBeVisible();
-  await popup.page.getByRole('button', { name: 'Receive' }).click();
+  await popup.page.getByRole('button', { name: 'Receive Bitcoin', exact: true }).click();
   const receiveAddress = checkedRegtestAddress(
     await popup.page.getByTestId('receive-address').textContent(),
   );

@@ -161,7 +161,7 @@ test('@m9x keeps Home paint through an unavailable reopen and explicit recovery'
   await expect.poll(() => galleryBatchAttempts(), { timeout: 30_000 })
     .toBeGreaterThan(beforeRecovery);
   await expect(refresh).toBeEnabled({ timeout: 30_000 });
-  await reopened.page.getByRole('button', { name: 'Bitcoin', exact: true }).click();
+  await reopened.page.getByRole('button', { name: 'Wallet', exact: true }).click();
   await expect(reopened.page.getByTestId('home-collectibles-carousel').locator('iframe').first())
     .toBeVisible({ timeout: 10_000 });
   await page.close();
@@ -207,10 +207,15 @@ test('@visual captures privacy-audited Drey 0.7.0 release surfaces', async ({
   await reviewPage.getByText('Protected', { exact: true }).click();
   const inscriptionPreview = reviewPage.getByRole('button', { name: /^Enlarge .*inscription/iu }).first();
   await expect(inscriptionPreview).toBeVisible({ timeout: 15_000 });
+  const protectedWalletData = reviewPage.locator(
+    'code, [data-testid="utxo-summary-outpoint"]',
+  );
   await reviewPage.screenshot({
     path: `${output}/ui-protected-sats-source.png`,
     animations: 'disabled',
     fullPage: true,
+    mask: [protectedWalletData],
+    maskColor: '#303030',
   });
   await inscriptionPreview.click();
   const previewDialog = reviewPage.getByRole('dialog', { name: /inscription/iu });
@@ -221,6 +226,8 @@ test('@visual captures privacy-audited Drey 0.7.0 release surfaces', async ({
   await reviewPage.screenshot({
     path: `${output}/ui-protected-sats-preview-source.png`,
     animations: 'disabled',
+    mask: [protectedWalletData],
+    maskColor: '#303030',
   });
   await reviewPage.close();
 });
@@ -533,7 +540,7 @@ test('renders the restored wallet home at compact popup scale', async ({
 
   await popup.open();
   await expect(popup.page.getByText('Available to send')).toBeVisible();
-  await popup.page.getByRole('button', { name: 'Receive' }).click();
+  await popup.page.getByRole('button', { name: 'Receive Bitcoin' }).click();
   await expect(popup.page.getByRole('img', { name: 'QR code for your receive address' }))
     .toBeVisible();
   await popup.page.getByRole('button', { name: 'Close' }).click();
@@ -546,7 +553,7 @@ test('renders the restored wallet home at compact popup scale', async ({
     return grid !== undefined &&
       Math.abs(bounds.left + bounds.width / 2 - (grid.left + grid.width / 2)) <= 1;
   })).toBe(true);
-  await popup.page.getByRole('button', { name: 'Bitcoin', exact: true }).click();
+  await popup.page.getByRole('button', { name: 'Wallet', exact: true }).click();
   await popup.lock();
   await popup.page.evaluate(() => {
     document.body.dataset['sawTransientIndexLag'] = 'false';
@@ -764,7 +771,7 @@ test('renders the restored wallet home at compact popup scale', async ({
   expect(layout.lastContentReachable).toBe(true);
   expect(layout.iconControls.map(({ name }) => name)).toEqual([
     'Active account', 'Open in side panel', 'Settings', 'Lock',
-    'Bitcoin', 'Ordinals', 'Activity',
+    'Wallet', 'Ordinals', 'Activity',
   ]);
   expect(layout.iconControls.every(({ height, width }) => height >= 40 && width >= 40)).toBe(true);
 
@@ -799,7 +806,7 @@ test('renders the restored wallet home at compact popup scale', async ({
     .toBe('none');
 
   const pageCount = extensionContext.pages().length;
-  await popup.page.getByRole('button', { name: 'Send', exact: true }).click();
+  await popup.page.getByRole('button', { name: 'Send Bitcoin', exact: true }).click();
   await expect(popup.page.getByRole('heading', { name: 'Send Bitcoin' })).toBeVisible();
   await expect(popup.page.getByLabel('Amount (BTC)')).toBeVisible();
   await expect(popup.page.getByRole('button', { name: 'Open send in full page' })).toBeVisible();
@@ -858,12 +865,16 @@ test('resumes a failed visible-wallet refresh and replaces stale cached activity
     gatewayMode: 'unavailable',
     snapshotScenario: 'wrong_lane_inscription_at_payment',
   });
+  // Background focus scans are intentionally limited to once per minute.
+  // Advance only this page's Date; gateway and worker clocks remain real.
+  await popup.page.clock.setFixedTime(await popup.page.evaluate(() => Date.now() + 60_001));
   await popup.page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect.poll(snapshotAttempts).toBeGreaterThan(beforeFailure);
 
   await setGatewayScenario({ gatewayMode: 'healthy' });
   await popup.page.waitForTimeout(250);
   const beforeRecovery = await snapshotAttempts();
+  await popup.page.clock.setFixedTime(await popup.page.evaluate(() => Date.now() + 60_001));
   await popup.page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect.poll(snapshotAttempts).toBeGreaterThan(beforeRecovery);
   await expect(popup.page.getByText('90,000 sats', { exact: true })).toBeVisible({ timeout: 20_000 });
@@ -891,7 +902,7 @@ test('updates one incoming payment from pending to confirmed after hide and resu
   const payment = popup.page.getByRole('link').filter({ hasText: '+10,000 sats' });
   await expect(payment).toHaveCount(1);
   await expect(payment).toContainText('Pending');
-  await popup.page.getByRole('button', { name: 'Bitcoin' }).click();
+  await popup.page.getByRole('button', { name: 'Wallet' }).click();
   await expect(popup.page.getByText('Pending confirmation').locator('../..'))
     .toContainText('10,000 sats');
   await expect(
@@ -910,6 +921,9 @@ test('updates one incoming payment from pending to confirmed after hide and resu
     await away.bringToFront();
     await setGatewayScenario({ snapshotScenario: 'incoming_confirmed' });
     const beforeConfirmed = await snapshotAttempts();
+    // Resume after the background-scan interval, rather than expecting a
+    // deliberate short-focus debounce to start another scan.
+    await popup.page.clock.setFixedTime(await popup.page.evaluate(() => Date.now() + 60_001));
     await away.close();
     await popup.page.bringToFront();
     await expect.poll(() => popup.page.evaluate(() => document.visibilityState)).toBe('visible');
@@ -921,7 +935,7 @@ test('updates one incoming payment from pending to confirmed after hide and resu
     await expect(payment).toHaveCount(1);
     await expect(payment).not.toContainText('Pending');
 
-    await popup.page.getByRole('button', { name: 'Bitcoin' }).click();
+    await popup.page.getByRole('button', { name: 'Wallet' }).click();
     const balanceCard = popup.page.getByText('Available to send').locator('..');
     await expect(balanceCard).toContainText('10,000 sats');
     const recentPayment = popup.page.getByRole('link').filter({ hasText: '+10,000 sats' });
@@ -996,7 +1010,7 @@ test('labels a signed sat-flow-verified mempool inscription as a pending Ordinal
       timeout: 30_000,
     });
     await expect(pendingCard).not.toContainText('Preview pending confirmation');
-    await popup.page.getByRole('button', { name: 'Bitcoin' }).click();
+    await popup.page.getByRole('button', { name: 'Wallet' }).click();
     await expect(popup.page.getByText('Pending Ordinal', { exact: true })).toHaveCount(0);
     await expect(popup.page.getByText('Set aside', { exact: true }).locator('..'))
       .toContainText('546 sats');
@@ -1104,7 +1118,7 @@ test('restores the public fixture, persists privacy, and exercises provider appr
     }
   };
   popup.page.on('console', recordVisualConsoleError);
-  await popup.page.getByRole('button', { name: 'Receive' }).click();
+  await popup.page.getByRole('button', { name: 'Receive Bitcoin' }).click();
   await expect(popup.page.getByText(/Signet/u)).toBeVisible();
   const bitcoinQr = popup.page.getByRole('img', { name: 'QR code for your receive address' });
   await expect(bitcoinQr).toBeVisible();
@@ -1440,13 +1454,21 @@ test('@m9p reviews signed inert inscription previews and fails closed across mis
   await openFirstGalleryShelf(popup.page);
   const firstGalleryCard = popup.page.locator('article').filter({ hasText: '#1234' });
   await expect(firstGalleryCard).toBeVisible();
+  const galleryRefresh = popup.page.getByRole('button', { name: 'Refresh' });
+  await expect(galleryRefresh).toBeEnabled();
+  await popup.page.evaluate(() => document.fonts.ready);
+  await galleryRefresh.focus();
   const cardTopBeforeRefresh = await firstGalleryCard.evaluate(
     (card) => Math.round(card.getBoundingClientRect().top),
   );
   await setGatewayScenario({ snapshotScenario: 'mixed', snapshotDelayMs: 250 });
-  const galleryRefresh = popup.page.getByRole('button', { name: 'Refresh' });
-  await galleryRefresh.click();
-  await expect(galleryRefresh).toHaveText('Checking…');
+  // Activate the focused control from the keyboard, keeping pointer hover
+  // geometry out of this exact layout check. Observe the temporary label
+  // before activation so a quick refresh cannot finish before the assertion.
+  await Promise.all([
+    expect(galleryRefresh).toHaveText('Checking…'),
+    galleryRefresh.press('Enter'),
+  ]);
   await expect(popup.page.getByText('Checking your wallet for Ordinals…')).toHaveCount(0);
   await expect.poll(() => firstGalleryCard.evaluate(
     (card) => Math.round(card.getBoundingClientRect().top),
@@ -1939,7 +1961,7 @@ test('@m9x serves Ordinals tab switches from memory without refetching or loggin
   // address", which a substring match resolves to alongside the nav item.
   const ordinals = popup.page.getByRole('button', { name: 'Ordinals', exact: true });
   const activity = popup.page.getByRole('button', { name: 'Activity', exact: true });
-  const bitcoin = popup.page.getByRole('button', { name: 'Bitcoin', exact: true });
+  const bitcoin = popup.page.getByRole('button', { name: 'Wallet', exact: true });
   const allTab = popup.page.getByRole('tab', { name: /^All \(/u });
   const refresh = popup.page.getByRole('button', { name: 'Refresh' });
   // Real content, not just the always-rendered tab strip.
@@ -2015,7 +2037,9 @@ test('@m9x serves Ordinals tab switches from memory without refetching or loggin
   await expect(allTab).toHaveText(painted ?? '');
   await openFirstGalleryShelf(popup.page);
   await expect(card).toBeVisible();
-  expect(await geometry()).toEqual(initialGeometry);
+  // content-visibility:auto can expose the card's intrinsic placeholder box
+  // before Chromium renders its subtree. Compare the actual settled geometry.
+  await expect.poll(geometry).toEqual(initialGeometry);
   // Returning from Home can start the one permitted full-group hydration only
   // after the shelf is opened. Let that first drill-in settle before proving
   // that subsequent tab remounts stay entirely in memory.
@@ -2035,7 +2059,7 @@ test('@m9x serves Ordinals tab switches from memory without refetching or loggin
     await expect(card).toBeVisible();
     // Remounting the tab may recreate nodes, but it must not move or resize the
     // settled grid.
-    expect(await geometry()).toEqual(initialGeometry);
+    await expect.poll(geometry).toEqual(initialGeometry);
   }
   expect(await galleryBatchAttempts()).toBe(drillInWarmed);
 
@@ -2043,7 +2067,7 @@ test('@m9x serves Ordinals tab switches from memory without refetching or loggin
   await expect(refresh).toBeEnabled({ timeout: 30_000 });
   await refresh.click();
   await expect(card).toBeVisible();
-  expect((await geometry()).map(({ width, height, previewWidth, previewHeight }) => ({
+  await expect.poll(async () => (await geometry()).map(({ width, height, previewWidth, previewHeight }) => ({
     width, height, previewWidth, previewHeight,
   }))).toEqual(initialGeometry.map(({ width, height, previewWidth, previewHeight }) => ({
     width, height, previewWidth, previewHeight,
@@ -2082,7 +2106,7 @@ test('@m9x settles the Ordinals gallery after rapid tab switching', async ({
   await popup.open();
   // exact, for the same quick-copy collision as the tab-switch test above.
   const ordinals = popup.page.getByRole('button', { name: 'Ordinals', exact: true });
-  const bitcoin = popup.page.getByRole('button', { name: 'Bitcoin', exact: true });
+  const bitcoin = popup.page.getByRole('button', { name: 'Wallet', exact: true });
 
   await ordinals.click();
   await openFirstGalleryShelf(popup.page);

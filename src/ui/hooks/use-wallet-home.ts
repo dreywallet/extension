@@ -23,20 +23,24 @@ export const LIVE_SCAN_POLL_INTERVAL_MS = 60_000;
 
 /** Popup-document lifetime only. Keyed by vault, session, and account. */
 const store = new Map<string, WalletHomeResult>();
+// Avoid starting the same background scan again after a tab remount or focus.
+const backgroundScans = new Map<string, number>();
 
 /** Drop every cached home result (lock, session end, or explicit teardown). */
 export function clearWalletHomeStore(): void {
   store.clear();
+  backgroundScans.clear();
 }
 
 export function useWalletHome(
   expectation: ActiveSessionExpectation | null,
   activeAccountId: string | null,
-  options: { continuous?: boolean } = {},
+  options: { continuous?: boolean; scanOnMount?: boolean; scanOnResume?: boolean } = {},
 ): {
   home: WalletHomeResult | null;
   status: 'loading' | 'ready' | 'error';
   refresh: () => void;
+  refreshScan: () => void;
 } {
   const rpc = useRpc();
   const expectedVaultId = expectation?.expectedVaultId ?? null;
@@ -49,6 +53,7 @@ export function useWalletHome(
   // Request generation: a vault switch changes `expectation`, and a slow
   // response from the previous vault must never land in the new vault's view.
   const generation = useRef(0);
+  const scopeKey = useRef(key);
   const homeRequest = useRef({ inFlight: false, queued: false });
   const scanRequest = useRef({ inFlight: false, token: 0 });
   const scanCheckQueued = useRef(false);
@@ -80,11 +85,12 @@ export function useWalletHome(
             setHome(res.result);
             setStatus('ready');
           } else {
-            // Never leave a seeded balance on screen behind an error: Home's
-            // retry affordance is gated on `home === null`, so keeping stale
-            // numbers would present them as current with no way to recover.
-            store.delete(key);
-            setHome(null);
+            // A failed background read does not erase the last display.
+            // Session loss still removes private data immediately.
+            if (res.code === 'ERR_LOCKED' || res.code === 'ERR_VAULT_NOT_FOUND' || res.code === 'ERR_VAULT_TAMPERED') {
+              store.delete(key);
+              setHome(null);
+            }
             setStatus('error');
           }
         })
@@ -142,8 +148,17 @@ export function useWalletHome(
   }, [expectedSessionId, expectedVaultId, rpc]);
   requestLiveScanRef.current = requestLiveScan;
 
+  const requestBackgroundScan = useCallback(() => {
+    if (document.visibilityState === 'hidden') return;
+    const last = backgroundScans.get(key);
+    if (last !== undefined && Date.now() - last < LIVE_SCAN_POLL_INTERVAL_MS) return;
+    backgroundScans.set(key, Date.now());
+    requestLiveScan();
+  }, [key, requestLiveScan]);
+
   useEffect(() => {
     generation.current += 1;
+    scopeKey.current = key;
     scanRequest.current = { inFlight: false, token: scanRequest.current.token + 1 };
     scanCheckQueued.current = false;
     scanFollowupRequested.current = false;
@@ -171,13 +186,18 @@ export function useWalletHome(
       });
     }
     refresh();
-    requestLiveScan();
+    if (options.scanOnMount !== false) requestBackgroundScan();
     const continuous = options.continuous !== false;
     const homeTimer = continuous ? setInterval(refresh, HOME_POLL_INTERVAL_MS) : null;
-    const scanTimer = continuous ? setInterval(requestLiveScan, LIVE_SCAN_POLL_INTERVAL_MS) : null;
+    const scanTimer = continuous ? setInterval(requestBackgroundScan, LIVE_SCAN_POLL_INTERVAL_MS) : null;
     const onMessage = (message: unknown): void => {
       if (isSessionStateChangedEvent(message)) {
-        if (message.locked) clearWalletHomeStore();
+        if (message.locked) {
+          clearWalletHomeStore();
+          generation.current += 1;
+          setHome(null);
+          setStatus('loading');
+        }
         return;
       }
       if (isScanProgressEvent(message)) {
@@ -200,7 +220,7 @@ export function useWalletHome(
       queueMicrotask(() => {
         resumeScheduled.current = false;
         refresh();
-        requestLiveScan();
+        if (options.scanOnResume !== false) requestBackgroundScan();
       });
     };
     chrome.runtime.onMessage.addListener(onMessage);
@@ -216,7 +236,7 @@ export function useWalletHome(
       window.removeEventListener('focus', onResume);
       document.removeEventListener('visibilitychange', onResume);
     };
-  }, [activeAccountId, key, options.continuous, refresh, requestLiveScan]);
+  }, [activeAccountId, key, options.continuous, options.scanOnMount, options.scanOnResume, refresh, requestBackgroundScan, requestLiveScan]);
 
   useEffect(() => {
     if (home?.dataGating.state === 'fresh' && home.scan.kind === 'completed') {
@@ -236,5 +256,9 @@ export function useWalletHome(
     }
   }, [home?.dataGating.state, home?.scan.kind, requestLiveScan]);
 
-  return { home, status, refresh };
+  return {
+    home: scopeKey.current === key ? home : store.get(key) ?? null,
+    status: scopeKey.current === key ? status : store.has(key) ? 'ready' as const : 'loading' as const,
+    refresh, refreshScan: requestLiveScan,
+  };
 }

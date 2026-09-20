@@ -208,9 +208,10 @@ describe('Home with live balances (§10.2)', () => {
 
   it('shows a fresh mainnet USD estimate and preserves exact sats as accessible detail', async () => {
     const now = Date.now();
+    let pendingPrice = false;
     installFakeChrome({
       'wallet.home': () => ({ ok: true, result: homeResult() }),
-      'price.quote': () => ({
+      'price.quote': () => pendingPrice ? new Promise(() => undefined) : ({
         ok: true,
         result: {
           instanceId: 'gateway-1',
@@ -234,7 +235,7 @@ describe('Home with live balances (§10.2)', () => {
         },
       }),
     });
-    render(
+    const first = render(
       <Providers>
         <Home activeAccountId={ACCOUNT_ID}
           gateway={{ ...connectedView, network: 'mainnet' }}
@@ -245,6 +246,12 @@ describe('Home with live balances (§10.2)', () => {
     );
     expect(await screen.findByText('≈ $205.56 USD')).toBeInTheDocument();
     expect(screen.getByText('205,556 sats')).toHaveAttribute('title', '0.00205556 BTC');
+    first.unmount();
+    pendingPrice = true;
+    render(<Providers><Home activeAccountId={ACCOUNT_ID}
+      gateway={{ ...connectedView, network: 'mainnet' }} expectation={EXPECTATION}
+      onReceive={() => undefined} /></Providers>);
+    expect(screen.getByText('≈ $205.56 USD')).toBeInTheDocument();
   });
 
   it('falls back to exact sats when the optional mainnet price is unavailable', async () => {
@@ -579,7 +586,7 @@ describe('Home with live balances (§10.2)', () => {
     expect(screen.queryByText('Available now')).not.toBeInTheDocument();
     expect(screen.queryByText('Syncing', { exact: true })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send Bitcoin' }));
     expect(onSend).not.toHaveBeenCalled();
     expect(screen.getByRole('status')).toHaveTextContent(
       'Syncing with Bitcoin. Sending will be available in a moment.',

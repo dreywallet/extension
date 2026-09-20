@@ -57,6 +57,8 @@ export function useAccountActivity(
   const [updated, setUpdated] = useState(false);
   const [historyComplete, setHistoryComplete] = useState(seeded?.historyComplete ?? true);
   const scopeKey = useRef(key);
+  const sessionKey = `${expectedVaultId}:${expectedSessionId}`;
+  const priorSession = useRef(sessionKey);
   const generation = useRef(0);
   const inFlight = useRef(false);
   const queuedRefresh = useRef(false);
@@ -127,10 +129,11 @@ export function useAccountActivity(
   }, [nextCursor, request]);
 
   useEffect(() => {
-    if (scopeKey.current !== key) {
+    if (priorSession.current !== sessionKey) {
       clearAccountActivityStore();
-      scopeKey.current = key;
+      priorSession.current = sessionKey;
     }
+    scopeKey.current = key;
     generation.current += 1;
     inFlight.current = false;
     queuedRefresh.current = false;
@@ -180,11 +183,11 @@ export function useAccountActivity(
       queuedRefresh.current = false;
       chrome.runtime.onMessage.removeListener(onMessage);
     };
-  }, [enabled, key]);
+  }, [enabled, key, sessionKey]);
 
   return {
-    items: scopeKey.current === key ? items : null,
-    loadState: scopeKey.current === key ? loadState : 'loading',
+    items: scopeKey.current === key ? items : seeded?.items ?? null,
+    loadState: scopeKey.current === key ? loadState : seeded ? 'ready' : 'loading',
     hasMore: scopeKey.current === key && nextCursor !== null,
     loadingOlder,
     refreshing,

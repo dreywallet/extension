@@ -685,6 +685,23 @@ describe('independent provider PSBT batch execution', () => {
     })).rejects.toThrow(/batch approval became stale/u);
     expect(staleChecks).toBe(3);
 
+    const liveNow = harness.clock.now;
+    let expiryChecks = 0;
+    await expect(harness.service.providerSignPreparedPsbtBatch(batch, () => {
+      if (++expiryChecks === 3) harness.clock.now = batch.expiresAt;
+    })).rejects.toThrow(/expired/u);
+    harness.clock.now = liveNow;
+
+    await expect(harness.service.providerSignPreparedPsbt(batch.items[0]!.plan, undefined, () => {
+      harness.clock.now = batch.items[0]!.plan.expiresAt;
+    })).rejects.toMatchObject({ code: 'ERR_PLAN_EXPIRED' });
+    harness.clock.now = liveNow;
+
+    await expect(harness.service.providerSignPreparedPsbt(batch.items[0]!.plan, undefined, () => {
+      queueMicrotask(() => { harness.clock.now = batch.items[0]!.plan.expiresAt; });
+    })).rejects.toMatchObject({ code: 'ERR_PLAN_EXPIRED' });
+    harness.clock.now = liveNow;
+
     const signed = await harness.service.providerSignPreparedPsbtBatch(batch);
     expect(signed).toHaveLength(2);
     expect(signed.every((item) =>

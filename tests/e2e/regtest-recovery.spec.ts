@@ -196,7 +196,7 @@ test('@extended restores real multi-account history, survives worker restart, an
     await popup.page.getByRole('button', { name: 'Active account' }).click();
     await popup.page.getByRole('menu', { name: 'Active account' })
       .getByRole('menuitemradio', { name: 'Account 1' }).click();
-    await popup.page.getByRole('button', { name: 'Bitcoin', exact: true }).click();
+    await popup.page.getByRole('button', { name: 'Wallet', exact: true }).click();
     await expect(popup.page.getByTestId('balance-card')).toContainText('200,000 sats', {
       timeout: 60_000,
     });
@@ -341,7 +341,7 @@ test('@extended continues a real boundary scan and spends a late receive address
     await fullpage.getByRole('button', { name: 'Manage coins' }).click();
     await fullpage.getByRole('checkbox', { name: coinSelectionName(selected) }).check();
     await expect(fullpage.getByText('1 selected · 95,000 sats')).toBeVisible();
-    await fullpage.getByRole('button', { name: 'Send', exact: true }).click();
+    await fullpage.getByRole('button', { name: 'Send selected', exact: true }).click();
     await expect(fullpage.getByText('1 manually selected inputs')).toBeVisible();
     const destination = await freshExternalAddress();
     await signPayment(fullpage, selected, destination, 40_000);

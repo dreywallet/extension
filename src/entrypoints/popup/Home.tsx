@@ -15,6 +15,8 @@ import { ActivityList } from './ActivityList';
 import { HomeCollectibles } from './HomeCollectibles';
 import { PopupIcon } from './PopupIcon';
 import { QuickAddresses } from './QuickAddresses';
+import { RunesEntry } from './Runes';
+import type { RuneListResult } from '../../messaging/rune-ops';
 import styles from './popup.module.css';
 
 /**
@@ -91,6 +93,7 @@ export function Home(props: {
   activeAccountId: string;
   onReceive: () => void;
   onSend?: () => void;
+  onRunes?: () => void;
   onManageUtxos?: () => void;
   onReviewWrongLane?: () => void;
   onViewOrdinals?: () => void;
@@ -100,6 +103,7 @@ export function Home(props: {
   const { t, lang } = useI18n();
   const { activityUnit } = useActivityUnit();
   const { amountsHidden, saveFailed, setAmountsHidden } = usePortfolioPrivacy();
+  const [runes, setRunes] = useState<RuneListResult | null>(null);
   const [protectionExpanded, setProtectionExpanded] = useState(false);
   const [showTransientIndexLag, setShowTransientIndexLag] = useState(false);
   const [showSendSyncNotice, setShowSendSyncNotice] = useState(false);
@@ -261,10 +265,13 @@ export function Home(props: {
             </span>
           ) : null}
         </div>
-        {status === 'error' && home === null ? (
+        {status === 'error' ? (
+          <>
+          {home ? <p className={styles['muted']} role="status">{t('runes.refreshFailed')}</p> : null}
           <Button variant="secondary" onClick={refresh}>
             {t('common.retry')}
           </Button>
+          </>
         ) : null}
         <QuickAddresses
           expectation={props.expectation}
@@ -361,10 +368,11 @@ export function Home(props: {
             props.onSend?.();
           }}
         >
-          {t('home.send')}
+          {t('runes.bitcoinSend')}
         </Button>
-        <Button onClick={props.onReceive}>{t('home.receive')}</Button>
+        <Button onClick={props.onReceive}>{t('runes.receiveBitcoin')}</Button>
       </div>
+      {props.onRunes ? <RunesEntry expectation={props.expectation} accountId={props.activeAccountId} onOpen={props.onRunes} onData={setRunes} /> : null}
       {showSendSyncNotice ? (
         <p role="status" className={styles['muted']}>
           {t('home.send.syncing')}
@@ -389,6 +397,7 @@ export function Home(props: {
         </div>
         <ActivityList
           activity={home?.activity ?? []}
+          runeTransfers={runes?.transfers}
           accountId={props.activeAccountId}
           compact
           expectation={props.expectation}

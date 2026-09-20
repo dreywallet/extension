@@ -17,6 +17,11 @@ import {
 } from '../../ui/utxo-presentation';
 import styles from './fullpage.module.css';
 
+/** Small closed groups stay mounted so reopening preserves row-local editing
+ * state. Large groups mount on demand so a wallet with many protected coins
+ * does not pay the React cost for rows the holder has not opened. */
+const LAZY_GROUP_THRESHOLD = 50;
+
 export interface UtxoGroupProps {
   group: UtxoGroupKey;
   count: number;
@@ -56,7 +61,7 @@ export function UtxoGroup(props: UtxoGroupProps): React.ReactElement {
             </Button>
           )}
         </div>
-        {props.children(open)}
+        {open || props.count <= LAZY_GROUP_THRESHOLD ? props.children(open) : null}
       </div>
     </details>
   );

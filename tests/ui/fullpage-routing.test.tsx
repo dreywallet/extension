@@ -86,6 +86,8 @@ describe('full-page routing', () => {
       view,
       fullpageViewFromHash(hash),
     ])).toEqual([
+      ['runes', 'runes'],
+      ['runesResume', 'runesResume'],
       ['settings', 'settings'],
       ['walletAccounts', 'walletAccounts'],
       ['accounts', 'accounts'],
@@ -103,6 +105,19 @@ describe('full-page routing', () => {
     ]);
     expect(fullpageViewFromHash('#/utxos')).toBe('settings');
     expect(fullpageViewFromHash('#/unknown')).toBe('settings');
+  });
+
+  it('opens Runes directly in the full page for the active wallet', async () => {
+    window.location.hash = FULLPAGE_HASH.runes;
+    installFakeChrome({
+      'session.snapshot': () => ({ ok: true, result: READY_SESSION }),
+      'runes.list': () => ({ ok: true, result: { status: 'ready', holdings: [], transfers: [], canSign: true, feeFundingSats: '0' } }),
+      'runes.draft': () => ({ ok: true, result: { draft: null } }),
+    });
+    render(<UiRoot sender="fullpage"><App /></UiRoot>);
+    expect(await screen.findByRole('heading', { name: 'Runes' })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: 'Settings' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Receive Runes' })).toBeEnabled();
   });
 
   it('renders Manage coins when opened through the protected-sats destination', async () => {

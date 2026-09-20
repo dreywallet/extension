@@ -64,6 +64,7 @@ export function utxoGroup(utxo: PresentableUtxo): UtxoGroupKey {
  * consequences of the head (a protected UTXO is also perpetually "stale").
  */
 const REASON_RANK: readonly string[] = [
+  'recovery_only',
   'dust_quarantined',
   'user_frozen',
   'not_cardinal_clean',
@@ -89,6 +90,7 @@ export function primaryReason(utxo: PresentableUtxo): string | null {
  */
 export function reasonKey(reason: string, classification: string): MessageKey {
   switch (reason) {
+    case 'recovery_only': return 'utxos.reason.recoveryOnly';
     case 'not_cardinal_clean':
       return isProtectedClass(classification)
         ? 'utxos.reason.protectedAsset'

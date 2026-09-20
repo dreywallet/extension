@@ -18,6 +18,7 @@
  *   gallery I/O is deliberately split into queued prepare and commit phases;
  *   the commit revalidates the exact authority snapshot before writing.
  */
+import { clearRuneSnapshot, loadRuneSnapshot, saveRuneSnapshot } from '../adapters/session/rune-snapshot';
 import { entropyToMnemonic, restoreMnemonic, generateMnemonic, mnemonicToSeed } from '@drey/core/domain/keys/mnemonic';
 import {
   createBackupMetadata,
@@ -28,6 +29,10 @@ import {
   type RecoveryWordCount,
 } from '@drey/core/domain/vault/backup-metadata';
 import { z } from 'zod';
+import { bindRuneEvidence, projectRuneHoldings, type RuneOutputsResponse, type RuneHistoryResponse } from '@drey/core/domain/runes/evidence';
+import { buildRuneTransferPlan, signRuneTransferPlan, validateRuneTransferRaw, type RuneTransferPlan } from '@drey/core/domain/runes/transfer';
+import type { RuneListRequest, RuneListResult, RunePrepareRequest, RuneApproveRequest, RuneCancelRequest, RuneVisibilityRequest, RuneReview, RuneTransferView } from '../messaging/rune-ops';
+import { runeJournalSchema, runePreferencesSchema, runeJournalHoldsInputs, type RuneJournal } from './rune-journal';
 import { deriveAccountNode, deriveAddress, type Network } from '@drey/core/domain/keys/derivation';
 import {
   ACCOUNT_GAP_LIMIT,
@@ -45,7 +50,7 @@ import {
   type AccountSigningSourceV1,
 } from '@drey/core/domain/accounts/signing-source';
 import { restoreOccupiedStandardAccounts } from '@drey/core/domain/accounts/visibility';
-import { Transaction } from '@scure/btc-signer';
+import { Transaction, NETWORK as BITCOIN_NETWORK, TEST_NETWORK as BITCOIN_TEST_NETWORK } from '@scure/btc-signer';
 import { base64ToBytes, bytesToBase64, bytesToHex, hexToBytes } from '@drey/core/domain/vault/encoding';
 import type { Argon2idParams, VaultPayloadV1, VaultRecordV1 } from '@drey/core/domain/vault/record';
 import {
@@ -305,7 +310,7 @@ import { summarizeBalances } from '@drey/core/domain/classification/balances';
 import { laneState } from '@drey/core/domain/classification/lanes';
 import { deriveDataGating, type DataGating } from '@drey/core/domain/classification/staleness';
 import type { WalletUtxo } from '@drey/core/domain/classification/types';
-import { outpointKey } from '@drey/core/domain/classification/types';
+import { isRecoveryOnlyUtxo, outpointKey } from '@drey/core/domain/classification/types';
 import { evaluateEligibility, type EligibilityContext } from '@drey/core/domain/classification/eligibility';
 import { labelGroupKey } from '@drey/core/domain/classification/labels';
 import { walletPrivacyNotes } from '@drey/core/domain/classification/privacy-signals';
@@ -358,7 +363,16 @@ import {
   type ScanStatusView,
   type ScanUnit,
 } from '@drey/core/scan/scan-state';
-import { scanUnit as runScanUnit, type ScanUnitPorts, type ScanUnitResult } from '@drey/core/scan/scan-engine';
+import {
+  scanUnit as runScanUnit,
+  type LocalChangeClaim,
+  type ScanUnitPorts,
+  type ScanUnitResult,
+} from '@drey/core/scan/scan-engine';
+import {
+  deriveLocalChangeClaims,
+  type LocalTransactionJournalEntry,
+} from '@drey/core/scan/change-claims';
 import {
   buildAccountKeyRing,
   buildPublicAccountKeyRing,
@@ -1137,6 +1151,9 @@ export function reconcileTrackedTransactionStatus(
 }
 
 export class WalletService {
+  private runeGatewayEpoch = 0;
+  private runeReconcileCursor = new Map<string, number>();
+  private runePlans = new Map<string, { plan: RuneTransferPlan; vaultId: string; sessionId: string; approving: boolean; cancelled: boolean; dispatched: boolean }>();
   /** Serialization queue for storage/session critical sections. */
   private tail: Promise<unknown> = Promise.resolve();
 
@@ -1265,6 +1282,7 @@ export class WalletService {
 
   /** Every path that ends the current session must also drop its scan state. */
   private async clearSessionAndScanState(): Promise<void> {
+    this.runePlans.clear();
     this.resetScanState();
     this.nativeInscriptionPreviews.clear();
     this.galleryMediaLeases.clear();
@@ -1278,6 +1296,7 @@ export class WalletService {
       await Promise.all([
         clearCachedGallery(this.deps.session),
         clearHomeSnapshot(this.deps.session),
+        clearRuneSnapshot(this.deps.session),
       ]);
     } catch {
       // Nothing further to do: the session is already gone, and retained UI
@@ -1382,6 +1401,7 @@ export class WalletService {
   }
 
   async lock(): Promise<{ locked: true }> {
+    this.runePlans.clear();
     return this.runExclusive(async () => {
       await this.clearSessionAndScanState();
       this.notifySessionChanged(true);
@@ -2169,6 +2189,7 @@ export class WalletService {
   }
 
   async setActiveAccount(input: ActiveAccountSetRequest): Promise<{ accountId: string; account: number }> {
+    this.runePlans.clear();
     return this.runExclusive(() => this.withSessionDek(input, async (dek, session) => {
       const config = await loadConfig(this.deps.local);
       const meta = await this.loadAccountsMetaLocked(dek, session.vaultId);
@@ -4536,6 +4557,7 @@ export class WalletService {
           const seed = hexToBytes(openVaultPayload(record, dek).seedHex);
           try {
             guard?.();
+            if (this.deps.vaultDeps.now() >= plan.expiresAt) throw new RpcError('ERR_PLAN_EXPIRED');
             const signed = signProviderPsbtPlan({
               plan,
               seed,
@@ -4543,6 +4565,7 @@ export class WalletService {
               random: (length) => this.deps.vaultDeps.random(length),
             });
             await this.persistMarketplaceSignedLocked(dek, plan, signed.psbtBase64);
+            if (this.deps.vaultDeps.now() >= plan.expiresAt) throw new RpcError('ERR_PLAN_EXPIRED');
             return signed;
           } finally {
             zeroize(seed);
@@ -4607,7 +4630,7 @@ export class WalletService {
             return await signProviderPsbtBatchPlan({
               plan,
               seed,
-              now: this.deps.vaultDeps.now(),
+              now: () => this.deps.vaultDeps.now(),
               random: (length) => this.deps.vaultDeps.random(length),
               ...(guard === undefined ? {} : { guard }),
               // A timer task lets queued port, window, lock, and account events
@@ -4682,6 +4705,7 @@ export class WalletService {
               signed.results,
               guard,
             );
+            if (this.deps.vaultDeps.now() >= plan.expiresAt) throw new RpcError('ERR_PLAN_EXPIRED');
             return signed.results.map(({ psbtBase64 }) => ({ psbtBase64 }));
           } finally {
             zeroize(seed);
@@ -4960,12 +4984,14 @@ export class WalletService {
     if (!freshEnough) {
       const result = await gateway.fetchStatus();
       if (result.ok) {
+        if (!cached || this.runeStatusAuthority(cached.status) !== this.runeStatusAuthority(result.status)) this.runeGatewayEpoch += 1;
         cached = { status: result.status, verifiedAtMs: result.verifiedAtMs, endpoint: gateway.endpoint };
         await saveCachedStatus(this.deps.session, cached);
         this.gatewayLastFailure = null;
       } else {
         // Keep the prior verified snapshot; the view degrades by age.
         this.gatewayLastFailure = result.reason;
+        if (HARD_GATEWAY_VERIFICATION_FAILURES.has(result.reason)) this.runeGatewayEpoch += 1;
       }
     }
     return {
@@ -5215,6 +5241,10 @@ export class WalletService {
           );
           burned.set(unitKey(unit), state?.nextChangeIndex ?? 0);
         }
+        const localChangeClaims = deriveLocalChangeClaims(
+          await this.loadTransactionJournalLocked(dek, session.vaultId),
+          this.deps.network,
+        ) ?? [];
         // Persist the initial work queue before the first gateway request is
         // allowed to start. MV3 may terminate the worker at any await point;
         // without this checkpoint, termination during the first snapshot
@@ -5254,6 +5284,7 @@ export class WalletService {
           startedAt,
           ring,
           burned,
+          localChangeClaims,
         };
       }),
     );
@@ -5856,6 +5887,393 @@ export class WalletService {
       lockedOutpoints: [...lockedOutpoints].sort(),
       encryptedRecord,
     }, (_key, value: unknown) => typeof value === 'bigint' ? `bigint:${value}` : value);
+  }
+
+  private async runeJournalsLocked(dek: Uint8Array, vaultId: string): Promise<RuneJournal[]> {
+    const cache = this.requireCache(); const result: RuneJournal[] = [];
+    for (const id of await cache.listKeys(vaultId, this.deps.network, 'runeTransfers')) {
+      const record = await cache.get(this.cacheKey(vaultId, 'runeTransfers', id));
+      if (record) result.push(runeJournalSchema.parse(openRecord(dek, record, runeJournalSchema)));
+    }
+    return result;
+  }
+
+  private async runeLocalStateLocked(dek: Uint8Array, session: UnlockSession, input: RuneListRequest, ownPlanId?: string, ownJournalTxid?: string) {
+    const gatewayEpoch = this.runeGatewayEpoch;
+    const meta = await this.loadAccountsMetaLocked(dek, session.vaultId);
+    if (meta.activePublicAccountId !== input.accountId) throw new RpcError('ERR_PLAN_CHANGED');
+    const gateway = this.deps.gateway;
+    const cached = gateway ? await loadCachedStatus(this.deps.session, gateway.endpoint, gateway.protocolVersions) : null;
+    if (!gateway || !cached) throw new RpcError('ERR_GATEWAY_UNAVAILABLE');
+    const definition = await this.loadPublicAccountDefinitionLocked(dek, session.vaultId, input.accountId);
+    const utxos = (await this.loadAllUtxosLocked(dek, session.vaultId)).filter((item) => item.accountId === input.accountId);
+    if (ownPlanId) {
+      const own = this.runePlans.get(ownPlanId);
+      if (!own || own.cancelled || own.dispatched || own.vaultId !== session.vaultId || own.sessionId !== session.sessionId || own.plan.accountId !== input.accountId) throw new RpcError('ERR_PLAN_CHANGED');
+    }
+    const reserved = await this.loadLockedOutpointsLocked(dek, session.vaultId, ownPlanId, ownJournalTxid);
+    const source = await this.accountSigningSourceLocked(dek, session.vaultId, input.accountId);
+    await this.peekExpectedSession(input);
+    if (gatewayEpoch !== this.runeGatewayEpoch || (this.gatewayLastFailure !== null && HARD_GATEWAY_VERIFICATION_FAILURES.has(this.gatewayLastFailure))) throw new RpcError('ERR_DATA_STALE');
+    return { publicAccount: definition, utxos, cached, gatewayEpoch,
+      canSign: source.kind === 'software' && source.vaultId === session.vaultId,
+      context: { network: this.deps.network, accountId: input.accountId,
+        instanceId: cached.status.instanceId, classificationRevision: cached.status.activeRevision,
+        tip: cached.status.coreTip, nowMs: this.deps.vaultDeps.now(),
+        scanComplete: meta.lastCompletedScanId !== null && !meta.hasConflictingSources && this.scanRun === null && this.scanStarting === null,
+        reservedOutpoints: reserved },
+      freshness: evaluateFreshness(cached.status, this.deps.vaultDeps.now(), cached.verifiedAtMs),
+    };
+  }
+
+  private runeStatusAuthority(status: StatusCapabilities): string {
+    // Fresh envelope timestamps/nonces and signatures do not change authority.
+    const { timestamp, requestNonce, signature, serverTime, mempoolObservedAt, ...authority } = status;
+    void timestamp; void requestNonce; void signature; void serverTime; void mempoolObservedAt;
+    return JSON.stringify(authority);
+  }
+
+  private runeAuthorityFingerprint(current: Awaited<ReturnType<WalletService['runeLocalStateLocked']>>): string {
+    return this.galleryAuthorityFingerprint(current.publicAccount,
+      { status: this.runeStatusAuthority(current.cached.status), gatewayEpoch: current.gatewayEpoch,
+        canSign: current.canSign, scanComplete: current.context.scanComplete },
+      current.utxos, current.context.reservedOutpoints, null);
+  }
+
+  private async runeRecheckLocked(dek: Uint8Array, session: UnlockSession, input: RuneListRequest,
+    expected: Awaited<ReturnType<WalletService['runeLocalStateLocked']>>, ownPlanId?: string, ownJournalTxid?: string) {
+    const current = await this.runeLocalStateLocked(dek, session, input, ownPlanId, ownJournalTxid);
+    if (this.runeAuthorityFingerprint(current) !== this.runeAuthorityFingerprint(expected)) throw new RpcError('ERR_PLAN_CHANGED');
+    return current;
+  }
+
+  private async runeCurrent(input: RuneListRequest, ownPlanId?: string) {
+    const view = await this.gatewayStatus({ forceRefresh: true });
+    const prepared = await this.runExclusive(() => this.withSessionDek(input, (dek, session) =>
+      this.runeLocalStateLocked(dek, session, input, ownPlanId)));
+    // Startup/refresh scans are expected transient states, not internal faults.
+    if (!prepared.context.scanComplete) throw new RpcError('ERR_DATA_STALE');
+    const responses: RuneOutputsResponse[] = [];
+    if (prepared.utxos.length > 2000) throw new RpcError('ERR_DATA_STALE');
+    for (let offset = 0; offset < Math.max(1, prepared.utxos.length); offset += 200) {
+      const response = await this.deps.gateway!.fetchRuneOutputs({ network: this.deps.network,
+        outpoints: prepared.utxos.slice(offset, offset + 200).map((item) => item.outpoint) });
+      if (!response.ok) throw new RpcError('ERR_GATEWAY_UNAVAILABLE');
+      responses.push(response.value);
+    }
+    const current = await this.runExclusive(() => this.withSessionDek(input, (dek, session) =>
+      this.runeRecheckLocked(dek, session, input, prepared, ownPlanId)));
+    try { return { ...current, view, evidence: bindRuneEvidence(current.utxos, responses, current.context) }; }
+    catch { throw new RpcError('ERR_DATA_STALE'); }
+  }
+
+  async runeSnapshot(input: RuneListRequest): Promise<{ data: RuneListResult | null }> {
+    return this.runExclusive(async () => {
+      const session = await this.requireSession(input);
+      return { data: await loadRuneSnapshot(this.deps.session, { vaultId: session.vaultId, sessionId: session.sessionId, accountId: input.accountId }) };
+    });
+  }
+
+  private async retainRuneDisplay(input: RuneListRequest, data: RuneListResult): Promise<void> {
+    await this.runExclusive(() => this.withSessionDek(input, async (dek, session) => {
+      if ((await this.loadAccountsMetaLocked(dek, session.vaultId)).activePublicAccountId !== input.accountId) return;
+      await saveRuneSnapshot(this.deps.session, { vaultId: session.vaultId, sessionId: session.sessionId, accountId: input.accountId }, data);
+    })).catch(() => undefined);
+  }
+
+  async runeList(input: RuneListRequest): Promise<RuneListResult> {
+    const saved = await this.runExclusive(() => this.withSessionDek(input, async (dek, session) => {
+      if ((await this.loadAccountsMetaLocked(dek, session.vaultId)).activePublicAccountId !== input.accountId) throw new RpcError('ERR_PLAN_CHANGED');
+      const record = await this.requireCache().get(this.cacheKey(session.vaultId, 'runePreferences', input.accountId));
+      const hidden = record ? openRecord(dek, record, runePreferencesSchema).hidden : [];
+      const transfers = (await this.runeJournalsLocked(dek, session.vaultId)).filter((item) => item.accountId === input.accountId && item.dispatchState === 'dispatched');
+      const source = await this.accountSigningSourceLocked(dek, session.vaultId, input.accountId);
+      return { hidden, history: await this.loadHistoryLocked(dek, session.vaultId, input.accountId),
+        transfers: transfers.map(({ txid, rune, amount, recipient, status, createdAt }) => ({ txid, rune, amount, recipient, status, createdAt, direction: 'sent' as const })), canSign: source.kind === 'software' };
+    }));
+    try {
+      const current = await this.runeCurrent(input);
+      const holdings = projectRuneHoldings(current.utxos, current.evidence, current.context.reservedOutpoints)
+        .map((item) => ({ ...item, hidden: saved.hidden.includes(item.id) }));
+      const clean = current.utxos.filter((utxo) => utxo.lane === 'payment' && evaluateEligibility(utxo, {
+        freshness: current.freshness, activeRevision: current.context.classificationRevision,
+        lockedOutpoints: current.context.reservedOutpoints, marginalFeeSatsFor: () => 0n,
+      }).eligible).reduce((sum, utxo) => sum + utxo.valueSats, 0n);
+      // Publish verified holdings before the independent historical lookup finishes.
+      const prior = await this.runeSnapshot(input);
+      await this.retainRuneDisplay(input, { status: 'ready', holdings, transfers: prior.data?.transfers ?? saved.transfers,
+        historyComplete: prior.data?.historyComplete ?? false, canSign: current.canSign, feeFundingSats: clean.toString() });
+      const history = await this.readRuneHistory(input, current, saved.history).catch(() => null);
+      if (history) {
+        await this.reconcileRunes(input, history).catch(() => undefined);
+        for (const transfer of saved.transfers) {
+          const result = history.reconciliation.find((result) => result.txid === transfer.txid);
+          if (result) transfer.status = result.status;
+        }
+      }
+      const sentIds = new Set(saved.transfers.map((entry) => entry.txid));
+      const receipts = new Map<string, RuneTransferView>();
+      const historicalOutpoints = new Set<string>();
+      const scriptAddress = (script: string) => {
+        try {
+        const tx = new Transaction({ allowUnknownOutputs: true }); tx.addOutput({ script: hexToBytes(script), amount: 0n });
+        return tx.getOutputAddress(0, this.deps.network === 'mainnet' ? BITCOIN_NETWORK : this.deps.network === 'regtest' ? { ...BITCOIN_TEST_NETWORK, bech32: 'bcrt' } : BITCOIN_TEST_NETWORK) ?? '';
+        } catch { return ''; }
+      };
+      for (const effect of history?.effects ?? []) {
+        const ownedInputs = effect.inputs.filter((item) => history!.requestedScriptHashes.includes(scriptHashFromScriptPubKey(item.scriptPubKey)) && item.amount !== '0');
+        if (ownedInputs.length) {
+          sentIds.add(effect.txid);
+          if (!saved.transfers.some((item) => item.txid === effect.txid)) {
+            const recipient = effect.outputs.find((item) => item.vout === 1)!;
+            saved.transfers.push({ txid: effect.txid, rune: { ...effect.rune, amount: recipient.amount }, amount: recipient.amount,
+              recipient: scriptAddress(recipient.scriptPubKey), status: effect.status, direction: 'sent', createdAt: effect.timestamp ? Date.parse(effect.timestamp) : 0 });
+          }
+        } else {
+          for (const output of effect.outputs) {
+            if (!history!.requestedScriptHashes.includes(scriptHashFromScriptPubKey(output.scriptPubKey))) continue;
+            historicalOutpoints.add(`${effect.txid}:${output.vout}`);
+            const key = `${effect.txid}:${effect.rune.id}`; const prior = receipts.get(key);
+            const amount = String(BigInt(prior?.amount ?? '0') + BigInt(output.amount));
+            receipts.set(key, { txid: effect.txid, rune: { ...effect.rune, amount }, amount, recipient: scriptAddress(output.scriptPubKey),
+              status: effect.status, direction: 'received', createdAt: effect.timestamp ? Date.parse(effect.timestamp) : 0 });
+          }
+        }
+      }
+      for (const receipt of history?.receipts ?? []) {
+        if (!history!.requestedScriptHashes.includes(scriptHashFromScriptPubKey(receipt.scriptPubKey))) continue;
+        if (sentIds.has(receipt.txid) || historicalOutpoints.has(outpointKey(receipt))) continue;
+        historicalOutpoints.add(outpointKey(receipt));
+        const key = `${receipt.txid}:${receipt.rune.id}`; const prior = receipts.get(key);
+        const amount = String(BigInt(prior?.amount ?? '0') + BigInt(receipt.rune.amount));
+        receipts.set(key, { txid: receipt.txid, rune: { ...receipt.rune, amount }, amount, recipient: scriptAddress(receipt.scriptPubKey),
+          status: 'confirmed', direction: 'received', createdAt: receipt.timestamp ? Date.parse(receipt.timestamp) : 0 });
+      }
+      for (const utxo of current.utxos) {
+        if (sentIds.has(utxo.outpoint.txid) || historicalOutpoints.has(outpointKey(utxo.outpoint))) continue;
+        const output = current.evidence.get(outpointKey(utxo.outpoint));
+        for (const rune of output?.balances ?? []) {
+          const key = `${utxo.outpoint.txid}:${rune.id}`;
+          const prior = receipts.get(key);
+          const amount = (BigInt(prior?.amount ?? '0') + BigInt(rune.amount)).toString();
+          const timestamp = saved.history.find((item) => item.txid === utxo.outpoint.txid)?.timestamp;
+          receipts.set(key, { txid: utxo.outpoint.txid, rune: { ...rune, amount }, amount,
+            direction: 'received', recipient: derivePublicAccountAddress(current.publicAccount, utxo.lane, utxo.chain, utxo.addressIndex).address,
+            status: utxo.height === null ? 'pending' : 'confirmed', createdAt: timestamp ? Date.parse(timestamp) : 0 });
+        }
+      }
+      const result: RuneListResult = { status: 'ready', historyComplete: history?.historyComplete ?? (saved.history.length === 0 && saved.transfers.length === 0 && current.utxos.length === 0), holdings, transfers: [...saved.transfers, ...receipts.values()]
+        .sort((a, b) => b.createdAt - a.createdAt || a.txid.localeCompare(b.txid)).slice(0, 1000),
+        canSign: current.canSign, feeFundingSats: clean.toString() };
+      await this.retainRuneDisplay(input, result);
+      return result;
+    } catch {
+      return { status: this.scanRun !== null || this.scanStarting !== null ? 'checking' : 'unavailable', holdings: [], transfers: saved.transfers, canSign: saved.canSign, feeFundingSats: '0' };
+    }
+  }
+
+  async runeDraft(input: RuneListRequest & { draft?: import('../messaging/rune-ops').RuneDraft | null }) {
+    return this.runExclusive(() => this.withSessionDek(input, async (dek, session) => {
+      if ((await this.loadAccountsMetaLocked(dek, session.vaultId)).activePublicAccountId !== input.accountId) throw new RpcError('ERR_PLAN_CHANGED');
+      const key = this.cacheKey(session.vaultId, 'runePreferences', input.accountId);
+      const record = await this.requireCache().get(key);
+      const prefs = record ? openRecord(dek, record, runePreferencesSchema) : { hidden: [] };
+      if (input.draft !== undefined) await this.requireCache().put(sealRecord(dek, { ...prefs, draft: input.draft }, key, this.deps.vaultDeps.random(24), this.deps.vaultDeps.now()));
+      return { draft: input.draft === undefined ? prefs.draft ?? null : input.draft };
+    }));
+  }
+
+  async runeVisibility(input: RuneVisibilityRequest): Promise<{ updated: true }> {
+    return this.runExclusive(() => this.withSessionDek(input, async (dek, session) => {
+      const key = this.cacheKey(session.vaultId, 'runePreferences', input.accountId);
+      const record = await this.requireCache().get(key);
+      const hidden = new Set(record ? openRecord(dek, record, runePreferencesSchema).hidden : []);
+      if (input.hidden) hidden.add(input.runeId); else hidden.delete(input.runeId);
+      await this.requireCache().put(sealRecord(dek, runePreferencesSchema.parse({ ...(record ? openRecord(dek, record, runePreferencesSchema) : {}), hidden: [...hidden] }), key, this.deps.vaultDeps.random(24), this.deps.vaultDeps.now()));
+      return { updated: true };
+    }));
+  }
+
+  async runePrepare(input: RunePrepareRequest): Promise<RuneReview> {
+    const current = await this.runeCurrent(input);
+    if (!current.canSign) throw new RpcError('ERR_UNSAFE_TRANSACTION');
+    payableRecipient(input.recipient, this.deps.network);
+    return this.runExclusive(() => this.withSessionDek(input, async (dek, session) => {
+      Object.assign(current, await this.runeRecheckLocked(dek, session, input, current));
+      await this.assertSpendingFreshLocked(dek, session.vaultId, current.view, 'native_send');
+      const payment = await this.reserveOutputLocked(session.vaultId, current.publicAccount, 'payment', current.publicAccount.derivationAccountIndex, 'payment_change');
+      const ordinal = await this.reserveOutputLocked(session.vaultId, current.publicAccount, 'ordinals', current.publicAccount.derivationAccountIndex, 'ordinal_change');
+      Object.assign(current, await this.runeRecheckLocked(dek, session, input, current));
+      const plan = buildRuneTransferPlan({ ...current, planId: this.deps.newSessionId(), runeId: input.runeId,
+        amount: input.amount, recipient: input.recipient, feeRateSatPerKvB: parseCustomFeeRate(input.feeRate).satPerKvB,
+        paymentChangeIndex: payment.derivation.index, ordinalChangeIndex: ordinal.derivation.index });
+      this.runePlans.set(plan.planId, { plan, vaultId: session.vaultId, sessionId: session.sessionId, approving: false, cancelled: false, dispatched: false });
+      return { planId: plan.planId, planHash: plan.planHash, rune: { ...plan.rune, amount: plan.amount },
+        recipient: plan.recipient, amount: plan.amount, retained: plan.retainedAmount,
+        feeSats: plan.feeSats.toString(), postageSats: '546',
+        changeSats: plan.outputs.filter((output) => output.role === 'payment_change').reduce((sum, output) => sum + output.valueSats, 0n).toString(),
+        feeRate: input.feeRate, expiresAt: plan.expiresAt, requiresReauth: (await loadConfig(this.deps.local)).highSecurityMode || plan.feeSats > 100_000n };
+    }));
+  }
+
+  async runeCancel(input: RuneCancelRequest): Promise<{ cancelled: true }> {
+    // Invalidate synchronously: password verification/cache writes may be
+    // awaiting inside the storage queue. Cancellation must win before dispatch.
+    const entry = this.runePlans.get(input.planId);
+    if (entry && entry.vaultId === input.expectedVaultId && entry.sessionId === input.expectedSessionId && entry.plan.accountId === input.accountId) {
+      if (entry.dispatched) throw new RpcError('ERR_PLAN_CHANGED');
+      entry.cancelled = true;
+    }
+    return this.runExclusive(async () => {
+      await this.requireSession(input);
+      if (entry && this.runePlans.get(input.planId) === entry && entry.cancelled && !entry.dispatched) this.runePlans.delete(input.planId);
+      return { cancelled: true };
+    });
+  }
+
+  async runeApprove(input: RuneApproveRequest): Promise<RuneTransferView> {
+    const stored = await this.runExclusive(async () => {
+      const session = await this.requireSession(input); const entry = this.runePlans.get(input.planId);
+      if (!entry || entry.approving || entry.cancelled || entry.dispatched || entry.vaultId !== session.vaultId || entry.sessionId !== session.sessionId || entry.plan.accountId !== input.accountId || entry.plan.planHash !== input.planHash) throw new RpcError('ERR_PLAN_CHANGED');
+      entry.approving = true; return entry;
+    });
+    try {
+      const current = await this.runeCurrent(input, input.planId);
+      const journal = await this.runExclusive(() => this.withSessionDek(input, async (dek, session) => {
+        Object.assign(current, await this.runeRecheckLocked(dek, session, input, current, input.planId));
+        if (this.runePlans.get(input.planId) !== stored || !current.canSign) throw new RpcError('ERR_PLAN_CHANGED');
+        await this.assertSpendingFreshLocked(dek, session.vaultId, current.view, 'native_send');
+        const config = await loadConfig(this.deps.local);
+        const vault = (await loadVaults(this.deps.local))[session.vaultId];
+        if (!vault) throw new RpcError('ERR_VAULT_NOT_FOUND');
+        if (config.highSecurityMode || stored.plan.feeSats > 100_000n) {
+          if (!input.password) throw new RpcError('ERR_WRONG_PASSWORD');
+          await this.verifyAppPassword(vault, input.password);
+        }
+        Object.assign(current, await this.runeRecheckLocked(dek, session, input, current, input.planId));
+        if (this.runePlans.get(input.planId) !== stored || stored.cancelled || current.gatewayEpoch !== this.runeGatewayEpoch) throw new RpcError('ERR_PLAN_CHANGED');
+        const seed = hexToBytes(openVaultPayload(vault, dek).seedHex);
+        try {
+          const signed = signRuneTransferPlan(stored.plan, seed, (length) => this.deps.vaultDeps.random(length), current);
+          validateRuneTransferRaw(stored.plan, signed.transactionHex, current);
+          const entry: RuneJournal = { version: 1, accountId: input.accountId, txid: signed.txid,
+            rune: { ...stored.plan.rune, amount: stored.plan.amount }, amount: stored.plan.amount,
+            recipient: stored.plan.recipient, createdAt: this.deps.vaultDeps.now(), status: 'indeterminate',
+            dispatchState: 'prepared', resolution: null,
+            transactionHex: signed.transactionHex, inputKeys: stored.plan.inputs.map((item) => `${item.txid}:${item.vout}`),
+            scriptHashes: [...new Set(stored.plan.inputs.map((item) => scriptHashFromScriptPubKey(item.scriptPubKey)))] };
+          await this.requireCache().put(sealRecord(dek, entry, this.cacheKey(session.vaultId, 'runeTransfers', signed.txid), this.deps.vaultDeps.random(24), this.deps.vaultDeps.now()));
+          return { entry, signed };
+        } finally { zeroize(seed); }
+      }));
+      const dispatched = await this.runExclusive(() => this.withSessionDek(input, async (dek, session) => {
+        try {
+          Object.assign(current, await this.runeRecheckLocked(dek, session, input, current, input.planId, journal.entry.txid));
+          validateRuneTransferRaw(stored.plan, journal.signed.transactionHex, current);
+          if (current.cached.status.protocolVersion !== 2) throw new RpcError('ERR_GATEWAY_UNAVAILABLE');
+          const entry: RuneJournal = { ...journal.entry, dispatchState: 'dispatched' };
+          await this.requireCache().put(sealRecord(dek, entry, this.cacheKey(session.vaultId, 'runeTransfers', entry.txid), this.deps.vaultDeps.random(24), this.deps.vaultDeps.now()));
+          // Persist the uncertain outcome before the one possible dispatch, then
+          // recheck current authority after the asynchronous durable write.
+          Object.assign(current, await this.runeRecheckLocked(dek, session, input, current, input.planId, entry.txid));
+          validateRuneTransferRaw(stored.plan, journal.signed.transactionHex, current);
+          await this.peekExpectedSession(input);
+          if (this.runePlans.get(input.planId) !== stored || stored.cancelled || stored.dispatched || current.gatewayEpoch !== this.runeGatewayEpoch) throw new RpcError('ERR_PLAN_CHANGED');
+          stored.dispatched = true;
+          const responsePromise = this.deps.gateway!.broadcastRuneTransaction({ network: this.deps.network,
+            transactionHex: journal.signed.transactionHex, txid: journal.signed.txid, wtxid: journal.signed.wtxid,
+            customFeeRateSatPerKvB: Number(stored.plan.feeRateSatPerKvB), status: current.cached.status,
+            runeIntent: { runeId: stored.plan.rune.id, amount: stored.plan.amount,
+              recipientScript: stored.plan.outputs.find((output) => output.role === 'recipient')!.scriptPubKey,
+              tokenChangeScript: stored.plan.outputs.find((output) => output.role === 'rune_change')?.scriptPubKey ?? null } });
+          return { responsePromise, entry };
+        } catch (error) {
+          // This exact call knows dispatch has not happened. A crash after the
+          // dispatched marker instead remains conservatively indeterminate.
+          if (!stored.dispatched) await this.requireCache().delete(this.cacheKey(session.vaultId, 'runeTransfers', journal.entry.txid));
+          throw error;
+        }
+      }));
+      const response = await dispatched.responsePromise.catch(() => ({ ok: false as const }));
+      const matched = response.ok && response.value.submittedTxid === journal.signed.txid && response.value.submittedWtxid === journal.signed.wtxid;
+      const state = matched && ['accepted', 'already_known'].includes(response.value.status) ? 'pending' :
+        matched && response.value.status === 'confirmed' ? 'confirmed' :
+          matched && response.value.status === 'conflicted' ? 'conflicted' : 'indeterminate';
+      // Broadcast results do not release reservations: a current signed read
+      // must prove the confirmed/conflicted state on the active chain.
+      const updated = { ...dispatched.entry, status: state } satisfies RuneJournal;
+      await this.runExclusive(() => this.withSessionDek(input, async (dek, session) => {
+        const key = this.cacheKey(session.vaultId, 'runeTransfers', updated.txid);
+        const latestRecord = await this.requireCache().get(key);
+        const latest = latestRecord ? runeJournalSchema.parse(openRecord(dek, latestRecord, runeJournalSchema)) : null;
+        if (latest?.resolution) return;
+        await this.requireCache().put(sealRecord(dek, updated, key, this.deps.vaultDeps.random(24), this.deps.vaultDeps.now()));
+      })).catch(() => undefined);
+      this.deps.notifyWalletDataChanged?.('transaction');
+      return { txid: updated.txid, rune: updated.rune, amount: updated.amount, recipient: updated.recipient, status: updated.status, createdAt: updated.createdAt, direction: 'sent' };
+    } finally { this.runePlans.delete(input.planId); }
+  }
+
+  private async readRuneHistory(input: RuneListRequest,
+    current: Awaited<ReturnType<WalletService['runeCurrent']>>, history: LaneAwareHistoryEntry[]): Promise<RuneHistoryResponse | null> {
+    const gateway = this.deps.gateway;
+    if (!gateway?.fetchRuneHistory) return null;
+    const entries = await this.runExclusive(() => this.withSessionDek(input, async (dek, session) =>
+      (await this.runeJournalsLocked(dek, session.vaultId)).filter((entry) => entry.accountId === input.accountId && entry.dispatchState === 'dispatched' && runeJournalHoldsInputs(entry, current.cached.status))));
+    const cursorKey = `${input.expectedVaultId}:${input.accountId}`;
+    const start = (this.runeReconcileCursor.get(cursorKey) ?? 0) % Math.max(1, entries.length);
+    const selected: RuneJournal[] = []; const hashes = new Set<string>();
+    for (let index = 0; index < entries.length && selected.length < 8; index++) {
+      const entry = entries[(start + index) % entries.length]!;
+      if (new Set([...hashes, ...entry.scriptHashes]).size > 200) break;
+      selected.push(entry); entry.scriptHashes.forEach((hash) => hashes.add(hash));
+    }
+    this.runeReconcileCursor.set(cursorKey, (start + Math.max(1, selected.length)) % Math.max(1, entries.length));
+    const knownHashes = new Set([...history.flatMap((item) => [...item.spentScriptHashes, ...item.fundedScriptHashes]),
+      ...current.utxos.map((item) => scriptHashFromScriptPubKey(item.scriptPubKey))]);
+    for (const hash of knownHashes) if (hashes.size < 200) hashes.add(hash);
+    if (!hashes.size) return null;
+    const response = await gateway.fetchRuneHistory({ network: this.deps.network, scriptHashes: [...hashes],
+      transactions: selected.map(({ txid, transactionHex }) => ({ txid, wtxid: transactionWtxid(transactionHex), transactionHex })) });
+    if (!response.ok) return null;
+    const snapshot = response.value;
+    const age = this.deps.vaultDeps.now() - Date.parse(snapshot.timestamp);
+    if ([...snapshot.requestedScriptHashes].sort().join(':') !== [...hashes].sort().join(':') ||
+      snapshot.reconciliation.length !== selected.length || snapshot.reconciliation.some((entry) => !selected.some((saved) => saved.txid === entry.txid && transactionWtxid(saved.transactionHex) === entry.wtxid)) ||
+      snapshot.network !== this.deps.network || snapshot.instanceId !== current.context.instanceId || snapshot.classificationRevision !== current.context.classificationRevision ||
+      snapshot.coreTip.hash !== current.context.tip.hash || snapshot.coreTip.height !== current.context.tip.height || age < -5000 || age > 30000 || !Number.isFinite(age)) return null;
+    await this.runExclusive(() => this.withSessionDek(input, (dek, session) => this.runeRecheckLocked(dek, session, input, current)));
+    return { ...snapshot, historyComplete: snapshot.historyComplete && [...knownHashes].every((hash) => hashes.has(hash)) };
+  }
+
+  private async reconcileRunes(input: RuneListRequest, snapshot: RuneHistoryResponse): Promise<void> {
+    const gateway = this.deps.gateway;
+    if (!gateway) return;
+    for (const result of snapshot.reconciliation) {
+      const entry = await this.runExclusive(() => this.withSessionDek(input, async (dek, session) =>
+        (await this.runeJournalsLocked(dek, session.vaultId)).find((entry) => entry.accountId === input.accountId && entry.txid === result.txid && transactionWtxid(entry.transactionHex) === result.wtxid)));
+      if (!entry) continue;
+      const status = result.status;
+      const resolution = status === 'confirmed' || (status === 'conflicted' && result.confirmedSpenderTxid !== null) ? {
+        instanceId: snapshot.instanceId, classificationRevision: snapshot.classificationRevision, tip: snapshot.coreTip, status,
+      } : null;
+      await this.runExclusive(() => this.withSessionDek(input, async (dek, session) => {
+        const meta = await this.loadAccountsMetaLocked(dek, session.vaultId);
+        const current = await loadCachedStatus(this.deps.session, gateway.endpoint, gateway.protocolVersions);
+        if (meta.activePublicAccountId !== input.accountId || !current ||
+          this.deps.vaultDeps.now() - Date.parse(snapshot.timestamp) > 30000 ||
+          (this.gatewayLastFailure !== null && HARD_GATEWAY_VERIFICATION_FAILURES.has(this.gatewayLastFailure)) ||
+          current.status.instanceId !== snapshot.instanceId || current.status.activeRevision !== snapshot.classificationRevision ||
+          current.status.coreTip.hash !== snapshot.coreTip.hash || current.status.coreTip.height !== snapshot.coreTip.height ||
+          !evaluateFreshness(current.status, this.deps.vaultDeps.now(), current.verifiedAtMs).spendEligible) return;
+        const key = this.cacheKey(session.vaultId, 'runeTransfers', entry.txid);
+        const record = await this.requireCache().get(key);
+        if (!record) return;
+        const latest = openRecord(dek, record, runeJournalSchema);
+        if (latest.transactionHex !== entry.transactionHex || latest.inputKeys.join(':') !== entry.inputKeys.join(':') || latest.dispatchState !== 'dispatched') return;
+        await this.requireCache().put(sealRecord(dek, { ...latest, status, resolution }, key, this.deps.vaultDeps.random(24), this.deps.vaultDeps.now()));
+      }));
+    }
   }
 
   async galleryList(input: GalleryListRequest): Promise<GalleryListResult> {
@@ -7013,10 +7431,14 @@ export class WalletService {
       const labelByOutpoint = new Map(
         labels.entries.map((entry) => [outpointKey(entry.outpoint), entry.label]),
       );
+      const resolveOwnership = createOwnedAddressResolver(this.deps.network, 'stable');
       const rows = utxos.map((utxo) => {
         const evaluated = evaluateEligibility(utxo, ctx);
-        const marginal = feeForVsize(inputVbytes(utxo.scriptPubKey), feeRateSatPerKvB);
+        const marginal = evaluated.reasons.includes('recovery_only')
+          ? utxo.valueSats
+          : feeForVsize(inputVbytes(utxo.scriptPubKey), feeRateSatPerKvB);
         const effective = utxo.valueSats > marginal ? utxo.valueSats - marginal : 0n;
+        const ownership = resolveOwnership(utxo);
         // §12.2 keeps the ordinals lane out of ordinary funding even when the
         // §11.2 predicate itself passes. Without an explicit reason the row
         // would render ineligible with nothing to explain it.
@@ -7030,6 +7452,8 @@ export class WalletService {
           account: utxo.account,
           lane: utxo.lane,
           path: this.utxoPath(utxo),
+          address: ownership.address,
+          addressRole: ownership.role,
           classification: utxo.facts?.primaryClass ?? 'unknown',
           eligible: evaluated.eligible && utxo.lane === 'payment',
           reasons: laneSuppressed ? ['reserved_ordinals_lane'] : evaluated.reasons,
@@ -8938,7 +9362,7 @@ export class WalletService {
   }
 
   private utxoPath(utxo: WalletUtxo): string {
-    const purpose = utxo.lane === 'payment' ? 84 : 86;
+    const purpose = isRecoveryOnlyUtxo(utxo) ? 49 : utxo.lane === 'payment' ? 84 : 86;
     const coin = this.deps.network === 'mainnet' ? 0 : 1;
     return `m/${purpose}'/${coin}'/${utxo.account}'/${utxo.chain}/${utxo.addressIndex}`;
   }
@@ -9063,7 +9487,7 @@ export class WalletService {
     } catch { return null; }
   }
 
-  private async loadLockedOutpointsLocked(dek: Uint8Array, vaultId: string): Promise<Set<string>> {
+  private async loadLockedOutpointsLocked(dek: Uint8Array, vaultId: string, excludedRunePlanId?: string, excludedRuneJournalTxid?: string): Promise<Set<string>> {
     const cache = this.requireCache();
     const ids = await cache.listKeys(vaultId, this.deps.network, 'plans');
     const locked = new Set<string>();
@@ -9075,6 +9499,14 @@ export class WalletService {
         continue;
       }
       for (const entry of plan.inputs) locked.add(`${entry.txid}:${entry.vout}`);
+    }
+    for (const [id, entry] of this.runePlans) {
+      if (entry.plan.expiresAt <= this.deps.vaultDeps.now() && !entry.approving) { this.runePlans.delete(id); continue; }
+      if (entry.vaultId === vaultId && id !== excludedRunePlanId) for (const input of entry.plan.inputs) locked.add(`${input.txid}:${input.vout}`);
+    }
+    const runeStatus = this.deps.gateway ? await loadCachedStatus(this.deps.session, this.deps.gateway.endpoint, this.deps.gateway.protocolVersions) : null;
+    for (const entry of await this.runeJournalsLocked(dek, vaultId)) {
+      if (entry.txid !== excludedRuneJournalTxid && runeJournalHoldsInputs(entry, runeStatus?.status ?? null)) for (const key of entry.inputKeys) locked.add(key);
     }
     const reservationIds = await cache.listKeys(vaultId, this.deps.network, 'marketplaceReservations');
     for (const outpoint of reservationIds) {
@@ -9255,6 +9687,23 @@ export class WalletService {
     return out;
   }
 
+  private async loadTransactionJournalLocked(
+    dek: Uint8Array,
+    vaultId: string,
+  ): Promise<LocalTransactionJournalEntry[]> {
+    const cache = this.requireCache();
+    const ids = await cache.listKeys(vaultId, this.deps.network, 'transactions');
+    const out: LocalTransactionJournalEntry[] = [];
+    for (const id of ids) {
+      const record = await cache.get(this.cacheKey(vaultId, 'transactions', id));
+      if (!record) continue;
+      try {
+        out.push({ cacheKey: id, transaction: openRecord(dek, record, storedTransactionSchema) });
+      } catch { /* malformed local evidence produces no claim */ }
+    }
+    return out;
+  }
+
   private async noteRecoveryFailure(
     input: ActiveSessionRequest, plan: TransactionPlan, failure: string,
   ): Promise<void> {
@@ -9328,6 +9777,7 @@ export class WalletService {
       startedAt: number;
       ring: AccountKeyRing;
       burned: Map<string, number>;
+      localChangeClaims: readonly LocalChangeClaim[] | undefined;
     },
     expectation: ActiveSessionRequest,
   ): Promise<void> {
@@ -9390,6 +9840,7 @@ export class WalletService {
         const result = await runScanUnit(unit, ports, {
           maxIndexPerChain: prep.maxIndexPerChain,
           burnedChangeCount: prep.burned.get(unitKey(unit)) ?? 0,
+          localChangeClaims: prep.localChangeClaims,
         });
         if (!result.ok) {
           if (result.failure === 'cancelled') {

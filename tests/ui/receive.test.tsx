@@ -217,3 +217,29 @@ describe('Receive', () => {
     expect(calls).toBe(2);
   });
 });
+
+describe('Rune receiving context', () => {
+  it('shows the account and network with an address-only scannable QR', async () => {
+    installFakeChrome({ 'address.receive': () => ({ ok: true, result: {
+      accountId: ACCOUNT_ID, address: ORDINALS_ADDR, path: "m/86'/0'/0'/0/0", kind: 'ordinals', network: 'mainnet',
+    } }) });
+    render(<Providers><Receive initialKind="ordinals" runeContext accountName="Savings" expectation={EXPECTATION} activeAccountId={ACCOUNT_ID} onClose={vi.fn()} /></Providers>);
+    expect(await screen.findByText(ORDINALS_ADDR)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Receive Runes' })).toBeInTheDocument();
+    expect(screen.getByText('Savings')).toBeInTheDocument();
+    expect(screen.getByText(/Use this address to receive Runes on/)).toHaveTextContent('Mainnet');
+    expect(screen.queryByRole('radio', { hidden: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(decodeRenderedQr(screen.getByRole('img') as unknown as SVGElement)).toBe(ORDINALS_ADDR);
+  });
+
+  it('rejects a response bound to a different account', async () => {
+    installFakeChrome({ 'address.receive': () => ({ ok: true, result: {
+      accountId: OTHER_ACCOUNT_ID, address: ORDINALS_ADDR, path: "m/86'/0'/1'/0/0", kind: 'ordinals', network: 'mainnet',
+    } }) });
+    render(<Providers><Receive initialKind="ordinals" runeContext expectation={EXPECTATION} activeAccountId={ACCOUNT_ID} onClose={vi.fn()} /></Providers>);
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(screen.queryByText(ORDINALS_ADDR)).not.toBeInTheDocument();
+    expect(screen.queryByRole('img')).not.toBeInTheDocument();
+  });
+});

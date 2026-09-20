@@ -16,6 +16,8 @@ import { watchAccountEn, type WatchAccountMessageKey } from './watch-account-en'
 import { watchAccountEs } from './watch-account-es';
 import { recoveryEn, type RecoveryMessageKey } from './recovery-en';
 import { recoveryEs } from './recovery-es';
+import { runesEn, type RuneMessageKey } from './runes-en';
+import { runesEs } from './runes-es';
 
 export type Language = 'en' | 'es';
 /**
@@ -24,11 +26,11 @@ export type Language = 'en' | 'es';
  * browser-first public-account transfer ceremony, and the signet Vault
  * coordinator.
  */
-export type MessageKey = PortableMessageKey | ApprovalUiMessageKey | PasskeyMessageKey | VaultMessageKey | WatchAccountMessageKey | RecoveryMessageKey;
+export type MessageKey = PortableMessageKey | ApprovalUiMessageKey | PasskeyMessageKey | VaultMessageKey | WatchAccountMessageKey | RecoveryMessageKey | RuneMessageKey;
 
 export const CATALOGS: Record<Language, Record<MessageKey, string>> = {
-  en: { ...en, ...approvalUiEn, ...passkeyEn, ...vaultEn, ...watchAccountEn, ...recoveryEn },
-  es: { ...es, ...approvalUiEs, ...passkeyEs, ...vaultEs, ...watchAccountEs, ...recoveryEs },
+  en: { ...en, ...approvalUiEn, ...passkeyEn, ...vaultEn, ...watchAccountEn, ...recoveryEn, ...runesEn },
+  es: { ...es, ...approvalUiEs, ...passkeyEs, ...vaultEs, ...watchAccountEs, ...recoveryEs, ...runesEs },
 };
 
 export function format(template: string, params?: Record<string, string | number>): string {

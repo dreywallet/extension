@@ -6,6 +6,7 @@ import { useAccountActivity } from '../../ui/hooks/use-account-activity';
 import { useI18n } from '../../ui/i18n';
 import { Button } from '../../ui/components/Button';
 import { ActivityList } from './ActivityList';
+import { useRunes } from '../../ui/hooks/use-runes';
 import { AmountUnitToggle } from '../../ui/components/AmountUnitToggle';
 import styles from './popup.module.css';
 
@@ -16,6 +17,7 @@ export function Activity(props: {
   continuous?: boolean;
 }): ReactNode {
   const { t } = useI18n();
+  const runes = useRunes({ expectation: props.expectation, accountId: props.activeAccountId });
   const { refresh: refreshHome } = useWalletHome(
     props.expectation,
     props.activeAccountId,
@@ -25,6 +27,7 @@ export function Activity(props: {
   const refresh = (): void => {
     refreshHome();
     activity.refresh();
+    void runes.refresh();
   };
 
   if (activity.items === null) {
@@ -56,6 +59,7 @@ export function Activity(props: {
       ) : null}
       <ActivityList
         activity={activity.items}
+        runeTransfers={runes.data?.transfers}
         emptyClassName={styles['empty']}
         expectation={props.expectation}
         accountId={props.activeAccountId}

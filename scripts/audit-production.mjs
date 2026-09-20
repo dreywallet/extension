@@ -320,7 +320,7 @@ if (requestedChannel === 'production' || requestedChannel === 'pilot') {
   assert(manifest.name === (pilotAudit ? 'Drey PILOT' : 'Drey'), 'production identity changed');
   assert(manifest.description === (pilotAudit
     ? 'DISPOSABLE MAINNET VALIDATION — MANUAL TEST WALLET ONLY'
-    : 'Non-custodial Bitcoin and Ordinals wallet'),
+    : 'Non-custodial Bitcoin, Ordinals and Runes wallet'),
   `${requestedChannel} description changed`);
   if (pilotAudit) {
     assert(!manifest.key, 'pilot manifest identity key changed');

@@ -82,8 +82,8 @@ export function activityState(item: ActivityItem, t: ActivityT): string {
   return t('activity.state.conflicted');
 }
 
-function activityDate(
-  item: ActivityItem,
+export function activityDate(
+  item: Pick<ActivityItem, 'timestamp' | 'confirmationState'>,
   t: ActivityT,
   lang: ActivityLang,
 ): Pick<ActivityPresentation, 'dateKey' | 'dateLabel' | 'dateTimeLabel'> {

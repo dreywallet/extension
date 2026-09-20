@@ -3,6 +3,26 @@
 Notable user-facing changes to Drey are recorded here. For earlier releases,
 see the production release tags in the repository.
 
+## 0.15.8
+
+### Fixed
+
+- Keep exact wallet-created payment change visible while its transaction is
+  still unconfirmed, without trusting unrelated mempool outputs.
+- Show each coin's verified address and role, explain effective value, and let
+  a single selected coin flow directly into Send.
+- Identify PSBT review fingerprints clearly instead of presenting them as an
+  unsigned transaction.
+- Discover Xverse nested-SegWit holdings as explicit recovery-only coins rather
+  than misclassifying or attempting to spend them.
+
+### Security
+
+- Bind pending-change claims to the encrypted journal key, transaction ID, and
+  exact plan hash before they can affect balances or eligibility.
+- Consume exact-pinned `@drey/core` v0.20.5 and bind its reproducible recovery
+  artifact.
+
 ## 0.14.18
 
 ### Added

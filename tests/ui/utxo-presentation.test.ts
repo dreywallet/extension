@@ -29,6 +29,7 @@ function utxo(overrides: Partial<PresentableUtxo> = {}): PresentableUtxo {
 
 /** Every reason code the §11.2 predicate can emit, plus the lane suppression. */
 const ALL_REASONS = [
+  'recovery_only',
   'not_cardinal_clean',
   'classification_stale',
   'user_frozen',
@@ -106,6 +107,15 @@ describe('primaryReason', () => {
       eligible: false,
       reasons: ['classification_stale', 'uneconomic', 'dust_quarantined'],
     }))).toBe('dust_quarantined');
+  });
+
+  it('keeps a recovery-only legacy coin distinct from transient verification', () => {
+    expect(primaryReason(utxo({
+      eligible: false,
+      classification: 'unknown',
+      reasons: ['classification_stale', 'recovery_only'],
+    }))).toBe('recovery_only');
+    expect(reasonKey('recovery_only', 'unknown')).toBe('utxos.reason.recoveryOnly');
   });
 
   it('ranks staleness last, because it accompanies almost everything else', () => {

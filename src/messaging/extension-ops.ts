@@ -21,6 +21,7 @@
  * coordinator network (see WalletServiceDeps.vaultCoordinatorNetwork).
  */
 import { z } from 'zod';
+import { RUNE_OP_SCHEMAS } from './rune-ops';
 import { validateMnemonic } from '@drey/core/domain/keys/mnemonic';
 import { ErrorCode } from '@drey/core/messaging/envelope';
 import { OP_SCHEMAS, type OpSpec } from '@drey/core/messaging/ops';
@@ -74,6 +75,7 @@ const coreOpOverrides = {
 } satisfies Partial<Record<keyof typeof OP_SCHEMAS, OpSpec>>;
 
 const extensionLocalOpSchemas = {
+  ...RUNE_OP_SCHEMAS,
   'wallet.home.snapshot': {
     request: OP_SCHEMAS['wallet.home'].request,
     response: z.object({

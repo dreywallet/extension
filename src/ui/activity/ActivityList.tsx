@@ -19,6 +19,7 @@ import { useActivityUnit, usePortfolioPrivacy } from '../UiRoot';
 import { ActivityGlyph } from './ActivityGlyph';
 import {
   groupActivity,
+  activityDate,
   HOME_ACTIVITY_LIMIT,
   presentActivity,
   type ActivityItem,
@@ -26,6 +27,8 @@ import {
 } from './activity-presentation';
 import { transactionExplorerUrl } from './explorer';
 import styles from './ActivityList.module.css';
+import type { RuneTransferView } from '../../messaging/rune-ops';
+import { RuneTransferRow } from './RuneActivity';
 
 type ActivityVariant = 'compact' | 'standard' | 'comfortable';
 export type ActivityTone = 'muted' | 'warning' | 'danger';
@@ -108,6 +111,7 @@ function ActivityInscriptionVisual(props: {
 
 export function ActivityList(props: {
   activity: WalletHomeResult['activity'];
+  runeTransfers?: RuneTransferView[] | undefined;
   compact?: boolean | undefined;
   variant?: ActivityVariant | undefined;
   emptyClassName?: string | undefined;
@@ -147,7 +151,7 @@ export function ActivityList(props: {
   const items = variant === 'compact'
     ? props.activity.slice(0, HOME_ACTIVITY_LIMIT)
     : props.activity;
-  if (items.length === 0) {
+  if (items.length === 0 && !props.runeTransfers?.length) {
     return <p className={props.emptyClassName ?? styles['muted']}>{t('activity.empty')}</p>;
   }
 
@@ -246,6 +250,28 @@ export function ActivityList(props: {
     );
   };
 
+  if (props.runeTransfers?.length) {
+    const runeTxids = new Set(props.runeTransfers.map((item) => item.txid));
+    const entries = [
+      ...props.activity.filter((item) => !runeTxids.has(item.txid)).map((item) => ({
+        key: item.txid, time: item.timestamp === null ? Number.POSITIVE_INFINITY : Date.parse(item.timestamp),
+        date: activityDate(item, t, lang), render: () => renderItem(item),
+      })),
+      ...props.runeTransfers.map((item) => ({
+        key: `${item.txid}:${item.rune.id}`, time: item.createdAt,
+        date: activityDate({ timestamp: new Date(item.createdAt).toISOString(), confirmationState: item.status === 'pending' ? 'mempool' : item.status }, t, lang),
+        render: () => <RuneTransferRow key={`${item.txid}:${item.rune.id}`} transfer={item} network={props.network} compact={variant === 'compact'} />,
+      })),
+    ].sort((a, b) => b.time - a.time || a.key.localeCompare(b.key));
+    if (variant === 'compact') return entries.slice(0, HOME_ACTIVITY_LIMIT).map((entry) => entry.render());
+    const groups: { key: string; label: string; entries: typeof entries }[] = [];
+    for (const entry of entries) {
+      const last = groups[groups.length - 1];
+      if (last?.key === entry.date.dateKey) last.entries.push(entry);
+      else groups.push({ key: entry.date.dateKey, label: entry.date.dateLabel, entries: [entry] });
+    }
+    return groups.map((group) => <section key={group.key} className={styles.group}><h3 className={styles.groupDate}>{group.label}</h3>{group.entries.map((entry) => entry.render())}</section>);
+  }
   if (variant === 'compact') return items.map(renderItem);
   return groupActivity(items, t, lang).map((group) => (
     <section key={group.key} className={styles['group']}>
