@@ -4,6 +4,7 @@ import { generateMnemonic, mnemonicToSeed, restoreMnemonic, entropyToMnemonic } 
 import { bip32Versions } from '@drey/core/domain/keys/extended-key';
 import { bytesToHex, hexToBytes } from '@drey/core/domain/vault/encoding';
 import { createVaultRecord, unlockVault, zeroize, type VaultDeps } from '@drey/core/domain/vault/vault';
+import { unlockRecordWithAppPassword } from './app-password';
 import type { Argon2idParams, VaultPayloadV1, VaultRecordV1 } from '@drey/core/domain/vault/record';
 import {
   assertCommunityVaultPolicy,
@@ -166,7 +167,7 @@ export async function communityVaultCreate(
 ): Promise<CommunityVaultOwnerResult> {
   return ctx.runExclusive(async () => {
     const { record: spendingRecord, session } = await ctx.activeRecord(input);
-    const spending = await unlockVault(spendingRecord, input.password);
+    const spending = await unlockRecordWithAppPassword(ctx.local, spendingRecord, input.password);
     const generated = generateMnemonic((length) => ctx.vaultDeps.random(length));
     const seed = mnemonicToSeed(generated.mnemonic);
     try {
@@ -187,7 +188,7 @@ export async function communityVaultRestore(
 ): Promise<CommunityVaultOwnerResult> {
   return ctx.runExclusive(async () => {
     const { record: spendingRecord, session } = await ctx.activeRecord(input);
-    const spending = await unlockVault(spendingRecord, input.password);
+    const spending = await unlockRecordWithAppPassword(ctx.local, spendingRecord, input.password);
     const restored = restoreMnemonic(input.mnemonic);
     try {
       const record = await establish(ctx, input, restored, spending.payload);

@@ -38,7 +38,11 @@
   flex: 1;
   flex-direction: column;
   gap: var(--space-4);
-  justify-content: center;
+  /* safe: content taller than the popup starts at the top and scrolls
+     instead of being clipped at both ends. */
+  justify-content: safe center;
+  min-height: 0;
+  overflow-y: auto;
   padding: var(--space-6);
 }
 
@@ -675,25 +679,6 @@
   align-items: center;
   display: flex;
   justify-content: space-between;
-}
-
-.overlayBack {
-  background: transparent;
-  border: 0;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  font-size: var(--text-xs);
-  font-weight: 800;
-  padding: .35rem 0;
-  text-transform: uppercase;
-}
-
-.overlayBack::before {
-  content: '← ';
-}
-
-.overlayBack:hover {
-  color: var(--color-text);
 }
 
 .sectionTitle {

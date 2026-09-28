@@ -119,6 +119,10 @@ describe('useGatewayStatus resume refresh', () => {
   });
 
   it('publishes sustained normal convergence after ten seconds and keeps retrying', async () => {
+    // The grace boundary is asserted to the millisecond, so wall-clock time
+    // must not leak into the fake clock (shouldAdvanceTime does under load).
+    vi.useRealTimers();
+    vi.useFakeTimers();
     const payloads: unknown[] = [];
     let connected = true;
     installFakeChrome({

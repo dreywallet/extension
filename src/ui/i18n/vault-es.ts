@@ -10,6 +10,7 @@ export const vaultEs: Record<VaultMessageKey, string> = {
   'vault.error.unavailable': 'El coordinador de la Bóveda no está disponible en esta versión.',
 
   'settings.vault.entry': 'Drey Vault',
+  'vault.settings.entrySummary': 'Protección adicional: mover fondos requiere dos de estos: este ordenador, tu teléfono y una clave de recuperación sin conexión.',
 
   'vault.title': 'Drey Vault',
   'vault.banner':

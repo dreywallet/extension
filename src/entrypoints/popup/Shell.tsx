@@ -21,6 +21,9 @@ import styles from './popup.module.css';
 import type { OrdinalActionDraft } from '../../ui/ordinal-action';
 import { OpenSidePanelButton } from './OpenSidePanelButton';
 import { isPersistentSurface, type WalletSurface } from './surface';
+import { openBackupOnboarding } from '../../ui/backup-reminder';
+import { openWalletPage } from '../../ui/open-wallet-page';
+import { BackLink } from '../../ui/components/BackLink';
 
 const SendTransactions = lazy(async () => {
   const module = await import('../fullpage/Transactions');
@@ -31,7 +34,7 @@ type Destination = 'bitcoin' | 'ordinals' | 'activity';
 type Overlay = 'none' | 'receive' | 'send' | 'runes';
 
 function openFullpage(hash: string): void {
-  void chrome.tabs.create({ url: chrome.runtime.getURL(`/fullpage.html${hash}`) });
+  void openWalletPage(hash);
 }
 
 export function Shell(props: {
@@ -106,9 +109,7 @@ export function Shell(props: {
           <div role="alert" className={styles['surfaceError']} data-testid="backup-reminder">
             <strong>{t('backup.reminder.title')}</strong>
             <p>{t('backup.reminder.message')}</p>
-            <Button onClick={() => void chrome.tabs.create({
-              url: chrome.runtime.getURL('/onboarding.html'),
-            })}>{t('backup.action.now')}</Button>
+            <Button onClick={openBackupOnboarding}>{t('backup.action.now')}</Button>
           </div>
         ) : null}
         {props.sidePanelError ? (
@@ -122,16 +123,12 @@ export function Shell(props: {
         {overlay === 'send' && props.session.expectation !== null && props.session.activeAccountId !== null ? (
           <>
             <div className={styles['overlayToolbar']}>
-              <button
-                type="button"
-                className={styles['overlayBack']}
+              <BackLink
                 onClick={() => {
                   setOverlay('none');
                   setOrdinalAction(null);
                 }}
-              >
-                {t('common.back')}
-              </button>
+              />
               <button
                 type="button"
                 className={styles['iconButton']}
@@ -175,12 +172,17 @@ export function Shell(props: {
           <Runes key={props.session.activeAccountId} expectation={props.session.expectation} accountId={props.session.activeAccountId} accountName={props.session.accountSummaries.find((item) => item.accountId === props.session.activeAccountId)?.name} onClose={() => setOverlay('none')} onExpand={(resume) => openFullpage(resume ? FULLPAGE_HASH.runesResume : FULLPAGE_HASH.runes)} />
         ) : overlay === 'receive' ? (
           props.session.expectation !== null && props.session.activeAccountId !== null ? (
-            <Receive
-              initialKind={receiveKind}
-              expectation={props.session.expectation}
-              activeAccountId={props.session.activeAccountId}
-              onClose={() => setOverlay('none')}
-            />
+            <>
+              <div className={styles['overlayToolbar']}>
+                <BackLink onClick={() => setOverlay('none')} />
+              </div>
+              <Receive
+                initialKind={receiveKind}
+                expectation={props.session.expectation}
+                activeAccountId={props.session.activeAccountId}
+                onClose={() => setOverlay('none')}
+              />
+            </>
           ) : null
         ) : (
           <>

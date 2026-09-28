@@ -30,6 +30,11 @@ import {
   type TransactionSection,
 } from './routes';
 import styles from './fullpage.module.css';
+import { openBackupOnboarding } from '../../ui/backup-reminder';
+
+const SETTINGS_PAGES_WITH_NAV: ReadonlySet<FullpageView> = new Set<FullpageView>([
+  'walletAccounts', 'accounts', 'passkeys', 'messageSigning', 'addressBook',
+]);
 
 function PageShell(props: { children: ReactNode }): ReactNode {
   return <div className={styles['page']}><BrandMark />{props.children}</div>;
@@ -122,13 +127,17 @@ export function App(): ReactNode {
         <div role="alert" data-testid="backup-reminder">
           <strong>{t('backup.reminder.title')}</strong>
           <p>{t('backup.reminder.message')}</p>
-          <Button onClick={() => void chrome.tabs.create({
-            url: chrome.runtime.getURL('/onboarding.html'),
-          })}>{t('backup.action.now')}</Button>
+          <Button onClick={openBackupOnboarding}>{t('backup.action.now')}</Button>
         </div>
       ) : null}
       {session.quarantinedVaultCount > 0 ? (
         <p role="alert">{t('common.error.quarantined')}</p>
+      ) : null}
+      {/* Where am I: the section tabs stay visible on ordinary Settings pages.
+          Pages that handle recovery words or keys omit them so nothing can
+          navigate away mid-ceremony. */}
+      {SETTINGS_PAGES_WITH_NAV.has(view) ? (
+        <FullpageNav current="settings" onNavigate={navigatePrimary} />
       ) : null}
       {(view === 'runes' || view === 'runesResume') && session.activeAccountId !== null ? (
         <Runes resumeDraft={view === 'runesResume'} key={session.activeAccountId} expectation={session.expectation} accountId={session.activeAccountId} accountName={session.accountSummaries.find((item) => item.accountId === session.activeAccountId)?.name} onClose={navigateSettings} />

@@ -37,6 +37,7 @@ export const runesEs: Record<RuneMessageKey, string> = {
   'runes.expand': 'Abrir en página completa',
   'runes.refreshFailed': 'No se pudo actualizar. Se muestran los últimos saldos cargados.',
   'runes.historyIncomplete': 'Pueden faltar algunas transferencias anteriores de Runes.',
+  'runes.unconfirmed': 'Las transacciones sin confirmar pueden contener Runes. Aparecerán aquí cuando se confirmen.',
   'runes.receiveHint': 'Usa esta dirección para recibir Runes en {network}.',
   'runes.reviewExpired': 'Esta revisión caducó. Revísala de nuevo antes de enviar.',
   'runes.sent': 'Enviado', 'runes.received': 'Recibido', 'runes.balanceUnavailable': 'Saldo no disponible',

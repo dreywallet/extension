@@ -19,6 +19,7 @@ import {
   ProviderSighashEffects,
   ProviderTransactionGroupReview,
 } from './ProviderTransactionGroupReview';
+import { openBackupOnboarding } from '../../ui/backup-reminder';
 
 function approvalCopy(
   method: string,
@@ -609,9 +610,7 @@ export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {})
         <section className={styles['backupReminder']} role="alert" data-testid="backup-reminder">
           <strong>{t('backup.reminder.title')}</strong>
           <p>{t('backup.reminder.message')}</p>
-          <Button onClick={() => void chrome.tabs.create({
-            url: chrome.runtime.getURL('/onboarding.html'),
-          })}>{t('backup.action.now')}</Button>
+          <Button onClick={openBackupOnboarding}>{t('backup.action.now')}</Button>
         </section>
       ) : null}
       <header className={styles['requestHeader']}>
@@ -993,7 +992,7 @@ export function ApprovalApp(props: { connect?: () => chrome.runtime.Port } = {})
       </div>
       <footer className={styles['decisionBar']} data-testid="approval-decision-bar">
         <div className={styles['actions']}>
-          <Button variant="danger" data-testid="approval-reject" disabled={busy} onClick={() => resolve(false)}>
+          <Button variant="secondary" data-testid="approval-reject" disabled={busy} onClick={() => resolve(false)}>
             {t('approval.reject')}
           </Button>
           {/* The label is deliberately method-specific ("Sign transaction" reads

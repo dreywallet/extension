@@ -14,28 +14,12 @@
   text-transform: uppercase;
 }
 
-.heading button,
-.filters button,
-.receive,
-.viewerHeader button {
+.filters button {
   background: transparent;
   border: 1px solid var(--color-border);
   color: var(--color-text);
   cursor: pointer;
-  min-height: 2rem;
-}
-
-.heading button:disabled {
-  cursor: wait;
-  opacity: .6;
-}
-
-.heading button {
-  min-width: 7rem;
-}
-
-.heading .selectionModeButton {
-  min-width: 4.5rem;
+  min-height: 2.25rem;
 }
 
 .headingActions {
@@ -491,9 +475,6 @@
   align-self: flex-start;
 }
 
-.receive {
-  padding: .5rem;
-}
 
 .viewer {
   background: var(--color-bg);

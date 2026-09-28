@@ -13,7 +13,17 @@ export function registerSessionSweep(
   onSweep: (lockForResume: boolean) => void | Promise<void>,
   now: () => number = Date.now,
 ): void {
-  chrome.alarms.create(SWEEP_ALARM, { periodInMinutes: SWEEP_PERIOD_MINUTES });
+  // Keep an existing alarm: create() replaces it, so a worker woken by some
+  // other event after device resume would erase the missed alarm whose late
+  // firing is the sleep/resume signal below.
+  const ensureAlarm = () => chrome.alarms.create(SWEEP_ALARM, { periodInMinutes: SWEEP_PERIOD_MINUTES });
+  void Promise.resolve()
+    .then(() => chrome.alarms.get(SWEEP_ALARM))
+    .then((existing) => {
+      if (existing?.periodInMinutes !== SWEEP_PERIOD_MINUTES) return ensureAlarm();
+      return undefined;
+    })
+    .catch(() => ensureAlarm());
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name !== SWEEP_ALARM) return;
     // Chrome fires a missed alarm once the device wakes. Being more than one

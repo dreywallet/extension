@@ -821,13 +821,17 @@ test('renders the restored wallet home at compact popup scale', async ({
       return {
         height: rect.height,
         noHorizontalOverflow: label.scrollWidth <= label.clientWidth,
-        rateLines: label.lastElementChild?.getClientRects().length ?? 0,
+        // The cost estimate and the sat/vB rate are two stacked lines; neither
+        // may wrap.
+        rateLines: [...(label.lastElementChild?.children ?? [])]
+          .map((line) => line.getClientRects().length),
       };
     }));
   expect(feeLayout).toHaveLength(3);
-  expect(feeLayout.every(({ height }) => height <= 32)).toBe(true);
+  expect(feeLayout.every(({ height }) => height <= 48)).toBe(true);
   expect(feeLayout.every(({ noHorizontalOverflow }) => noHorizontalOverflow)).toBe(true);
-  expect(feeLayout.every(({ rateLines }) => rateLines === 1)).toBe(true);
+  expect(feeLayout.every(({ rateLines }) =>
+    rateLines.length === 2 && rateLines.every((lines) => lines === 1))).toBe(true);
   expect(extensionContext.pages()).toHaveLength(pageCount);
   await popup.page.getByRole('button', { name: 'Back' }).click();
 

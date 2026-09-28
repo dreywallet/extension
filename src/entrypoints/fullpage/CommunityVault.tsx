@@ -7,6 +7,7 @@ import { useRpc } from '../../ui/hooks/use-rpc';
 import { useI18n } from '../../ui/i18n';
 import { errorMessageKey } from '../../ui/errors';
 import { Button } from '../../ui/components/Button';
+import { BackLink } from '../../ui/components/BackLink';
 import { Field } from '../../ui/components/Field';
 import type { ActiveSessionExpectation } from '../../ui/hooks/use-session';
 import type { CommunityVaultSummary } from '../../messaging/community-vault-ops';
@@ -333,14 +334,12 @@ export function CommunityVault(props: {
 
   return (
     <>
-      <div className={styles['row']}>
-        <div>
-          <p className={`${styles['eyebrow']} ${styles['communityVaultEyebrow']}`}>
-            {t('communityVault.eyebrow')}
-          </p>
-          <h1 className={styles['title']}>{t('communityVault.title')}</h1>
-        </div>
-        <Button variant="secondary" onClick={props.onBack}>{t('common.back')}</Button>
+      <BackLink onClick={props.onBack} />
+      <div>
+        <p className={`${styles['eyebrow']} ${styles['communityVaultEyebrow']}`}>
+          {t('communityVault.eyebrow')}
+        </p>
+        <h1 className={styles['title']}>{t('communityVault.title')}</h1>
       </div>
       <p className={styles['rowLabel']}>
         {t('communityVault.intro')}

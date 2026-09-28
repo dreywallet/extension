@@ -25,6 +25,7 @@ export const passkeyEn = {
   'passkey.onboarding.skip': 'Not now',
 
   'settings.passkeys.entry': 'Passkey unlock',
+  'passkey.settings.entrySummary': 'Unlock with Touch ID, Windows Hello, or a security key instead of typing your password.',
 
   'passkey.settings.title': 'Passkey unlock',
   'passkey.settings.intro':

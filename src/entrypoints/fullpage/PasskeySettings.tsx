@@ -21,6 +21,7 @@ import { useI18n } from '../../ui/i18n';
 import { useRpc } from '../../ui/hooks/use-rpc';
 import { errorMessageKey } from '../../ui/errors';
 import { Button } from '../../ui/components/Button';
+import { BackLink } from '../../ui/components/BackLink';
 import { Field } from '../../ui/components/Field';
 import {
   createPasskeyCredential,
@@ -198,6 +199,7 @@ export function PasskeySettings(props: {
 
   return (
     <>
+      <BackLink onClick={props.onBack} />
       <h1 className={styles['title']}>{t('passkey.settings.title')}</h1>
       <section className={styles['section']}>
         <p className={styles['rowLabel']}>{t('passkey.settings.intro')}</p>
@@ -269,9 +271,6 @@ export function PasskeySettings(props: {
               </p>
             ) : null}
             <div className={styles['row']}>
-              <Button variant="secondary" onClick={props.onBack}>
-                {t('common.back')}
-              </Button>
               <Button onClick={() => enterMode({ kind: 'add' })}>
                 {t('passkey.settings.add')}
               </Button>

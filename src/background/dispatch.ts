@@ -5,6 +5,7 @@
  * Chrome-agnostic: it only touches the injected WalletService and the registry.
  */
 import { VaultError } from '@drey/core/domain/vault/errors';
+import type { SendDraftRequest } from '../messaging/send-draft';
 import type { RuneListRequest, RunePrepareRequest, RuneApproveRequest, RuneCancelRequest, RuneVisibilityRequest } from '../messaging/rune-ops';
 import type { MessageEnvelope } from '@drey/core/messaging/envelope';
 import {
@@ -170,6 +171,7 @@ async function handle(op: string, payload: unknown, service: WalletService): Pro
   // op has already been confirmed present in the registry; the known ops route
   // to typed methods, any custom (test-injected) op falls through to internal.
   switch (op as Op | ExtensionLocalOp | PasskeyOp | VaultCoordinatorOp | CommunityVaultOp) {
+    case 'send.draft': return service.sendDraft(payload as SendDraftRequest);
     case 'runes.draft': return service.runeDraft(payload as RuneListRequest & { draft?: import('../messaging/rune-ops').RuneDraft | null });
     case 'runes.snapshot': return service.runeSnapshot(payload as RuneListRequest);
     case 'runes.list': return service.runeList(payload as RuneListRequest);

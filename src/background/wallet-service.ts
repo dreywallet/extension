@@ -29,10 +29,13 @@ import {
   type RecoveryWordCount,
 } from '@drey/core/domain/vault/backup-metadata';
 import { z } from 'zod';
-import { bindRuneEvidence, projectRuneHoldings, type RuneOutputsResponse, type RuneHistoryResponse } from '@drey/core/domain/runes/evidence';
+import { bindRuneEvidence, projectRuneHoldings, RuneEvidenceError, unconfirmedRuneOutputCount, type RuneEvidenceFailure, type RuneOutputsResponse, type RuneHistoryResponse } from '@drey/core/domain/runes/evidence';
 import { buildRuneTransferPlan, signRuneTransferPlan, validateRuneTransferRaw, type RuneTransferPlan } from '@drey/core/domain/runes/transfer';
 import type { RuneListRequest, RuneListResult, RunePrepareRequest, RuneApproveRequest, RuneCancelRequest, RuneVisibilityRequest, RuneReview, RuneTransferView } from '../messaging/rune-ops';
 import { runeJournalSchema, runePreferencesSchema, runeJournalHoldsInputs, type RuneJournal } from './rune-journal';
+import { sendDraftSchema, type SendDraft, type SendDraftRequest } from '../messaging/send-draft';
+
+const sendDraftStoreSchema = z.object({ draft: sendDraftSchema.nullable() }).strict();
 import { deriveAccountNode, deriveAddress, type Network } from '@drey/core/domain/keys/derivation';
 import {
   ACCOUNT_GAP_LIMIT,
@@ -707,6 +710,15 @@ const HARD_GATEWAY_VERIFICATION_FAILURES: ReadonlySet<GatewayRejectReason> = new
   'key_unprovisioned',
 ]);
 
+type RuneReadFailure = RuneEvidenceFailure | 'gateway_status_unavailable' | 'gateway_changed' |
+  'too_many_outputs' | 'rune_outputs_unavailable' | 'evidence_refused';
+/** A refused Rune read with a bounded, data-free diagnostic reason. */
+class RuneReadError extends RpcError {
+  constructor(code: 'ERR_DATA_STALE' | 'ERR_GATEWAY_UNAVAILABLE', readonly reason: RuneReadFailure) {
+    super(code, reason);
+  }
+}
+
 /**
  * One gatewayStatusOnce pass. `revalidated` records whether the pass actually
  * reached the gateway rather than answering from the min-refetch cache, so the
@@ -1164,6 +1176,10 @@ export class WalletService {
    */
   private gatewayInflight: { forced: boolean; run: Promise<GatewayStatusRun> } | null = null;
   private gatewayLastFailure: GatewayRejectReason | null = null;
+  /** Last logged Rune read failure, so the 10 s display poll logs each change once. */
+  private runeLastFailure: string | null = null;
+  /** Account and gateway source a stale-classification refresh already started for. */
+  private runeRescanKey: string | null = null;
   /** Public display quote shared by every extension surface. */
   private priceInflight: Promise<FiatPriceQuote | null> | null = null;
   /**
@@ -4929,8 +4945,7 @@ export class WalletService {
       const map = await loadVaults(this.deps.local);
       const record = map[session.vaultId];
       if (!record) throw new RpcError('ERR_VAULT_NOT_FOUND');
-      const verified = await unlockVault(record, password);
-      zeroize(verified.dek);
+      await this.verifyAppPassword(record, password);
       await this.touchSessionLocked(session);
     });
   }
@@ -5904,7 +5919,7 @@ export class WalletService {
     if (meta.activePublicAccountId !== input.accountId) throw new RpcError('ERR_PLAN_CHANGED');
     const gateway = this.deps.gateway;
     const cached = gateway ? await loadCachedStatus(this.deps.session, gateway.endpoint, gateway.protocolVersions) : null;
-    if (!gateway || !cached) throw new RpcError('ERR_GATEWAY_UNAVAILABLE');
+    if (!gateway || !cached) throw new RuneReadError('ERR_GATEWAY_UNAVAILABLE', 'gateway_status_unavailable');
     const definition = await this.loadPublicAccountDefinitionLocked(dek, session.vaultId, input.accountId);
     const utxos = (await this.loadAllUtxosLocked(dek, session.vaultId)).filter((item) => item.accountId === input.accountId);
     if (ownPlanId) {
@@ -5914,7 +5929,7 @@ export class WalletService {
     const reserved = await this.loadLockedOutpointsLocked(dek, session.vaultId, ownPlanId, ownJournalTxid);
     const source = await this.accountSigningSourceLocked(dek, session.vaultId, input.accountId);
     await this.peekExpectedSession(input);
-    if (gatewayEpoch !== this.runeGatewayEpoch || (this.gatewayLastFailure !== null && HARD_GATEWAY_VERIFICATION_FAILURES.has(this.gatewayLastFailure))) throw new RpcError('ERR_DATA_STALE');
+    if (gatewayEpoch !== this.runeGatewayEpoch || (this.gatewayLastFailure !== null && HARD_GATEWAY_VERIFICATION_FAILURES.has(this.gatewayLastFailure))) throw new RuneReadError('ERR_DATA_STALE', 'gateway_changed');
     return { publicAccount: definition, utxos, cached, gatewayEpoch,
       canSign: source.kind === 'software' && source.vaultId === session.vaultId,
       context: { network: this.deps.network, accountId: input.accountId,
@@ -5952,19 +5967,19 @@ export class WalletService {
     const prepared = await this.runExclusive(() => this.withSessionDek(input, (dek, session) =>
       this.runeLocalStateLocked(dek, session, input, ownPlanId)));
     // Startup/refresh scans are expected transient states, not internal faults.
-    if (!prepared.context.scanComplete) throw new RpcError('ERR_DATA_STALE');
+    if (!prepared.context.scanComplete) throw new RuneReadError('ERR_DATA_STALE', 'scan_incomplete');
     const responses: RuneOutputsResponse[] = [];
-    if (prepared.utxos.length > 2000) throw new RpcError('ERR_DATA_STALE');
+    if (prepared.utxos.length > 2000) throw new RuneReadError('ERR_DATA_STALE', 'too_many_outputs');
     for (let offset = 0; offset < Math.max(1, prepared.utxos.length); offset += 200) {
       const response = await this.deps.gateway!.fetchRuneOutputs({ network: this.deps.network,
         outpoints: prepared.utxos.slice(offset, offset + 200).map((item) => item.outpoint) });
-      if (!response.ok) throw new RpcError('ERR_GATEWAY_UNAVAILABLE');
+      if (!response.ok) throw new RuneReadError('ERR_GATEWAY_UNAVAILABLE', 'rune_outputs_unavailable');
       responses.push(response.value);
     }
     const current = await this.runExclusive(() => this.withSessionDek(input, (dek, session) =>
       this.runeRecheckLocked(dek, session, input, prepared, ownPlanId)));
     try { return { ...current, view, evidence: bindRuneEvidence(current.utxos, responses, current.context) }; }
-    catch { throw new RpcError('ERR_DATA_STALE'); }
+    catch (error) { throw new RuneReadError('ERR_DATA_STALE', error instanceof RuneEvidenceError ? error.reason : 'evidence_refused'); }
   }
 
   async runeSnapshot(input: RuneListRequest): Promise<{ data: RuneListResult | null }> {
@@ -5995,14 +6010,16 @@ export class WalletService {
       const current = await this.runeCurrent(input);
       const holdings = projectRuneHoldings(current.utxos, current.evidence, current.context.reservedOutpoints)
         .map((item) => ({ ...item, hidden: saved.hidden.includes(item.id) }));
-      const clean = current.utxos.filter((utxo) => utxo.lane === 'payment' && evaluateEligibility(utxo, {
+      // Mirrors core cleanFunding: an unconfirmed output never funds a Rune transfer.
+      const clean = current.utxos.filter((utxo) => utxo.height !== null && utxo.lane === 'payment' && evaluateEligibility(utxo, {
         freshness: current.freshness, activeRevision: current.context.classificationRevision,
         lockedOutpoints: current.context.reservedOutpoints, marginalFeeSatsFor: () => 0n,
       }).eligible).reduce((sum, utxo) => sum + utxo.valueSats, 0n);
       // Publish verified holdings before the independent historical lookup finishes.
       const prior = await this.runeSnapshot(input);
+      const unconfirmedOutputs = unconfirmedRuneOutputCount(current.evidence);
       await this.retainRuneDisplay(input, { status: 'ready', holdings, transfers: prior.data?.transfers ?? saved.transfers,
-        historyComplete: prior.data?.historyComplete ?? false, canSign: current.canSign, feeFundingSats: clean.toString() });
+        historyComplete: prior.data?.historyComplete ?? false, canSign: current.canSign, feeFundingSats: clean.toString(), unconfirmedOutputs });
       const history = await this.readRuneHistory(input, current, saved.history).catch(() => null);
       if (history) {
         await this.reconcileRunes(input, history).catch(() => undefined);
@@ -6064,12 +6081,57 @@ export class WalletService {
       }
       const result: RuneListResult = { status: 'ready', historyComplete: history?.historyComplete ?? (saved.history.length === 0 && saved.transfers.length === 0 && current.utxos.length === 0), holdings, transfers: [...saved.transfers, ...receipts.values()]
         .sort((a, b) => b.createdAt - a.createdAt || a.txid.localeCompare(b.txid)).slice(0, 1000),
-        canSign: current.canSign, feeFundingSats: clean.toString() };
+        canSign: current.canSign, feeFundingSats: clean.toString(), unconfirmedOutputs };
       await this.retainRuneDisplay(input, result);
+      this.runeLastFailure = null;
       return result;
-    } catch {
-      return { status: this.scanRun !== null || this.scanStarting !== null ? 'checking' : 'unavailable', holdings: [], transfers: saved.transfers, canSign: saved.canSign, feeFundingSats: '0' };
+    } catch (error) {
+      if (error instanceof RuneReadError) await this.rescanBehindSource(input);
+      const status = this.scanRun !== null || this.scanStarting !== null ? 'checking' : 'unavailable';
+      if (status === 'unavailable') this.reportRuneUnavailable(error);
+      return { status, holdings: [], transfers: saved.transfers, canSign: saved.canSign, feeFundingSats: '0' };
     }
+  }
+
+  /**
+   * After a new block or classification revision, a refused Rune read is
+   * explained by a stored UTXO set scanned at the old source: outputs since
+   * spent, pending outputs since confirmed, or stale facts. Start that refresh
+   * once per account and source instead of waiting for a view's 60 s
+   * background scan. Refusals with current stored facts (a gateway outage,
+   * say) never scan, evidence stays refused until the rescan lands, and a
+   * failed scan is not retried.
+   */
+  private async rescanBehindSource(input: RuneListRequest): Promise<void> {
+    // A scan already under way may predate the new source; let it finish and
+    // decide on the next read rather than spending this source's one refresh.
+    if (this.scanRun !== null || this.scanStarting !== null) return;
+    const gateway = this.deps.gateway;
+    const cached = gateway ? await loadCachedStatus(this.deps.session, gateway.endpoint, gateway.protocolVersions) : null;
+    if (!cached) return;
+    const { coreTip, activeRevision } = cached.status;
+    const key = `${input.accountId}:${coreTip.hash}:${activeRevision}`;
+    if (key === this.runeRescanKey) return;
+    const behind = await this.runExclusive(() => this.withSessionDek(input, async (dek, session) =>
+      (await this.loadAllUtxosLocked(dek, session.vaultId)).some((utxo) => utxo.accountId === input.accountId && utxo.facts !== null &&
+        (utxo.facts.classifiedTip.hash !== coreTip.hash || utxo.facts.classificationRevision !== activeRevision)))).catch(() => false);
+    if (!behind) return;
+    this.runeRescanKey = key;
+    await this.startScan({ mode: 'refresh', expectedVaultId: input.expectedVaultId, expectedSessionId: input.expectedSessionId })
+      .catch(() => undefined);
+  }
+
+  /**
+   * Diagnostics for "Rune balances unavailable". Logs only a bounded category
+   * (never outpoints, scripts, addresses, amounts, or free-form messages, some
+   * of which carry outpoints), once per change so the display poll cannot spam.
+   */
+  private reportRuneUnavailable(error: unknown): void {
+    const reason = error instanceof RuneReadError ? `${error.code}/${error.reason}` :
+      error instanceof RpcError ? error.code : error instanceof Error ? error.name : 'unknown';
+    if (reason === this.runeLastFailure) return;
+    this.runeLastFailure = reason;
+    console.warn(`Rune balances unavailable: ${reason}`);
   }
 
   async runeDraft(input: RuneListRequest & { draft?: import('../messaging/rune-ops').RuneDraft | null }) {
@@ -6080,6 +6142,23 @@ export class WalletService {
       const prefs = record ? openRecord(dek, record, runePreferencesSchema) : { hidden: [] };
       if (input.draft !== undefined) await this.requireCache().put(sealRecord(dek, { ...prefs, draft: input.draft }, key, this.deps.vaultDeps.random(24), this.deps.vaultDeps.now()));
       return { draft: input.draft === undefined ? prefs.draft ?? null : input.draft };
+    }));
+  }
+
+  async sendDraft(input: SendDraftRequest): Promise<{ draft: SendDraft | null }> {
+    return this.runExclusive(() => this.withSessionDek(input, async (dek, session) => {
+      if ((await this.loadAccountsMetaLocked(dek, session.vaultId)).activePublicAccountId !== input.accountId) {
+        throw new RpcError('ERR_PLAN_CHANGED');
+      }
+      const key = this.cacheKey(session.vaultId, 'sendDraft', input.accountId);
+      if (input.draft === undefined) {
+        const record = await this.requireCache().get(key);
+        return { draft: record ? openRecord(dek, record, sendDraftStoreSchema).draft : null };
+      }
+      await this.requireCache().put(sealRecord(
+        dek, { draft: input.draft }, key, this.deps.vaultDeps.random(24), this.deps.vaultDeps.now(),
+      ));
+      return { draft: input.draft };
     }));
   }
 

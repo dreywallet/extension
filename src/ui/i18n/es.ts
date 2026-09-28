@@ -18,6 +18,7 @@ export const es: Record<MessageKey, string> = {
   'common.copyFailed': 'No se pudo copiar; inténtalo de nuevo',
   'common.loading': 'Cargando…',
   'common.retry': 'Reintentar',
+  'common.open': 'Abrir',
   'common.error.internal': 'Algo salió mal. Inténtalo de nuevo.',
   'common.error.locked': 'La cartera está bloqueada.',
   'common.error.wrongPassword': 'Contraseña incorrecta. Inténtalo de nuevo.',
@@ -257,11 +258,11 @@ export const es: Record<MessageKey, string> = {
   'send.manualInputs': '{count} entradas seleccionadas manualmente',
   'send.fee': 'Comisión de red',
   'send.fee.priority': 'Prioritaria',
-  'send.fee.priority.eta': '~1 bloque',
+  'send.fee.priority.eta': '~10 min',
   'send.fee.standard': 'Estándar',
-  'send.fee.standard.eta': '~1–2 bloques',
+  'send.fee.standard.eta': '~10–20 min',
   'send.fee.economy': 'Económica',
-  'send.fee.economy.eta': '~2–3 bloques',
+  'send.fee.economy.eta': '~20–30 min',
   'send.fee.custom': 'Personalizada',
   'send.fee.rate': 'Tarifa (sat/vB)',
   'send.fee.customWarning':
@@ -788,10 +789,10 @@ export const es: Record<MessageKey, string> = {
   'activity.address.ordinals.compact': 'Actividad de Ordinals',
   'activity.address.assetUnidentified':
     'No se vinculó ninguna inscripción ni runa verificada a esta transacción.',
-  'activity.rune.identity': '{identity} · Runa detectada; el envío no es compatible',
+  'activity.rune.identity': '{identity} · Runa detectada',
   'activity.rune.more': '{identity} · +{count} más',
   'activity.rune.partial': '{identity} · +{count} identidades no disponibles',
-  'activity.rune.identityUnavailable': 'Se detectó una runa o un activo no compatible; identidad no disponible y envío no compatible',
+  'activity.rune.identityUnavailable': 'Se detectó una runa o un activo no compatible; identidad no disponible',
 
   'gateway.state.checking': 'Comprobando…',
   'gateway.state.connected': 'Conectado',
@@ -1060,6 +1061,7 @@ export const es: Record<MessageKey, string> = {
   'settings.idleTimeout.24h': '24 horas',
   'settings.idleTimeout.1w': '1 semana',
   'settings.lockNow': 'Bloquear ahora',
+  'settings.lock.summary': 'Bloquea Drey ahora mismo. Necesitarás tu contraseña para volver a abrirlo.',
   'settings.reveal.entry': 'Mostrar frase de recuperación',
   'settings.recovery.entry': 'Copia de seguridad y recuperación',
   'settings.recovery.summary':

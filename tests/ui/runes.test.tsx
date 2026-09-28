@@ -235,6 +235,23 @@ describe('Rune cold popup display', () => {
     render(<Providers><Runes expectation={expectation} accountId={accountId} onClose={vi.fn()} /></Providers>);
     expect(await screen.findByText('105,000,000 🛢')).toBeInTheDocument();
   });
+  it('explains unconfirmed outputs alongside confirmed balances and an empty list', async () => {
+    const data = listing(); data.unconfirmedOutputs = 1;
+    installFakeChrome({ 'runes.list': () => ({ ok: true, result: data }) });
+    render(<Providers><Runes expectation={expectation} accountId={accountId} onClose={vi.fn()} /></Providers>);
+    expect(await screen.findByText('EXACT•RUNE')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Unconfirmed transactions may hold Runes');
+    cleanup(); clearRunesStore();
+    data.holdings = [];
+    render(<Providers><Runes expectation={expectation} accountId={accountId} onClose={vi.fn()} /></Providers>);
+    expect(await screen.findByText('No Runes yet')).toBeInTheDocument();
+    expect(screen.getByText(/Unconfirmed transactions may hold Runes/)).toBeInTheDocument();
+    cleanup(); clearRunesStore();
+    data.unconfirmedOutputs = 0;
+    render(<Providers><Runes expectation={expectation} accountId={accountId} onClose={vi.fn()} /></Providers>);
+    expect(await screen.findByText('No Runes yet')).toBeInTheDocument();
+    expect(screen.queryByText(/Unconfirmed transactions may hold Runes/)).not.toBeInTheDocument();
+  });
 });
 
 it('refreshes promptly when scan completion arrives during a pending checking response', async () => {

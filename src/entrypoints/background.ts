@@ -19,6 +19,12 @@ import { GatewayClient } from '@drey/core/gateway-client';
 import { IdbWalletCache } from '../adapters/storage/wallet-cache-idb';
 import { dispatch } from '../background/dispatch';
 import { registerSessionSweep } from '../background/session-alarm';
+import { registerFirstRunOnboarding } from '../background/first-run';
+import {
+  PROFILE_CREDENTIAL_KEY,
+  VAULTS_KEY,
+  VAULTS_QUARANTINE_KEY,
+} from '../adapters/storage/keys';
 import { WalletService } from '../background/wallet-service';
 import { retryableInit } from '../background/retryable-init';
 import { resolveVaultCoordinatorCapability } from '../background/vault-capability';
@@ -369,6 +375,21 @@ export default defineBackground(() => {
       await service.retryProviderBroadcasts();
     }
   }));
+  // The E2E harness opens onboarding itself and tracks every page it creates;
+  // an unrequested tab racing test startup would only add flakiness there.
+  if (__BUILD_CHANNEL__ !== 'test') {
+    registerFirstRunOnboarding({
+      onInstalled: chrome.runtime.onInstalled,
+      openTab: (url) => chrome.tabs.create({ url }),
+      getUrl: (path) => chrome.runtime.getURL(path),
+      hasProfile: async () => {
+        const stored = await chrome.storage.local.get([
+          VAULTS_KEY, VAULTS_QUARANTINE_KEY, PROFILE_CREDENTIAL_KEY,
+        ]);
+        return Object.values(stored).some((value) => value !== undefined && value !== null);
+      },
+    });
+  }
   chrome.idle.onStateChanged.addListener((state) => {
     if (state === 'locked') void ready().then((service) => service.lock()).catch(() => undefined);
   });

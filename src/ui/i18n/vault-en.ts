@@ -21,6 +21,7 @@ export const vaultEn = {
   'vault.error.unavailable': 'The Vault coordinator is not available in this build.',
 
   'settings.vault.entry': 'Drey Vault',
+  'vault.settings.entrySummary': 'Extra protection: moving funds needs two of this computer, your phone, and an offline recovery key.',
 
   'vault.title': 'Drey Vault',
   'vault.banner':

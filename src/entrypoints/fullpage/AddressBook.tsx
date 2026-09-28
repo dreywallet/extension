@@ -13,6 +13,7 @@ import { useI18n } from '../../ui/i18n';
 import { useRpc } from '../../ui/hooks/use-rpc';
 import type { ActiveSessionExpectation } from '../../ui/hooks/use-session';
 import { Button } from '../../ui/components/Button';
+import { BackLink } from '../../ui/components/BackLink';
 import { Field } from '../../ui/components/Field';
 import { QrCode } from '../../ui/components/QrCode';
 import { WatchAccountScanner, type WatchQrPayload } from './accounts/WatchAccountScanner';
@@ -227,7 +228,7 @@ export function AddressBook(props: {
 
   return (
     <>
-      <Button variant="ghost" onClick={props.onBack}>{t('common.back')}</Button>
+      <BackLink onClick={props.onBack} />
       <div className={styles['addressBookHeader']}>
         <div>
           <h1 className={styles['title']}>{t('contacts.title')}</h1>

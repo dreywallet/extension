@@ -5,6 +5,7 @@ import type { ActiveSessionExpectation } from '../../ui/hooks/use-session';
 import { useI18n } from '../../ui/i18n';
 import { useRpc } from '../../ui/hooks/use-rpc';
 import { Button } from '../../ui/components/Button';
+import { BackLink } from '../../ui/components/BackLink';
 import { AccountMark } from '../../ui/components/AccountMark';
 import { WatchOnlyAccountImport } from './accounts/WatchOnlyAccountImport';
 import { PublicAccountExport } from './accounts/PublicAccountExport';
@@ -221,7 +222,7 @@ export function ManageAccounts(props: {
 
   return (
     <>
-      <Button variant="ghost" onClick={props.onBack}>{t('common.back')}</Button>
+      <BackLink onClick={props.onBack} />
       <h1 className={styles['title']}>{t('account.manage.title')}</h1>
       <p className={styles['rowLabel']}>{t('account.manage.body')}</p>
       <p className={styles['rowLabel']}>{t('account.manage.recovery')}</p>

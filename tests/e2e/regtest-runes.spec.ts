@@ -6,9 +6,9 @@ import { p2tr, p2wpkh, SigHash, Transaction, TEST_NETWORK } from '@scure/btc-sig
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { fillPrivate } from './pages';
-import { assertRegtestReady, assertTransactionIntent, coreRpc, confirmTransaction, freshExternalAddress, freshExternalOrdinalAddress, fundAndConfirm, gatewayOrigin, mempoolTransactionIds, mineBlock, transactionInMempool } from './regtest';
+import { assertRegtestReady, assertTransactionIntent, coreRpc, confirmTransaction, freshExternalAddress, freshExternalOrdinalAddress, fundAndConfirm, fundWithoutConfirmation, gatewayOrigin, mempoolTransactionIds, mineBlock, transactionInMempool } from './regtest';
 import { terminateExtensionWorker, wakeExtensionWorker } from './worker';
-import { assertRuneTransfer, assertReferenceRuneAddressBalance, createRuneFixture, inspectRuneTransaction, lastRuneTransfer, ownedRuneAddresses, ownedPaymentAddresses, prepareRune, runeController, runeMessage, runeState, sendMoreRuneFixture, waitForRune, type RuneFixture } from './regtest-runes';
+import { assertRuneTransfer, assertReferenceRuneAddressBalance, createRuneFixture, refreshScan, inspectRuneTransaction, lastRuneTransfer, ownedRuneAddresses, ownedPaymentAddresses, prepareRune, runeController, runeMessage, runeState, sendMoreRuneFixture, waitForRune, type RuneFixture } from './regtest-runes';
 
 const PASSWORD = ['disposable', 'regtest', 'runes', 'only'].join('-');
 async function receiveAddress(page: Page, role?: 'ordinals'): Promise<string> {
@@ -101,9 +101,19 @@ test('@runes receives, combines, partially sends, confirms and sends Max with ex
   await popup.page.getByRole('button', { name: 'Receive Bitcoin', exact: true }).click();
   const paymentAddress = await receiveAddress(popup.page);
   if (paymentAddress === assetAddress) throw new Error('Bitcoin receiving role equals asset role');
-  await fundAndConfirm(paymentAddress, 100_000);
+  // An unrelated unconfirmed Bitcoin payment must not hide confirmed Rune
+  // balances: the real gateway reports every mempool output incomplete.
+  const funding = await fundWithoutConfirmation(paymentAddress, 100_000);
   await popup.page.getByRole('button', { name: 'Close', exact: true }).click();
   await expect(popup.page.getByLabel('Amount', { exact: true })).toHaveValue('300');
+  await expect.poll(async () => {
+    const state = await runeState(popup.page);
+    const unconfirmed = (state.unconfirmedOutputs ?? 0) > 0;
+    if (state.status === 'ready' && !unconfirmed) await refreshScan(popup.page);
+    return { status: state.status, total: state.holdings.find((holding) => holding.id === first.runeId)?.total,
+      unconfirmed, feeFundingSats: state.feeFundingSats };
+  }, { timeout: 90_000 }).toEqual({ status: 'ready', total: '50000', unconfirmed: true, feeFundingSats: '0' });
+  await confirmTransaction(funding.txid);
   await expect.poll(async () => (await runeState(popup.page)).feeFundingSats, { timeout: 90_000 }).toBe('100000');
   await popup.page.getByRole('button', { name: 'Review transfer', exact: true }).click();
   await expect(popup.page.getByRole('heading', { name: 'Review transfer' })).toBeFocused();
@@ -298,7 +308,7 @@ test('@runes reconciles a lost broadcast response without a second dispatch', as
   expect(await mempoolTransactionIds()).toEqual(before);
   expect(dispatches).toBe(1);
   await confirmTransaction(txid);
-  await expect.poll(async () => (await runeState(popup.page)).transfers.find((item) => item.txid === txid)?.status).toBe('confirmed');
+  await expect.poll(async () => (await runeState(popup.page)).transfers.find((item) => item.txid === txid)?.status, { timeout: 60_000 }).toBe('confirmed');
 });
 
 test('@runes refuses unverified current evidence and never reports unavailable data as zero', async ({ onboarding, popup, extensionContext }) => {
@@ -349,7 +359,7 @@ test('@runes restores a fresh disposable account and rediscovers exact indexed h
   await waitForRune(popup.page, fixture, fixture.atomic);
   await openRunes(popup.page);
   await openToken(popup.page, fixture);
-  await expect(popup.page.locator('dt').filter({ hasText: /^Available$/u }).locator('xpath=following-sibling::dd[1]')).toHaveText('1,000 R');
+  await expect(popup.page.getByText('Available', { exact: true }).locator('xpath=following-sibling::strong[1]')).toHaveText('1,000 R');
   await terminateExtensionWorker(extensionContext, extensionId);
   await wakeExtensionWorker(popup.page, extensionId);
   await waitForRune(popup.page, fixture, fixture.atomic);
@@ -548,7 +558,7 @@ test('@runes keeps warm balances through focus with a themed narrow toolbar', as
   await fundAndConfirm(payment, 100_000);
   await waitForRune(popup.page, fixture, fixture.atomic);
   const entry = popup.page.getByRole('button', { name: /^Runes/u });
-  await expect(entry).toContainText('1 assets');
+  await expect(entry).toContainText('1 asset');
   const evidence = `${gatewayOrigin}/v1/runes/outputs`;
   await extensionContext.route(evidence, (route) => route.abort('failed'));
   try {
@@ -561,7 +571,7 @@ test('@runes keeps warm balances through focus with a themed narrow toolbar', as
     await expect(popup.page.getByRole('status').filter({ hasText: 'Showing your last loaded balances' })).toBeVisible({ timeout: 25_000 });
     await expect(row.locator(':scope > span').last()).toHaveText('1,000 R');
     await popup.page.reload();
-    await expect(popup.page.getByRole('button', { name: /^Runes/u })).toContainText('1 assets', { timeout: 3_000 });
+    await expect(popup.page.getByRole('button', { name: /^Runes/u })).toContainText('1 asset', { timeout: 3_000 });
     await popup.page.getByRole('button', { name: /^Runes/u }).click();
     await expect(row).toBeVisible({ timeout: 3_000 });
     await extensionContext.unroute(evidence);

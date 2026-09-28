@@ -12,14 +12,11 @@ import { useI18n } from '../i18n';
 import { useRpc } from '../hooks/use-rpc';
 import { FULLPAGE_HASH } from '../../entrypoints/fullpage/routes';
 import { AccountMark } from './AccountMark';
+import { openWalletPage } from '../open-wallet-page';
 import styles from './AccountSelector.module.css';
 
 function openFullpage(hash: string): void {
-  if (window.location.pathname.endsWith('/fullpage.html')) {
-    window.location.hash = hash;
-    return;
-  }
-  void chrome.tabs.create({ url: chrome.runtime.getURL(`/fullpage.html${hash}`) });
+  void openWalletPage(hash);
 }
 
 /** Worker-authoritative standard-account menu shared by popup and settings. */

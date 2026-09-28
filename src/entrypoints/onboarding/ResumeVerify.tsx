@@ -16,7 +16,12 @@ import styles from './onboarding.module.css';
  * the typed-word verification directly, plus a password-gated return to the
  * dedicated phrase screen for users who lost their notes.
  */
-export function ResumeVerify(props: { onDone: () => void; expectation: ActiveSessionExpectation }): ReactNode {
+export function ResumeVerify(props: {
+  onDone: () => void;
+  expectation: ActiveSessionExpectation;
+  /** The user already chose "Back up now" from a deferred-backup reminder. */
+  startWithBackup?: boolean;
+}): ReactNode {
   const { t } = useI18n();
   const rpc = useRpc();
 
@@ -29,7 +34,12 @@ export function ResumeVerify(props: { onDone: () => void; expectation: ActiveSes
   const words = useRef<string[] | null>(null);
   const [wordsReady, setWordsReady] = useState(false);
   const [revealError, setRevealError] = useState<string | null>(null);
-  const [step, setStep] = useState<'backupChoice' | 'deferWarning' | 'verify' | 'reauth' | 'reveal'>('backupChoice');
+  const [step, setStep] = useState<'backupChoice' | 'deferWarning' | 'verify' | 'reauth' | 'reveal'>(
+    props.startWithBackup === true ? 'reauth' : 'backupChoice',
+  );
+  // "Drey will ask for different words" only makes sense when the user steps
+  // back from verification, not on the way to seeing the phrase at all.
+  const [returningFromVerify, setReturningFromVerify] = useState(false);
 
   useEffect(() => () => {
     words.current?.fill('');
@@ -102,6 +112,7 @@ export function ResumeVerify(props: { onDone: () => void; expectation: ActiveSes
     words.current = null;
     setWordsReady(false);
     setPassword('');
+    setReturningFromVerify(true);
     setStep('reauth');
   }
 
@@ -123,7 +134,7 @@ export function ResumeVerify(props: { onDone: () => void; expectation: ActiveSes
           <Button variant="secondary" onClick={() => setStep('deferWarning')} disabled={busy}>
             {t('backup.action.later')}
           </Button>
-          <Button onClick={() => setStep('reauth')} disabled={busy}>
+          <Button onClick={() => { setReturningFromVerify(false); setStep('reauth'); }} disabled={busy}>
             {t('backup.action.now')}
           </Button>
         </div>
@@ -160,8 +171,12 @@ export function ResumeVerify(props: { onDone: () => void; expectation: ActiveSes
           void reveal();
         }}
       >
-        <h1 className={styles['title']}>{t('onboarding.verify.review')}</h1>
-        <p className={styles['subtitle']}>{t('onboarding.verify.reviewBody')}</p>
+        <h1 className={styles['title']}>
+          {t(returningFromVerify ? 'onboarding.verify.review' : 'reveal.title')}
+        </h1>
+        <p className={styles['subtitle']}>
+          {t(returningFromVerify ? 'onboarding.verify.reviewBody' : 'reveal.reauth.body')}
+        </p>
         <Field
           label={t('unlock.password')}
           type="password"

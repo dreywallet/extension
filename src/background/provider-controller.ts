@@ -125,6 +125,8 @@ interface PortState {
 
 interface PendingApproval {
   state: PortState;
+  /** Set once transaction bytes were handed to the gateway and it answered. */
+  broadcastDispatched?: boolean;
   request: RuntimeProviderRequest;
   method: ProviderMethod;
   params: unknown;
@@ -589,7 +591,10 @@ export class ProviderController {
       const result = await this.executeApproved(pending, command.password);
       // Signing and encrypted journal persistence both yield. Rebind the exact
       // page, approval generation, session, and TTL at the release boundary.
-      this.assertPendingLive(pending);
+      // A broadcast is past that boundary: its bytes are already relaying, so
+      // withholding the txid (a popup closed or TTL passed mid-dispatch) would
+      // only tell the page it failed and invite a second, paid retry.
+      if (!pending.broadcastDispatched) this.assertPendingLive(pending);
       const delivered = this.respondResult(pending, result);
       if (delivered) {
         if (pending.preparedPsbt?.marketplace) {
@@ -1417,11 +1422,7 @@ export class ProviderController {
         return { psbt: bytesToBase64(hexToBytes(signed.psbtHex)) };
       }
       if (params.broadcast === true) {
-        return this.deps.service.providerBroadcastPreparedPsbt(
-          pending.preparedPsbt,
-          indexes,
-          () => this.assertPendingLive(pending),
-        );
+        return this.broadcastPrepared(pending, pending.preparedPsbt, indexes);
       }
       const signed = await this.deps.service.providerSignPreparedPsbt(
         pending.preparedPsbt,
@@ -1447,23 +1448,29 @@ export class ProviderController {
     }
     if (pending.method === 'sendTransfer') {
       if (!pending.preparedPsbt) throw new RpcError('ERR_PLAN_CHANGED', 'prepared transfer missing');
-      const broadcast = await this.deps.service.providerBroadcastPreparedPsbt(
-        pending.preparedPsbt,
-        undefined,
-        () => this.assertPendingLive(pending),
-      );
+      const broadcast = await this.broadcastPrepared(pending, pending.preparedPsbt, undefined);
       return { txid: broadcast.txid };
     }
     if (pending.method === 'ord_sendInscriptions') {
       if (!pending.preparedPsbt) throw new RpcError('ERR_PLAN_CHANGED', 'prepared ordinal transfer missing');
-      const broadcast = await this.deps.service.providerBroadcastPreparedPsbt(
-        pending.preparedPsbt,
-        undefined,
-        () => this.assertPendingLive(pending),
-      );
+      const broadcast = await this.broadcastPrepared(pending, pending.preparedPsbt, undefined);
       return { txid: broadcast.txid };
     }
     throw new RpcError('ERR_UNSAFE_TRANSACTION', 'provider transaction method is not available');
+  }
+
+  private async broadcastPrepared(
+    pending: PendingApproval,
+    prepared: NonNullable<PendingApproval['preparedPsbt']>,
+    indexes: number[] | undefined,
+  ) {
+    const result = await this.deps.service.providerBroadcastPreparedPsbt(
+      prepared,
+      indexes,
+      () => this.assertPendingLive(pending),
+    );
+    pending.broadcastDispatched = true;
+    return result;
   }
 
   private async revalidate(pending: PendingApproval): Promise<void> {

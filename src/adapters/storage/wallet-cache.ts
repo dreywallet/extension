@@ -29,6 +29,7 @@ export type WalletCacheRecordType =
   | 'plans'
   | 'runeTransfers'
   | 'runePreferences'
+  | 'sendDraft'
   | 'broadcastRecovery'
   | 'providerBroadcastRecovery'
   | 'marketplaceWorkflows'

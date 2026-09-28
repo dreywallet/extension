@@ -293,8 +293,14 @@ describe('transaction screen orchestration', () => {
     expect(await screen.findByText('123.456 sat/vB')).toBeInTheDocument();
     expect(screen.getByText('99.995 sat/vB')).toBeInTheDocument();
     expect(screen.getByText('0.471 sat/vB')).toBeInTheDocument();
-    expect(screen.getByText('~1 block')).toBeInTheDocument();
-    expect(screen.getByText('~1–2 blocks')).toBeInTheDocument();
+    expect(screen.getByText('~10 min')).toBeInTheDocument();
+    expect(screen.getByText('~10–20 min')).toBeInTheDocument();
+    // Each choice also says roughly what a typical payment costs at that rate.
+    expect(screen.getByText('≈ 17,408 sats')).toBeInTheDocument();
+    expect(screen.getByText('≈ 67 sats')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: 'Custom' }));
+    fireEvent.change(screen.getByLabelText('Fee rate (sat/vB)'), { target: { value: '3' } });
+    expect(screen.getByText('≈ 423 sats')).toBeInTheDocument();
     expect(screen.queryByText(/best effort/iu)).not.toBeInTheDocument();
     expect(screen.queryByText(/about/iu)).not.toBeInTheDocument();
   });
@@ -545,6 +551,54 @@ describe('transaction screen orchestration', () => {
     expect(screen.queryByRole('heading', { name: 'Review transaction' })).not.toBeInTheDocument();
   });
 
+  it('releases a review, but keeps the typed form, when the shell switches account', async () => {
+    const cancellations: unknown[] = [];
+    installFakeChrome({
+      'fees.quote': () => ({ ok: true, result: QUOTE }),
+      'transaction.plan': () => ({
+        ok: true,
+        result: {
+          planId: 'account-bound-plan', planHash: 'a'.repeat(64),
+          expiresAt: Date.now() + 60_000, review: batchReauthReview(),
+        },
+      }),
+      'transaction.cancel': (payload) => {
+        cancellations.push(payload);
+        return { ok: true, result: { cancelled: true } };
+      },
+    });
+    const otherAccountId = `acct_mainnet_${'2'.repeat(64)}`;
+    const ui = (accountId: string) => (
+      <Providers>
+        <Transactions
+          accountId={accountId}
+          expectedVaultId="vault-1"
+          expectedSessionId={SESSION_1}
+          capabilities={CAPABILITIES}
+          initialSection="send"
+          onNavigate={() => undefined}
+        />
+      </Providers>
+    );
+
+    const rendered = render(ui(ACCOUNT_ID));
+    fireEvent.change(await screen.findByLabelText('Recipient address or BIP-321 URI'), {
+      target: { value: 'bc1qrecipientone' },
+    });
+    fireEvent.click(screen.getByRole('radio', { name: 'sats' }));
+    fireEvent.change(screen.getByLabelText('Amount (sats)'), { target: { value: '1001' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review transaction' }));
+    await screen.findByRole('heading', { name: 'Review transaction' });
+
+    rendered.rerender(ui(otherAccountId));
+
+    await waitFor(() => expect(cancellations).toEqual([
+      expect.objectContaining({ planId: 'account-bound-plan' }),
+    ]));
+    expect(screen.queryByRole('heading', { name: 'Review transaction' })).not.toBeInTheDocument();
+    expect(await screen.findByLabelText('Recipient address or BIP-321 URI')).toHaveValue('bc1qrecipientone');
+  });
+
   it('shows fee refresh progress in a reserved legend slot without inserting flow content', async () => {
     let quotes = 0;
     let finishRefresh: (() => void) | undefined;
@@ -644,6 +698,185 @@ describe('transaction screen orchestration', () => {
     expect(resolvedInputs).toHaveLength(2);
     expect(open).not.toHaveBeenCalled();
     open.mockRestore();
+  });
+
+  it('flags a mistyped address as soon as the user leaves the field', async () => {
+    installFakeChrome({ 'fees.quote': () => ({ ok: true, result: QUOTE }) });
+    render(view('send'));
+    const recipient = await screen.findByLabelText('Recipient address or BIP-321 URI');
+    fireEvent.change(recipient, { target: { value: 'notanaddress' } });
+    fireEvent.blur(recipient);
+    expect(await screen.findByText(/address isn’t valid for this network/iu)).toBeInTheDocument();
+    expect(recipient).toHaveAttribute('aria-invalid', 'true');
+
+    // A wrong-network address is caught the same way; a valid one clears it.
+    fireEvent.change(recipient, { target: { value: 'tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx' } });
+    fireEvent.blur(recipient);
+    expect(await screen.findByText(/address isn’t valid for this network/iu)).toBeInTheDocument();
+    fireEvent.change(recipient, { target: { value: 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4' } });
+    fireEvent.blur(recipient);
+    expect(screen.queryByText(/address isn’t valid/iu)).not.toBeInTheDocument();
+  });
+
+  it('puts a funds error under the amount and other errors directly above Review', async () => {
+    let code = 'ERR_INSUFFICIENT_FUNDS';
+    installFakeChrome({
+      'fees.quote': () => ({ ok: true, result: QUOTE }),
+      'transaction.plan': () => ({ ok: false, code }),
+    });
+    render(view('send'));
+    fireEvent.change(await screen.findByLabelText('Recipient address or BIP-321 URI'), {
+      target: { value: 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4' },
+    });
+    const amount = screen.getByLabelText('Amount (BTC)');
+    fireEvent.change(amount, { target: { value: '5' } });
+    const review = await screen.findByRole('button', { name: 'Review transaction' });
+    await waitFor(() => expect(review).toBeEnabled());
+    fireEvent.click(review);
+    expect(await screen.findByText(/not enough eligible bitcoin/iu)).toBeInTheDocument();
+    expect(amount).toHaveAttribute('aria-invalid', 'true');
+    expect(amount).toHaveFocus();
+
+    code = 'ERR_DATA_STALE';
+    fireEvent.click(review);
+    const stale = await screen.findByText(/not fresh enough to spend/iu);
+    expect(stale).toHaveFocus();
+    // The message sits beside the action that produced it.
+    expect(stale.nextElementSibling).toBe(review);
+    expect(amount).not.toHaveAttribute('aria-invalid');
+  });
+
+  it('restores an unfinished send and saves later edits', async () => {
+    const writes: unknown[] = [];
+    installFakeChrome({
+      'fees.quote': () => ({ ok: true, result: QUOTE }),
+      'send.draft': (payload) => {
+        if ('draft' in (payload as object)) {
+          writes.push((payload as { draft: unknown }).draft);
+          return { ok: true, result: { draft: (payload as { draft: unknown }).draft } };
+        }
+        return { ok: true, result: { draft: {
+          recipient: 'bc1qsaveddraft', amount: '1500', unit: 'sats', sendMax: false,
+          feeTier: 'economy', customFee: '', additionalRecipients: [],
+        } } };
+      },
+    });
+    render(view('send'));
+    expect(await screen.findByDisplayValue('bc1qsaveddraft')).toBeInTheDocument();
+    expect(screen.getByLabelText('Amount (sats)')).toHaveValue('1500');
+    expect(screen.getByRole('radio', { name: /Economy/u })).toBeChecked();
+
+    fireEvent.change(screen.getByLabelText('Amount (sats)'), { target: { value: '2500' } });
+    await waitFor(() => expect(writes.at(-1)).toMatchObject({ recipient: 'bc1qsaveddraft', amount: '2500' }));
+
+    fireEvent.change(screen.getByLabelText('Recipient address or BIP-321 URI'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Amount (sats)'), { target: { value: '' } });
+    await waitFor(() => expect(writes.at(-1)).toBeNull());
+  });
+
+  it('does not overwrite a recipient handed in by another screen with the draft', async () => {
+    installFakeChrome({
+      'fees.quote': () => ({ ok: true, result: QUOTE }),
+      'send.draft': () => ({ ok: true, result: { draft: {
+        recipient: 'bc1qolddraft', amount: '1', unit: 'btc', sendMax: false,
+        feeTier: 'standard', customFee: '', additionalRecipients: [],
+      } } }),
+    });
+    render(
+      <Providers>
+        <Transactions
+          accountId={ACCOUNT_ID}
+          expectedVaultId="vault-1"
+          expectedSessionId={SESSION_1}
+          capabilities={CAPABILITIES}
+          initialSection="send"
+          initialRecipient="bc1qfromaddressbook"
+          onNavigate={() => undefined}
+        />
+      </Providers>,
+    );
+    expect(await screen.findByDisplayValue('bc1qfromaddressbook')).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(screen.queryByDisplayValue('bc1qolddraft')).not.toBeInTheDocument();
+  });
+
+  it('reviews a payment as amount, recipient, fee and total in the unit the user typed', async () => {
+    const now = Date.now();
+    installFakeChrome({
+      'fees.quote': () => ({ ok: true, result: QUOTE }),
+      'price.quote': () => ({ ok: true, result: {
+        instanceId: 'gateway-1', network: 'mainnet', protocolVersion: 2,
+        requestNonce: 'a'.repeat(32), timestamp: new Date(now).toISOString(),
+        coreTip: { height: 900000, hash: 'b'.repeat(64) },
+        indexTip: { height: 900000, hash: 'b'.repeat(64) },
+        classificationRevision: 'mainnet-rev-1', capabilities: [], signature: 'c'.repeat(128),
+        base: 'BTC', quote: 'USD', priceUsdCentsPerBtc: '10000000',
+        observedAt: new Date(now).toISOString(), expiresAt: new Date(now + 120_000).toISOString(),
+        quality: 'consensus', sourceCount: 3, maxDeviationBps: 10,
+      } }),
+      'transaction.plan': () => ({ ok: true, result: {
+        planId: 'send-plan', planHash: 'a'.repeat(64), expiresAt: Date.now() + 60_000,
+        review: {
+          kind: 'native_send', network: 'mainnet', accountId: ACCOUNT_ID,
+          recipients: [{ address: 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4', valueSats: '10000', role: 'recipient' }],
+          inputs: [{
+            txid: '7'.repeat(64), vout: 0, valueSats: '60000',
+            classification: 'cardinal_clean', path: "m/84'/0'/0'/0/0",
+          }],
+          change: [{ address: 'bc1qchange', valueSats: '49718', role: 'payment_change' }],
+          amountSats: '10000', feeSats: '282', totalSats: '10282',
+          vsize: '141', feeRateSatPerKvB: '2000', feeRateSatPerVb: '2',
+          urgency: 'standard', rbf: true, psbtHash: 'b'.repeat(64),
+          standardModeMissingProtections: [], requiresReauth: false, reauthReasons: [],
+          effectCount: 0, requiresPreviewAcknowledgement: false, inscriptions: [],
+          ordinalAction: null,
+        },
+      } }),
+    });
+    render(view('send'));
+    fireEvent.change(await screen.findByLabelText('Recipient address or BIP-321 URI'), {
+      target: { value: 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4' },
+    });
+    fireEvent.change(screen.getByLabelText('Amount (BTC)'), { target: { value: '0.0001' } });
+    const review = await screen.findByRole('button', { name: 'Review transaction' });
+    await waitFor(() => expect(review).toBeEnabled());
+    fireEvent.click(review);
+
+    const summary = await screen.findByTestId('send-review-summary');
+    expect(summary).toHaveTextContent(
+      /Sending\s*0\.0001 BTC\s*10,000 sats · ≈ \$10\.00\s*Destination\s*bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4/u,
+    );
+    expect(screen.getByText('≈ $0.28', { exact: false })).toBeInTheDocument();
+    expect(screen.getByText('282 sats')).toBeInTheDocument();
+    expect(screen.getByText('0.00010282 BTC')).toBeInTheDocument();
+    // Change, rate and inputs are still available, but only as detail.
+    expect(screen.getByText('Change returning').closest('details')).not.toBeNull();
+    expect(screen.getByText('Fee rate').closest('details')).not.toBeNull();
+  });
+
+  it('shows the spendable balance under the amount and toggles Max beside it', async () => {
+    installFakeChrome({
+      'fees.quote': () => ({ ok: true, result: QUOTE }),
+      'wallet.home': () => {
+        const home = homeWithActivity([]);
+        return { ok: true, result: { ...home, balances: { ...home.balances, availableSats: '60000' } } };
+      },
+    });
+
+    render(view('send'));
+    expect(await screen.findByText('0.0006 BTC')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: 'sats' }));
+    expect(screen.getByText('60,000 sats')).toBeInTheDocument();
+
+    const max = screen.getByRole('switch', { name: 'Send maximum available' });
+    const amount = screen.getByLabelText('Amount (sats)');
+    fireEvent.click(max);
+    expect(max).toBeChecked();
+    expect(amount).toBeDisabled();
+    expect(amount).toHaveAttribute('placeholder', 'Send maximum available');
+    fireEvent.click(max);
+    expect(max).not.toBeChecked();
+    expect(amount).toBeEnabled();
   });
 
   it('preserves the entered amount and Send Max until the user accepts a requested amount', async () => {

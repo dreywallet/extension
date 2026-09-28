@@ -280,6 +280,8 @@ test('@extended sends the exact maximum with no hidden change output', async ({
       wallet.page.getByLabel('Recipient address or BIP-321 URI'),
       destination,
     );
+    // Review amounts follow the entry unit; sats keep the arithmetic exact.
+    await wallet.page.getByRole('radio', { name: 'sats', exact: true }).click();
     await wallet.page.getByLabel('Send maximum available').check();
     await chooseCustomOneSat(wallet.page);
     await wallet.page.getByRole('button', { name: 'Review transaction' }).click();
@@ -287,8 +289,9 @@ test('@extended sends the exact maximum with no hidden change output', async ({
     const heading = wallet.page.getByRole('heading', { name: 'Review transaction' });
     await expect(heading).toBeVisible({ timeout: 45_000 });
     const review = heading.locator('..');
+    const summary = review.getByTestId('send-review-summary');
     const sending = satsFromText(
-      await review.getByText('Sending', { exact: true }).locator('..').locator('dd').textContent(),
+      await summary.locator('strong').first().textContent(),
       'Send Max review amount',
     );
     const fee = satsFromText(
@@ -301,8 +304,8 @@ test('@extended sends the exact maximum with no hidden change output', async ({
     );
     expect(total).toBe(wallet.totalSats);
     expect(sending + fee).toBe(wallet.totalSats);
-    await expect(review.getByText(destination, { exact: true }).locator('..'))
-      .toContainText(`${sending.toLocaleString('en-US')} sats`);
+    await expect(summary).toContainText(destination);
+    await expect(summary).toContainText(`${sending.toLocaleString('en-US')} sats`);
 
     const txid = await signAndReadTxid(wallet.page);
     await transactionInMempool(txid);

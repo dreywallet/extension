@@ -50,6 +50,29 @@ function setup(
 }
 
 describe('Unlock', () => {
+  it('explains a forgotten password and how to start over without touching any wallet', async () => {
+    const { unlockRequests } = setup([VAULTS[0]!]);
+    fireEvent.click(screen.getByRole('button', { name: 'Forgot password?' }));
+    const heading = screen.getByRole('heading', { name: 'Forgot your password?' });
+    expect(heading).toHaveFocus();
+    expect(screen.getByText(/No one can reset or recover your app password/u)).toBeInTheDocument();
+    expect(screen.getByText(/Choose Restore a wallet/u)).toBeInTheDocument();
+    expect(screen.getByRole('note')).toHaveTextContent(/deletes every wallet on this device/u);
+    fireEvent.click(screen.getByRole('button', { name: 'Back to unlock' }));
+    expect(screen.getByRole('button', { name: 'Forgot password?' })).toHaveFocus();
+    expect(unlockRequests).toHaveLength(0);
+  });
+
+  it('clears a wrong-password message as soon as the user types again', async () => {
+    setup([VAULTS[0]!]);
+    const password = screen.getByLabelText('App password');
+    fireEvent.change(password, { target: { value: 'wrong' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock' }));
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    fireEvent.change(password, { target: { value: 'wrong2' } });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('shows a vault picker only when there is more than one vault', () => {
     setup();
     expect(screen.getByRole('combobox')).toBeInTheDocument();

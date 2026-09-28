@@ -17,6 +17,7 @@ export const passkeyEs: Record<PasskeyMessageKey, string> = {
   'passkey.onboarding.skip': 'Ahora no',
 
   'settings.passkeys.entry': 'Desbloqueo con llave de acceso',
+  'passkey.settings.entrySummary': 'Desbloquea con Touch ID, Windows Hello o una llave de seguridad en lugar de escribir tu contraseña.',
 
   'passkey.settings.title': 'Desbloqueo con llave de acceso',
   'passkey.settings.intro':

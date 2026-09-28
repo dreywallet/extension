@@ -3,6 +3,7 @@ import { useI18n } from '../../ui/i18n';
 import { useRpc } from '../../ui/hooks/use-rpc';
 import { errorMessageKey } from '../../ui/errors';
 import { Button } from '../../ui/components/Button';
+import { BackLink } from '../../ui/components/BackLink';
 import { Field } from '../../ui/components/Field';
 import { CountdownMask } from '../../ui/components/CountdownMask';
 import { MnemonicGrid } from '../../ui/components/MnemonicGrid';
@@ -61,6 +62,7 @@ export function RevealSeedSettings(props: {
 
   return (
     <>
+      <BackLink onClick={props.onBack} disabled={busy} />
       <h1 className={styles['title']}>{t('reveal.title')}</h1>
       <section className={styles['section']}>
         <div className={styles['warning']} role="note">
@@ -91,9 +93,7 @@ export function RevealSeedSettings(props: {
               </p>
             ) : null}
             <div className={styles['row']}>
-              <Button variant="secondary" onClick={props.onBack} disabled={busy}>
-                {t('common.back')}
-              </Button>
+              <span />
               <Button type="submit" disabled={busy || password === ''}>
                 {t('reveal.reauth.submit')}
               </Button>
@@ -104,11 +104,6 @@ export function RevealSeedSettings(props: {
             <CountdownMask seconds={REVEAL_SECONDS} onExpire={hide}>
               <MnemonicGrid words={words} />
             </CountdownMask>
-            <div className={styles['row']}>
-              <Button variant="secondary" onClick={props.onBack}>
-                {t('common.back')}
-              </Button>
-            </div>
           </>
         )}
       </section>

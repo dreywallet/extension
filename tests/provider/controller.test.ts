@@ -1376,7 +1376,7 @@ describe('ProviderController authority, disclosure and approvals', () => {
     expect(page.messages).toEqual([expect.objectContaining({
       ok: true,
       result: expect.objectContaining({
-        version: '0.15.8',
+        version: '0.16.0',
         platform: 'web',
         supports: ['WBIP001', 'WBIP004'],
         capabilities: [
@@ -2317,6 +2317,75 @@ describe('ProviderController authority, disclosure and approvals', () => {
     expect(snapshot.request).toBeNull();
     expect(page.messages).toHaveLength(2);
     expect(page.messages.every((message) => JSON.stringify(message).includes('ERR_REQUEST_EXPIRED'))).toBe(true);
+  });
+
+  it('delivers the txid when the approval window closes while the broadcast is in flight', async () => {
+    const h = harness();
+    const page = fakePort();
+    h.controller.attach(page.port, authority);
+    const connectNonce = '123e4567-e89b-42d3-a456-426614174036';
+    page.send(request('wallet_connect', connectNonce, null));
+    await tick();
+    await h.controller.approvalCommand({
+      type: 'drey:approval', protocolVersion: 1, command: 'resolve',
+      requestNonce: connectNonce, approved: true,
+    });
+    h.mock.grants[0]!.scope.categories.push('balance');
+    vi.mocked(h.mock.service.providerBroadcastPreparedPsbt).mockImplementationOnce(async () => {
+      // The user closes the popup after the gateway accepted the bytes.
+      void h.controller.approvalWindowClosed();
+      return { psbt: 'cHNidP8=', txid: '44'.repeat(32) };
+    });
+    const transferNonce = '123e4567-e89b-42d3-a456-426614174037';
+    page.send(request('sendTransfer', transferNonce, {
+      recipients: [{ address: 'tb1qrecipientaddress', amount: 10_000 }],
+    }));
+    await tick();
+    await h.controller.approvalCommand({
+      type: 'drey:approval', protocolVersion: 1, command: 'resolve',
+      requestNonce: transferNonce, approved: true,
+    });
+
+    expect(h.mock.service.providerBroadcastPreparedPsbt).toHaveBeenCalledOnce();
+    // Reporting an error here would invite the page to retry and pay twice.
+    expect(page.messages.filter((message) =>
+      (message as { requestNonce?: string }).requestNonce === transferNonce)).toEqual([
+      expect.objectContaining({ ok: true, result: { txid: '44'.repeat(32) } }),
+    ]);
+  });
+
+  it('still withholds a signature when the approval window closes before release', async () => {
+    const h = harness();
+    const page = fakePort();
+    h.controller.attach(page.port, authority);
+    const connectNonce = '123e4567-e89b-42d3-a456-426614174038';
+    page.send(request('wallet_connect', connectNonce, null));
+    await tick();
+    await h.controller.approvalCommand({
+      type: 'drey:approval', protocolVersion: 1, command: 'resolve',
+      requestNonce: connectNonce, approved: true,
+    });
+    h.mock.grants[0]!.scope.categories.push('balance');
+    vi.mocked(h.mock.service.providerSignMessage).mockImplementationOnce(async () => {
+      // Closed after signing but before the signature is released to the page.
+      void h.controller.approvalWindowClosed();
+      return { signature: 'c2ln', address: 'tb1qpaymentaddress' } as never;
+    });
+    const signNonce = '123e4567-e89b-42d3-a456-426614174039';
+    page.send(request('signMessage', signNonce, {
+      address: 'tb1qpaymentaddress', message: 'hello', protocol: 'BIP322',
+    }));
+    await tick();
+    await h.controller.approvalCommand({
+      type: 'drey:approval', protocolVersion: 1, command: 'resolve',
+      requestNonce: signNonce, approved: true,
+    });
+
+    expect(h.mock.service.providerSignMessage).toHaveBeenCalledOnce();
+    const answers = page.messages.filter((message) =>
+      (message as { requestNonce?: string }).requestNonce === signNonce);
+    expect(answers).toHaveLength(1);
+    expect(answers[0]).toEqual(expect.objectContaining({ ok: false }));
   });
 
   it('rebuilds a transfer plan through the worker before exposing an updated fee review', async () => {

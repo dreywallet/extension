@@ -62,7 +62,7 @@ export const VAULT_STANDALONE_TOOL_DIGEST_UNPUBLISHED = '00'.repeat(32);
  *
  * Reproduce both values from a clean checkout:
  *
- *   git clone --branch v0.20.5 https://github.com/dreywallet/core.git
+ *   git clone --branch v0.20.8 https://github.com/dreywallet/core.git
  *   cd core && pnpm install --frozen-lockfile && pnpm recovery:verify
  *
  * The artifact digest is deliberately the narrower claim. It stayed
@@ -126,13 +126,14 @@ export const VAULT_STANDALONE_TOOL_DIGEST_UNPUBLISHED = '00'.repeat(32);
  * usable and escapes terminal controls without changing historical kit bytes.
  * v0.20.0 and v0.20.1 add native Rune transfers and bounded history. v0.20.4
  * adds conservative pending-change and coin-control metadata, and v0.20.5
- * aligns legacy recovery-only address roles. Both preserve the standalone
+ * aligns legacy recovery-only address roles. v0.20.6 keeps Rune balances
+ * available while wallet outputs are unconfirmed. Each preserves the standalone
  * artifact; each source digest binds its release.
  */
 export const VAULT_STANDALONE_TOOL_RELEASE = Object.freeze({
-  coreTag: 'v0.20.5',
-  sourceDigest: '198e6cb89b2a8ad49499606631edbd3c3ff7016fc68ac40d834108c9884a0b43',
-  artifactDigest: 'ac5b7efbd241fa7ca0e3b88e2780165e847a2ca3c4f1b5243b829d9a737d23a8',
+  coreTag: 'v0.20.8',
+  sourceDigest: 'd0fd66275e89818c179e61e1d62834d99eda230554d04255280cd53373a5035c',
+  artifactDigest: 'ca61941830fb1a33a142da8551604e66239c4adb5b68ba8900923ec5beb9162f',
 });
 
 /**

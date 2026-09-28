@@ -22,6 +22,7 @@
  */
 import { z } from 'zod';
 import { RUNE_OP_SCHEMAS } from './rune-ops';
+import { sendDraftRequestSchema, sendDraftSchema } from './send-draft';
 import { validateMnemonic } from '@drey/core/domain/keys/mnemonic';
 import { ErrorCode } from '@drey/core/messaging/envelope';
 import { OP_SCHEMAS, type OpSpec } from '@drey/core/messaging/ops';
@@ -76,6 +77,14 @@ const coreOpOverrides = {
 
 const extensionLocalOpSchemas = {
   ...RUNE_OP_SCHEMAS,
+  'send.draft': {
+    request: sendDraftRequestSchema,
+    response: z.object({ draft: sendDraftSchema.nullable() }).strict(),
+    allowedSenders: ['popup', 'sidepanel', 'fullpage'],
+    requiresUnlock: true,
+    // The handler validates the exact session while reading the sealed record.
+    handlerEnforcesUnlock: true,
+  },
   'wallet.home.snapshot': {
     request: OP_SCHEMAS['wallet.home'].request,
     response: z.object({

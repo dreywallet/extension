@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, within, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { App } from '../../src/entrypoints/fullpage/App';
 import {
@@ -258,8 +258,10 @@ describe('full-page routing', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Manage accounts' }));
     expect(await screen.findByRole('heading', { name: 'Manage accounts' })).toBeInTheDocument();
     expect(window.location.hash).toBe(FULLPAGE_HASH.accounts);
-    expect(screen.queryByRole('navigation', { name: 'Wallet navigation' }))
-      .not.toBeInTheDocument();
+    // Nested Settings pages keep the section tabs so the user knows where
+    // they are, with Settings marked as the current section.
+    const nav = screen.getByRole('navigation', { name: 'Wallet navigation' });
+    expect(within(nav).getByRole('button', { name: 'Settings' })).toHaveAttribute('aria-current', 'page');
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     expect(await screen.findByRole('heading', { level: 1, name: 'Wallets & accounts' }))
       .toBeInTheDocument();

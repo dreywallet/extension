@@ -1,7 +1,7 @@
 import { accountsMetaReadSchema } from '@drey/core/scan/cache-schemas';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { GatewayClient } from '@drey/core/gateway-client';
 import { statusCapabilitiesSchema } from '@drey/core/domain/gateway/contract';
 import { derivePublicAccountAddress, publicAccountFromSeed } from '@drey/core/domain/accounts/public-account';
@@ -37,6 +37,7 @@ async function setup() {
   let onEvidence: (() => Promise<void>) | undefined;
   let historyWait: (() => Promise<void>) | undefined;
   let onHistory: ((response: Record<string, unknown>) => Record<string, unknown>) | undefined;
+  let incompleteConfirmed = false;
   const utxos: WalletUtxo[] = ['ordinals', 'payment'].map((rawLane, index) => {
     const lane = rawLane as 'ordinals' | 'payment';
     const derived = derivePublicAccountAddress(account, lane, 0, 0);
@@ -55,8 +56,12 @@ async function setup() {
     fetchRuneOutputs: async (request: { outpoints: Array<{ txid: string; vout: number }> }) => {
       const outputs = request.outpoints.map((point) => {
         const utxo = utxos.find((item) => item.outpoint.txid === point.txid)!;
-        return { ...point, valueSats: utxo.valueSats.toString(), scriptPubKey: utxo.scriptPubKey, confirmations: 2,
-          complete: true, balances: utxo.lane === 'payment' ? [] : [{ id: '840000:1', name: 'TEST•RUNE', amount: '1000', divisibility: 2, symbol: null }] };
+        // Production shape: ord indexes only confirmed outputs, so every
+        // unconfirmed output is reported incomplete with no balances.
+        const complete = utxo.height !== null && !incompleteConfirmed;
+        return { ...point, valueSats: utxo.valueSats.toString(), scriptPubKey: utxo.scriptPubKey,
+          confirmations: utxo.height === null ? 0 : status.coreTip.height - utxo.height + 1,
+          complete, balances: utxo.lane === 'payment' || !complete ? [] : [{ id: '840000:1', name: 'TEST•RUNE', amount: '1000', divisibility: 2, symbol: null }] };
       });
       await onEvidence?.();
       return { ok: true as const, value: { instanceId: status.instanceId, network: 'signet', protocolVersion: 2,
@@ -90,7 +95,9 @@ async function setup() {
     if (!session) throw new Error('fixture is locked');
     const dek = base64ToBytes(session.dekB64);
     try {
-      for (const utxo of utxos) await cache.put(sealRecord(dek, [utxo], { vaultId, network: 'signet', type: 'utxos', key: `a0:${utxo.lane}` }, new Uint8Array(24).fill(1), now));
+      for (const lane of ['ordinals', 'payment'] as const) {
+        await cache.put(sealRecord(dek, utxos.filter((utxo) => utxo.lane === lane), { vaultId, network: 'signet', type: 'utxos', key: `a0:${lane}` }, new Uint8Array(24).fill(1), now));
+      }
     } finally { dek.fill(0); }
   };
   await writeUtxos();
@@ -100,7 +107,8 @@ async function setup() {
     hasConflictingSources: false }, { vaultId, network: 'signet', type: 'accountsMeta', key: 'all' }, new Uint8Array(24).fill(2), now));
   dek.fill(0);
   const prepare = () => harness.service.runePrepare({ ...input, runeId: '840000:1', amount: '400', recipient, feeRate: '2' });
-  return { setHistoryWait: (fn: () => Promise<void>) => { historyWait = fn; }, ...harness, status, cache, utxos, broadcasts, input, prepare, writeUtxos, setOnHistory: (fn: (response: Record<string, unknown>) => Record<string, unknown>) => { onHistory = fn; }, setOnEvidence: (fn: () => Promise<void>) => { onEvidence = fn; } };
+  return { setHistoryWait: (fn: () => Promise<void>) => { historyWait = fn; }, ...harness, status, cache, utxos, broadcasts, input, prepare, writeUtxos, setOnHistory: (fn: (response: Record<string, unknown>) => Record<string, unknown>) => { onHistory = fn; }, setOnEvidence: (fn: () => Promise<void>) => { onEvidence = fn; },
+    setIncompleteConfirmed: (value: boolean) => { incompleteConfirmed = value; } };
 }
 
 describe('Rune service authority and durable dispatch', () => {
@@ -238,5 +246,100 @@ describe('Rune display latency', () => {
     await fixture.service.lock();
     await expect(fixture.service.runeSnapshot(fixture.input)).rejects.toThrow();
     expect(fixture.session.store.has('drey:runeSnapshot')).toBe(false);
+  });
+});
+
+describe('Rune display with unconfirmed outputs', () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+  async function withPending() {
+    const fixture = await setup();
+    for (const [index, lane] of (['payment', 'ordinals'] as const).entries()) {
+      const derived = derivePublicAccountAddress(publicAccountFromSeed(mnemonicToSeed(phrase), 'signet', 0), lane, 1, index);
+      fixture.utxos.push({ outpoint: { txid: String(index + 7).repeat(64), vout: 0 }, valueSats: lane === 'payment' ? 50000n : 546n,
+        scriptPubKey: derived.scriptPubKeyHex, accountId: fixture.input.accountId, account: 0, lane, chain: 1, addressIndex: index, height: null,
+        walletCreatedChange: lane === 'payment', flags: { userFrozen: false, dustQuarantined: false },
+        // Real scan facts: proven own payment change (core paymentChangeFacts)
+        // versus any other mempool output (degraded, identity unknown).
+        facts: lane === 'payment'
+          ? { primaryClass: 'cardinal_clean', inscriptions: [], satRanges: null, unsupportedAssetDetected: false, detectedAssets: [], detectedAssetCount: 0,
+            assetIdentityComplete: true, confidence: 'authoritative', classifiedTip: fixture.status.coreTip, classificationRevision: fixture.status.activeRevision }
+          : { primaryClass: 'unknown', inscriptions: [], satRanges: null, unsupportedAssetDetected: false,
+            confidence: 'degraded', classifiedTip: fixture.status.coreTip, classificationRevision: fixture.status.activeRevision } });
+    }
+    await fixture.writeUtxos();
+    return fixture;
+  }
+  it('keeps confirmed balances visible and reports unconfirmed outputs', async () => {
+    const fixture = await withPending();
+    const list = await fixture.service.runeList(fixture.input);
+    expect(list.status).toBe('ready');
+    expect(list.holdings).toMatchObject([{ name: 'TEST•RUNE', total: '1000', available: '1000', constrained: [] }]);
+    expect(list.unconfirmedOutputs).toBe(2);
+    // Unconfirmed wallet change is never Rune fee funding (core cleanFunding).
+    expect(list.feeFundingSats).toBe('10000');
+    expect((await fixture.service.runeSnapshot(fixture.input)).data?.unconfirmedOutputs).toBe(2);
+  });
+  it('reports no unconfirmed outputs when everything is confirmed', async () => {
+    const fixture = await setup();
+    expect((await fixture.service.runeList(fixture.input)).unconfirmedOutputs).toBe(0);
+  });
+  it('reviews a transfer while an unrelated output is unconfirmed', async () => {
+    const fixture = await withPending();
+    expect((await fixture.prepare()).amount).toBe('400');
+    expect(fixture.broadcasts).toHaveLength(0);
+  });
+  it('still refuses incomplete evidence for a confirmed output', async () => {
+    const fixture = await setup(); fixture.setIncompleteConfirmed(true);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect((await fixture.service.runeList(fixture.input)).status).toBe('unavailable');
+    expect(warn.mock.calls).toEqual([['Rune balances unavailable: ERR_DATA_STALE/binding_mismatch']]);
+  });
+  it('logs a bounded reason once per change without wallet data', async () => {
+    const fixture = await setup();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const setScanComplete = async (complete: boolean) => {
+      const session = await getSession(fixture.session); const dek = base64ToBytes(session!.dekB64);
+      const key = { vaultId: fixture.input.expectedVaultId, network: 'signet' as const, type: 'accountsMeta' as const, key: 'all' };
+      const meta = openRecord(dek, (await fixture.cache.get(key))!, accountsMetaReadSchema);
+      try { await fixture.cache.put(sealRecord(dek, { ...meta, lastCompletedScanId: complete ? 'scan' : null }, key, new Uint8Array(24).fill(7), fixture.clock.now)); }
+      finally { dek.fill(0); }
+    };
+    await setScanComplete(false);
+    expect((await fixture.service.runeList(fixture.input)).status).toBe('unavailable');
+    expect((await fixture.service.runeList(fixture.input)).status).toBe('unavailable');
+    expect(warn.mock.calls).toEqual([['Rune balances unavailable: ERR_DATA_STALE/scan_incomplete']]);
+    await setScanComplete(true);
+    expect((await fixture.service.runeList(fixture.input)).status).toBe('ready');
+    fixture.setIncompleteConfirmed(true);
+    await fixture.service.runeList(fixture.input);
+    expect(warn.mock.calls.map(([message]) => message)).toEqual([
+      'Rune balances unavailable: ERR_DATA_STALE/scan_incomplete', 'Rune balances unavailable: ERR_DATA_STALE/binding_mismatch']);
+    for (const [message] of warn.mock.calls) expect(String(message)).not.toMatch(/[0-9a-f]{16}|bc1|tb1|[0-9]{3,}/u);
+  });
+});
+
+describe('Rune refresh after a new block', () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+  it('starts one refresh scan per gateway source while stored facts lag it', async () => {
+    const fixture = await setup();
+    fixture.utxos[0]!.facts!.classifiedTip = { height: fixture.status.coreTip.height - 1, hash: 'f'.repeat(64) };
+    await fixture.writeUtxos();
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const scans = vi.spyOn(fixture.service, 'startScan').mockResolvedValue({ scanId: 'refresh' });
+    const request = { mode: 'refresh', expectedVaultId: fixture.input.expectedVaultId, expectedSessionId: fixture.input.expectedSessionId };
+    expect((await fixture.service.runeList(fixture.input)).status).toBe('unavailable');
+    await fixture.service.runeList(fixture.input);
+    expect(scans.mock.calls).toEqual([[request]]);
+    const tip = { height: fixture.status.coreTip.height + 1, hash: 'e'.repeat(64) };
+    Object.assign(fixture.status, { coreTip: tip, indexTip: tip, historyTip: tip, ordTip: tip });
+    await fixture.service.runeList(fixture.input);
+    expect(scans.mock.calls).toEqual([[request], [request]]);
+  });
+  it('does not rescan a refusal while stored facts are current', async () => {
+    const fixture = await setup(); fixture.setIncompleteConfirmed(true);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const scans = vi.spyOn(fixture.service, 'startScan');
+    expect((await fixture.service.runeList(fixture.input)).status).toBe('unavailable');
+    expect(scans).not.toHaveBeenCalled();
   });
 });

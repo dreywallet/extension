@@ -36,6 +36,7 @@ export const runesEn = {
   'runes.expand': 'Open in full page',
   'runes.refreshFailed': 'Couldn’t refresh. Showing your last loaded balances.',
   'runes.historyIncomplete': 'Some earlier Rune transfers may be missing.',
+  'runes.unconfirmed': 'Unconfirmed transactions may hold Runes. They’ll appear here once confirmed.',
   'runes.receiveHint': 'Use this address to receive Runes on {network}.',
   'runes.reviewExpired': 'This review expired. Review it again before sending.',
   'runes.sent': 'Sent',

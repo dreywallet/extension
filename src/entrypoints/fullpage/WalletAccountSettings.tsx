@@ -4,6 +4,7 @@ import { useRpc } from '../../ui/hooks/use-rpc';
 import type { SessionView } from '../../ui/hooks/use-session';
 import { errorMessageKey } from '../../ui/errors';
 import { Button } from '../../ui/components/Button';
+import { BackLink } from '../../ui/components/BackLink';
 import { Field } from '../../ui/components/Field';
 import { AccountSelector } from '../../ui/components/AccountSelector';
 import styles from './fullpage.module.css';
@@ -99,7 +100,7 @@ export function WalletAccountSettings(props: {
 
   return (
     <>
-      <Button variant="ghost" onClick={props.onBack}>{t('common.back')}</Button>
+      <BackLink onClick={props.onBack} />
       <div className={styles['walletAccountsHeader']}>
         <h1 className={styles['title']}>{t('settings.walletAccounts.title')}</h1>
         <p className={styles['rowLabel']}>{t('settings.walletAccounts.summary')}</p>

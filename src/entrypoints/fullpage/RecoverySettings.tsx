@@ -3,6 +3,7 @@ import { useI18n, type MessageKey } from '../../ui/i18n';
 import { useRpc } from '../../ui/hooks/use-rpc';
 import { errorMessageKey } from '../../ui/errors';
 import { Button } from '../../ui/components/Button';
+import { BackLink } from '../../ui/components/BackLink';
 import { WordInput } from '../../ui/components/WordInput';
 import { pickPositions } from '../../ui/random';
 import type { ActiveSessionExpectation } from '../../ui/hooks/use-session';
@@ -467,9 +468,7 @@ export function RecoverySettings(props: {
 
   return (
     <>
-      <div className={styles['row']}>
-        <Button variant="ghost" onClick={() => leave(props.onBack)}>{t('common.back')}</Button>
-      </div>
+      <BackLink onClick={() => leave(props.onBack)} />
       <p className={styles['eyebrow']}>{t('recovery.eyebrow')}</p>
       <h1 className={styles['title']}>{t('recovery.title')}</h1>
       {loadState === 'error' ? (

@@ -6,6 +6,7 @@ import { RestoreFlow } from './RestoreFlow';
 import { ResumeVerify } from './ResumeVerify';
 import { Button } from '../../ui/components/Button';
 import { BrandMark } from '../../ui/components/BrandMark';
+import { BACKUP_INTENT_HASH } from '../../ui/backup-reminder';
 import styles from './onboarding.module.css';
 
 type Route = 'welcome' | 'create' | 'restore' | 'done';
@@ -14,6 +15,7 @@ export function App(): ReactNode {
   const { t } = useI18n();
   const session = useSession();
   const [route, setRoute] = useState<Route>('welcome');
+  const [backupIntent] = useState(() => window.location.hash === BACKUP_INTENT_HASH);
 
   if (route === 'welcome' && session.state === 'loading') {
     return (
@@ -47,14 +49,20 @@ export function App(): ReactNode {
   }
 
   // A vault exists, is unlocked, but the §7.1 gate is still closed: resume
-  // verification instead of offering to create a second vault.
-  if (route === 'welcome' && session.state === 'unverified') {
+  // verification instead of offering to create a second vault. A deferred
+  // backup counts as usable, so it resumes only when a reminder asked for it.
+  const backupDeferredIntent = backupIntent && session.state === 'ready' && session.backupDeferred;
+  if (route === 'welcome' && (session.state === 'unverified' || backupDeferredIntent)) {
     return (
       <div className={styles['page']}>
         <div className={styles['card']}>
           <BrandMark className={styles['brand']} />
           {session.expectation !== null ? (
-            <ResumeVerify expectation={session.expectation} onDone={() => setRoute('done')} />
+            <ResumeVerify
+              expectation={session.expectation}
+              startWithBackup={backupDeferredIntent}
+              onDone={() => setRoute('done')}
+            />
           ) : null}
         </div>
       </div>

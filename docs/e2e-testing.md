@@ -13,6 +13,9 @@ new disposable signet wallet.
   acceptance.
 - Ensure no real wallet profile or credentials are present in the test workspace.
 - Do not make the fixture servers remotely reachable.
+- Keep the host screen unlocked (for long runs, wrap them in `caffeinate -d`).
+  A locked screen locks the wallet through `chrome.idle`, and hidden pages skip
+  wallet scans, so runs fail spuriously.
 
 From `extension/`:
 

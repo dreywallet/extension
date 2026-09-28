@@ -2,7 +2,7 @@
   "name": "drey-extension",
   "description": "Drey — non-custodial Bitcoin, Ordinals and Runes browser extension",
   "private": true,
-  "version": "0.15.8",
+  "version": "0.16.0",
   "license": "AGPL-3.0-only",
   "author": "Squirrel Systems LLC",
   "repository": {
@@ -67,7 +67,7 @@
     "test:e2e:regtest:runes": "node scripts/run-regtest-e2e.mjs --grep @runes"
   },
   "dependencies": {
-    "@drey/core": "git+https://github.com/dreywallet/core.git#v0.20.5",
+    "@drey/core": "git+https://github.com/dreywallet/core.git#v0.20.8",
     "@ngraveio/bc-ur": "1.1.13",
     "@noble/curves": "1.9.7",
     "@scure/bip32": "^1.7.0",

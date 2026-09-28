@@ -17,6 +17,7 @@ export const en = {
   'common.copyFailed': 'Copy failed — try again',
   'common.loading': 'Loading…',
   'common.retry': 'Retry',
+  'common.open': 'Open',
   'common.error.internal': 'Something went wrong. Please try again.',
   'common.error.locked': 'The wallet is locked.',
   'common.error.wrongPassword': 'Wrong password. Try again.',
@@ -252,11 +253,11 @@ export const en = {
   'send.manualInputs': '{count} manually selected inputs',
   'send.fee': 'Network fee',
   'send.fee.priority': 'Priority',
-  'send.fee.priority.eta': '~1 block',
+  'send.fee.priority.eta': '~10 min',
   'send.fee.standard': 'Standard',
-  'send.fee.standard.eta': '~1–2 blocks',
+  'send.fee.standard.eta': '~10–20 min',
   'send.fee.economy': 'Economy',
-  'send.fee.economy.eta': '~2–3 blocks',
+  'send.fee.economy.eta': '~20–30 min',
   'send.fee.custom': 'Custom',
   'send.fee.rate': 'Fee rate (sat/vB)',
   'send.fee.customWarning':
@@ -786,10 +787,10 @@ export const en = {
   'activity.address.ordinals.compact': 'Ordinals activity',
   'activity.address.assetUnidentified':
     'No verified inscription or Rune was linked to this transaction.',
-  'activity.rune.identity': '{identity} · Rune detected—sending unsupported',
+  'activity.rune.identity': '{identity} · Rune detected',
   'activity.rune.more': '{identity} · +{count} more',
   'activity.rune.partial': '{identity} · +{count} identities unavailable',
-  'activity.rune.identityUnavailable': 'Rune or unsupported asset detected—identity unavailable; sending unsupported',
+  'activity.rune.identityUnavailable': 'Rune or unsupported asset detected—identity unavailable',
 
   'gateway.state.checking': 'Checking…',
   'gateway.state.connected': 'Connected',
@@ -1049,6 +1050,7 @@ export const en = {
   'settings.idleTimeout.24h': '24 hours',
   'settings.idleTimeout.1w': '1 week',
   'settings.lockNow': 'Lock now',
+  'settings.lock.summary': 'Lock Drey right away. You’ll need your password to open it again.',
   'settings.reveal.entry': 'Reveal recovery phrase',
   'settings.recovery.entry': 'Backup & recovery',
   'settings.recovery.summary':

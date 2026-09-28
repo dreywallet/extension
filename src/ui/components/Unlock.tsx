@@ -40,6 +40,14 @@ export function Unlock(props: {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const forgotHeading = useRef<HTMLHeadingElement>(null);
+  const forgotLink = useRef<HTMLButtonElement>(null);
+  const returningFromForgot = useRef(false);
+  useEffect(() => {
+    if (forgotOpen) forgotHeading.current?.focus();
+    else if (returningFromForgot.current) forgotLink.current?.focus();
+  }, [forgotOpen]);
   // Per-vault passkey offering (ADR 0007 §5 A2): non-secret credential IDs and
   // fail-closed-parsed PRF eval inputs. The password field is always rendered
   // and always functional — the passkey button is additive convenience.
@@ -143,6 +151,32 @@ export function Unlock(props: {
     }
   }
 
+  if (forgotOpen) {
+    return (
+      <section className={styles['form']} aria-labelledby={`${selectId}-forgot`}>
+        <h1 id={`${selectId}-forgot`} ref={forgotHeading} tabIndex={-1} className={`${styles['title']} ${styles['forgotTitle']}`}>
+          {t('recovery.forgot.title')}
+        </h1>
+        <p className={styles['forgotBody']}>{t('recovery.forgot.body')}</p>
+        <p className={styles['forgotBody']}><strong>{t('recovery.forgot.stepsTitle')}</strong></p>
+        <ol className={styles['forgotSteps']}>
+          <li>{t('recovery.forgot.step1')}</li>
+          <li>{t('recovery.forgot.step2')}</li>
+          <li>{t('recovery.forgot.step3')}</li>
+        </ol>
+        <p className={styles['forgotWarning']} role="note">{t('recovery.forgot.warning')}</p>
+        <Button
+          onClick={() => {
+            returningFromForgot.current = true;
+            setForgotOpen(false);
+          }}
+        >
+          {t('recovery.forgot.back')}
+        </Button>
+      </section>
+    );
+  }
+
   return (
     <form
       className={styles['form']}
@@ -179,7 +213,10 @@ export function Unlock(props: {
         label={t('unlock.password')}
         type="password"
         value={password}
-        onChange={(e) => setPassword(e.target.value)}
+        onChange={(e) => {
+          setPassword(e.target.value);
+          setError(null);
+        }}
         autoComplete="current-password"
         autoFocus
       />
@@ -196,6 +233,14 @@ export function Unlock(props: {
           {t('passkey.unlock.button')}
         </Button>
       ) : null}
+      <button
+        ref={forgotLink}
+        type="button"
+        className={styles['forgotLink']}
+        onClick={() => setForgotOpen(true)}
+      >
+        {t('recovery.forgot.link')}
+      </button>
     </form>
   );
 }

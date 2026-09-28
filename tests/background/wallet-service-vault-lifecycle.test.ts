@@ -513,7 +513,26 @@ describe('C6 refuses rather than guessing', () => {
       planId: (await h.harness.service.vaultCoordinatorPlan(h.harness.expectation)).plan!.planId,
       ...h.harness.expectation,
     })).rejects.toMatchObject({ code: 'ERR_VAULT_BROADCAST_INDETERMINATE' });
+    // A stale tab still showing Build must not displace it as the current plan,
+    // or the possibly relaying transaction could never be reconciled.
+    const heldPlanId = held.plan!.planId;
+    await expect(h.harness.service.vaultCoordinatorBuildPlan({
+      amountSats: '100000',
+      feeRateSatPerKvB: '5000',
+      ...h.harness.expectation,
+    })).rejects.toMatchObject({ code: 'ERR_VAULT_BROADCAST_INDETERMINATE' });
+    expect((await h.harness.service.vaultCoordinatorPlan(h.harness.expectation)).plan!.planId).toBe(heldPlanId);
     expect(h.harness.broadcasts).toHaveLength(1);
+  }, 30_000);
+
+  it('rejects different bytes for a prepared plan without claiming it was sent', async () => {
+    const h = await fundedVault();
+    await finalizeVault(h);
+    const signed = await h.service.vaultCoordinatorSignPlan({ password: PASSWORD, ...h.expectation });
+    await expect(h.service.vaultCoordinatorFinalizePlan({
+      psbtHex: signed.signedPsbtHex, ...h.expectation,
+    })).rejects.toMatchObject({ code: 'ERR_VAULT_PLAN_REJECTED' });
+    expect(h.broadcasts).toHaveLength(0);
   }, 30_000);
 
   it('resumes the same prepared bytes after status was unavailable before dispatch', async () => {

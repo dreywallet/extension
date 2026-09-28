@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useI18n, type Language, type MessageKey } from '../../ui/i18n';
 import { ACCENT_PREFS } from '../../ui/accent';
 import { useAccent } from '../../ui/UiRoot';
@@ -29,6 +29,39 @@ const TIMEOUTS = [
 ] as const;
 type IdleTimeoutMs = (typeof TIMEOUTS)[number]['ms'];
 const TIMEOUT_VALUES: readonly IdleTimeoutMs[] = TIMEOUTS.map((entry) => entry.ms);
+
+/**
+ * A Settings entry: what it is and why you'd open it on the left, one verb on
+ * the right. The button's accessible name is "Open <title>".
+ */
+function SettingLink(props: {
+  title: string;
+  summary: string;
+  onOpen: () => void;
+  /** A card of its own titles itself with a heading; rows inside a card don't. */
+  heading?: boolean;
+}): ReactNode {
+  const { t } = useI18n();
+  const id = useId();
+  return (
+    <div className={styles['row']}>
+      <div className={styles['settingText']}>
+        {props.heading === true
+          ? <h2 id={`${id}-title`} className={styles['sectionTitle']}>{props.title}</h2>
+          : <strong id={`${id}-title`}>{props.title}</strong>}
+        <p className={styles['rowLabel']}>{props.summary}</p>
+      </div>
+      <Button
+        id={`${id}-action`}
+        variant="secondary"
+        aria-labelledby={`${id}-action ${id}-title`}
+        onClick={props.onOpen}
+      >
+        {t('common.open')}
+      </Button>
+    </div>
+  );
+}
 
 export function Settings(props: { session: SessionView }): ReactNode {
   const { t, lang, setLang } = useI18n();
@@ -259,15 +292,12 @@ export function Settings(props: { session: SessionView }): ReactNode {
       ) : null}
 
       <section className={styles['section']}>
-        <h2 className={styles['sectionTitle']}>{t('settings.contacts')}</h2>
-        <div className={styles['row']}>
-          <div>
-            <p className={styles['rowLabel']}>{t('settings.contacts.summary')}</p>
-          </div>
-          <Button variant="secondary" onClick={() => (window.location.hash = FULLPAGE_HASH.addressBook)}>
-            {t('settings.contacts')}
-          </Button>
-        </div>
+        <SettingLink
+          heading
+          title={t('settings.contacts')}
+          summary={t('settings.contacts.summary')}
+          onOpen={() => (window.location.hash = FULLPAGE_HASH.addressBook)}
+        />
       </section>
 
       <section className={styles['section']}>
@@ -342,18 +372,17 @@ export function Settings(props: { session: SessionView }): ReactNode {
           </div>
         </div>
         {passkeySettingsAvailable() ? (
-          <div className={styles['row']}>
-            <span className={styles['rowLabel']}>{t('settings.passkeys.entry')}</span>
-            <Button
-              variant="secondary"
-              onClick={() => (window.location.hash = FULLPAGE_HASH.passkeys)}
-            >
-              {t('settings.passkeys.entry')}
-            </Button>
-          </div>
+          <SettingLink
+            title={t('settings.passkeys.entry')}
+            summary={t('passkey.settings.entrySummary')}
+            onOpen={() => (window.location.hash = FULLPAGE_HASH.passkeys)}
+          />
         ) : null}
         <div className={styles['row']}>
-          <span className={styles['rowLabel']}>{t('nav.lock')}</span>
+          <div className={styles['settingText']}>
+            <strong>{t('nav.lock')}</strong>
+            <p className={styles['rowLabel']}>{t('settings.lock.summary')}</p>
+          </div>
           <Button
             variant="secondary"
             onClick={() => {
@@ -373,40 +402,24 @@ export function Settings(props: { session: SessionView }): ReactNode {
           </span>
         </summary>
         <div className={styles['disclosureContent']}>
-          <div className={styles['row']}>
-            <div>
-              <p className={styles['rowLabel']}>{t('communityVault.title')}</p>
-              <p className={styles['rowLabel']}>{t('communityVault.entry.summary')}</p>
-            </div>
-            <Button variant="secondary"
-              onClick={() => (window.location.hash = FULLPAGE_HASH.communityVault)}>
-              {t('communityVault.entry.open')}
-            </Button>
-          </div>
+          <SettingLink
+            title={t('communityVault.title')}
+            summary={t('communityVault.entry.summary')}
+            onOpen={() => (window.location.hash = FULLPAGE_HASH.communityVault)}
+          />
           {vaultCoordinatorChannelEnabled() ? (
-            <div className={styles['row']}>
-              <span className={styles['rowLabel']}>{t('settings.vault.entry')}</span>
-              <Button
-                variant="secondary"
-                onClick={() => (window.location.hash = FULLPAGE_HASH.vault)}
-              >
-                {t('settings.vault.entry')}
-              </Button>
-            </div>
+            <SettingLink
+              title={t('settings.vault.entry')}
+              summary={t('vault.settings.entrySummary')}
+              onOpen={() => (window.location.hash = FULLPAGE_HASH.vault)}
+            />
           ) : null}
           {props.session.capabilities.canSignMessages ? (
-            <div className={styles['row']}>
-              <div>
-                <p className={styles['rowLabel']}>{t('settings.messageSigning')}</p>
-                <p className={styles['rowLabel']}>{t('settings.messageSigning.summary')}</p>
-              </div>
-              <Button
-                variant="secondary"
-                onClick={() => (window.location.hash = FULLPAGE_HASH.messageSigning)}
-              >
-                {t('settings.messageSigning')}
-              </Button>
-            </div>
+            <SettingLink
+              title={t('settings.messageSigning')}
+              summary={t('settings.messageSigning.summary')}
+              onOpen={() => (window.location.hash = FULLPAGE_HASH.messageSigning)}
+            />
           ) : null}
         </div>
       </details>

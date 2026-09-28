@@ -67,11 +67,22 @@ export class IdbWalletCache implements WalletCachePort {
           db.close();
           this.dbPromise = null;
         };
+        // The browser closes the connection itself when site data is cleared
+        // or storage is removed; reopen rather than failing every later call.
+        db.onclose = () => {
+          this.dbPromise = null;
+        };
         resolve(db);
       };
       request.onerror = () => reject(request.error ?? new Error('IndexedDB open failed'));
     });
-    return this.dbPromise;
+    const opening = this.dbPromise;
+    // A transient open failure must not poison the cache for the worker's
+    // whole lifetime: forget it so the next call retries.
+    opening.catch(() => {
+      if (this.dbPromise === opening) this.dbPromise = null;
+    });
+    return opening;
   }
 
   private async transaction(mode: IDBTransactionMode): Promise<IDBTransaction> {

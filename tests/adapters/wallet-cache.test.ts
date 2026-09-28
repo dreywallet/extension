@@ -206,6 +206,27 @@ function abortSuccessfulPutTransactions(afterSuccessfulPuts = 1): IDBFactory {
   });
 }
 
+describe('IdbWalletCache connection recovery', () => {
+  it('retries opening after a transient failure instead of caching it', async () => {
+    let failures = 1;
+    const flaky = {
+      open: (...args: Parameters<IDBFactory['open']>) => {
+        if (failures > 0) {
+          failures -= 1;
+          const request = {} as IDBOpenDBRequest & { error: DOMException };
+          Object.defineProperty(request, 'error', { value: new DOMException('busy', 'UnknownError') });
+          queueMicrotask(() => request.onerror?.(new Event('error')));
+          return request;
+        }
+        return fakeIndexedDB.open(...args);
+      },
+    } as IDBFactory;
+    const cache = new IdbWalletCache(flaky, fakeIDBKeyRange);
+    await expect(cache.listKeys('vault-retry', 'signet', 'utxos')).rejects.toThrow();
+    await expect(cache.listKeys('vault-retry', 'signet', 'utxos')).resolves.toEqual([]);
+  });
+});
+
 describe('IdbWalletCache transaction durability', () => {
   it('rejects when a transaction aborts after put.onsuccess and leaves no record', async () => {
     const key = { ...KEY, vaultId: 'commit-abort' };

@@ -239,6 +239,7 @@ import type {
   VaultCoordinatorStatusResult,
 } from '../messaging/vault-coordinator-ops';
 import { RpcError } from './errors';
+import { unlockRecordWithAppPassword } from './app-password';
 import { verifyAssertion, WebAuthnVerifyError } from './webauthn-verify';
 import {
   createVaultRoleARecoveryPackage,
@@ -454,7 +455,7 @@ export async function vaultCoordinatorCreateRole(
     const network = requireVaultCoordinator(ctx);
     const { record, session } = await ctx.activeRecord(input);
     await requireNoVaultRoleOrPolicy(ctx);
-    const unlocked = await unlockVault(record, input.password); // throws on wrong-password
+    const unlocked = await unlockRecordWithAppPassword(ctx.local, record, input.password); // throws on wrong-password
     const generated = generateMnemonic((n) => ctx.vaultDeps.random(n));
     const roleSeed = mnemonicToSeed(generated.mnemonic);
     try {
@@ -515,7 +516,7 @@ export async function vaultCoordinatorRestoreRole(
     const network = requireVaultCoordinator(ctx);
     const { record, session } = await ctx.activeRecord(input);
     await requireNoVaultRoleOrPolicy(ctx);
-    const unlocked = await unlockVault(record, input.password); // throws on wrong-password
+    const unlocked = await unlockRecordWithAppPassword(ctx.local, record, input.password); // throws on wrong-password
     // Re-derived rather than trusted: the schema proved the checksum, this
     // produces the canonical entropy and seed the record will actually hold.
     const restored = restoreMnemonic(input.mnemonic);
@@ -775,7 +776,7 @@ export async function vaultCoordinatorRemoveRole(
     }
     // Reauthenticate against the Spending record: an unusable role record
     // cannot verify a password, and requiring one there would strand it.
-    const unlocked = await unlockVault(record, input.password);
+    const unlocked = await unlockRecordWithAppPassword(ctx.local, record, input.password);
     zeroize(unlocked.dek);
     if (stored.state === 'valid' && stored.record.roleId !== input.roleId) {
       throw new RpcError('ERR_VAULT_ROLE_MISSING', 'roleId does not match the stored role');
@@ -1879,7 +1880,7 @@ export async function vaultCoordinatorRemovePolicy(
     if (stored.state === 'absent') {
       throw new RpcError('ERR_VAULT_POLICY_MISSING', 'no Vault policy is stored');
     }
-    const unlocked = await unlockVault(record, input.password); // throws on wrong password
+    const unlocked = await unlockRecordWithAppPassword(ctx.local, record, input.password); // throws on wrong password
     zeroize(unlocked.dek);
     if (stored.state === 'valid' && stored.stored.record.identity.policyId !== input.policyId) {
       throw new RpcError('ERR_VAULT_POLICY_MISSING', 'policyId does not match the stored policy');
@@ -2162,6 +2163,16 @@ export async function vaultCoordinatorBuildPlan(
   }
   return ctx.runExclusive(async () => {
     const { session } = await ctx.activeRecord(input);
+    // Another surface may have dispatched the held plan since this build
+    // began. A new plan would displace it as current and leave its possibly
+    // relaying transaction unreconcilable.
+    const held = await loadCurrentVaultPlan(ctx);
+    if (held !== null && possiblyDispatchedVaultPlan(held.record)) {
+      throw new RpcError(
+        'ERR_VAULT_BROADCAST_INDETERMINATE',
+        'reconcile the possibly dispatched plan before building another',
+      );
+    }
     await saveVaultApprovedPlan(
       ctx.local,
       approvedPlanRecord(built, destination.address, now),
@@ -2319,6 +2330,15 @@ function storedMobileResponseForInput(
  * that reproduce its identity, so a record whose bytes no longer hash to its
  * own digest is not repaired — it does not exist.
  */
+/** Its bytes may be relaying and its exact txid is not yet reconciled. */
+function possiblyDispatchedVaultPlan(stored: VaultApprovedPlanV1): boolean {
+  const lifecycle = stored.broadcastLifecycle;
+  const reconciled = stored.broadcast !== null && stored.broadcast.status !== 'indeterminate';
+  return !reconciled && (stored.broadcast?.status === 'indeterminate' ||
+    lifecycle?.phase === 'dispatch-consumed' ||
+    (lifecycle?.phase === 'terminal' && lifecycle.terminal.status === 'indeterminate'));
+}
+
 async function loadCurrentVaultPlan(ctx: VaultCoordinatorContext): Promise<{
   record: VaultApprovedPlanV1;
   plan: VaultUnsignedPlanV1;
@@ -2731,7 +2751,11 @@ export async function vaultCoordinatorFinalizePlan(
             existing.phase === 'dispatch-consumed' ||
               (existing.phase === 'terminal' && existing.terminal.status === 'indeterminate')
               ? 'ERR_VAULT_BROADCAST_INDETERMINATE'
-              : 'ERR_VAULT_PLAN_ALREADY_BROADCAST',
+              // Prepared but never sent: different bytes are a rejection, not
+              // a claim that something already left the coordinator.
+              : existing.phase === 'prepared'
+                ? 'ERR_VAULT_PLAN_REJECTED'
+                : 'ERR_VAULT_PLAN_ALREADY_BROADCAST',
             'the finalized plan already has a different durable lifecycle state',
           );
         }
@@ -3030,12 +3054,7 @@ export async function vaultCoordinatorDiscardPlan(
     if (stored === undefined) {
       throw new RpcError('ERR_VAULT_PLAN_MISSING', 'no plan is stored under that id');
     }
-    const lifecycle = stored.broadcastLifecycle;
-    const reconciled = stored.broadcast !== null && stored.broadcast.status !== 'indeterminate';
-    const possiblyDispatched = !reconciled && (stored.broadcast?.status === 'indeterminate' ||
-      lifecycle?.phase === 'dispatch-consumed' ||
-      (lifecycle?.phase === 'terminal' && lifecycle.terminal.status === 'indeterminate'));
-    if (possiblyDispatched) {
+    if (possiblyDispatchedVaultPlan(stored)) {
       throw new RpcError(
         'ERR_VAULT_BROADCAST_INDETERMINATE',
         'a possibly dispatched transaction must remain durable until its exact txid is reconciled',

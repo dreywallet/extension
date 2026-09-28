@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useRef,
   useState,
   type ClipboardEvent,
@@ -14,6 +15,8 @@ import { Field } from '../../ui/components/Field';
 import { InscriptionReview, parseInscriptionReview } from '../../ui/components/InscriptionReview';
 import { MediaBadgeTile, TextExcerptTile } from '../../ui/components/PreviewTile';
 import { errorMessageKey } from '../../ui/errors';
+import type { WireErrorCode } from '../../messaging/extension-ops';
+import type { Network } from '@drey/core/domain/keys/derivation';
 import { transactionExplorerUrl } from '../../ui/activity/explorer';
 import { useI18n } from '../../ui/i18n';
 import { useRpc } from '../../ui/hooks/use-rpc';
@@ -38,6 +41,9 @@ import type { UtxoLabel } from '@drey/core/domain/classification/labels';
 import type { AddressBookV1 } from '@drey/core/domain/address-book';
 import { resolvePayableAddress } from '@drey/core/domain/transactions/native-send';
 import { useAccountActivity } from '../../ui/hooks/use-account-activity';
+import { useActivityUnit, usePortfolioPrivacy } from '../../ui/UiRoot';
+import { useFiatPrice } from '../../ui/hooks/use-fiat-price';
+import { formatUsdFromSats } from '@drey/core/domain/fiat';
 import styles from './fullpage.module.css';
 import {
   alignInscriptionThumbnailScope,
@@ -81,6 +87,27 @@ const QUOTE_RETRY_MS = 15_000;
 const LIVE_SCAN_FALLBACK_MS = 60_000;
 const SEND_UNITS = ['btc', 'sats'] as const;
 const MAX_NATIVE_BATCH_RECIPIENTS = 20;
+
+/** Which Send field a planning failure belongs beside, if any. */
+function sendErrorField(code: WireErrorCode): 'recipient' | 'amount' | null {
+  switch (code) {
+    case 'ERR_INVALID_ADDRESS':
+    case 'ERR_UNSUPPORTED_ADDRESS':
+    case 'ERR_INVALID_PAYMENT_INSTRUCTION':
+    case 'ERR_UNSUPPORTED_PAYMENT_METHOD':
+      return 'recipient';
+    case 'ERR_INSUFFICIENT_FUNDS':
+    case 'ERR_OUTPUT_DUST':
+      return 'amount';
+    default:
+      return null;
+  }
+}
+
+function accountNetwork(accountId: string): Network | null {
+  const network = /^acct_(mainnet|signet|regtest)_/u.exec(accountId)?.[1];
+  return network === 'mainnet' || network === 'signet' || network === 'regtest' ? network : null;
+}
 
 function resultTitle(
   result: SubmittedResult,
@@ -126,6 +153,19 @@ function resultNetworkStatus(
 
 function displaySatPerVb(satPerKvB: number | string): string {
   return formatFeeRateSatPerVb(BigInt(satPerKvB));
+}
+
+/**
+ * Rough size of an ordinary payment from this wallet: one native SegWit input,
+ * the recipient, and change. Each extra batch recipient adds about one
+ * output. Only used to show what a fee choice is likely to cost; the review
+ * always shows the exact fee of the planned transaction.
+ */
+const TYPICAL_PAYMENT_VBYTES = 141n;
+const EXTRA_RECIPIENT_VBYTES = 31n;
+
+function estimatedFeeSats(satPerKvB: bigint, vbytes: bigint): bigint {
+  return (satPerKvB * vbytes + 999n) / 1000n;
 }
 
 function reviewChangeSats(review: PlanResult['review']): bigint {
@@ -235,6 +275,10 @@ export function Transactions(props: {
   const pendingBatchFocus = useRef<number | 'add' | null>(null);
   const [sendUnit, setSendUnit] = useState<SendUnit>('btc');
   const [sendMax, setSendMax] = useState(false);
+  const { amountsHidden } = usePortfolioPrivacy();
+  // The same spendable figure Home shows, read once so the Send form can say
+  // how much is available without starting scans of its own.
+  const [sendAvailableSats, setSendAvailableSats] = useState<bigint | null>(null);
   const [postageTarget, setPostageTarget] = useState<PostageTarget>('common_546');
   const [customPostageSats, setCustomPostageSats] = useState('');
   const [paymentRequestLabel, setPaymentRequestLabel] = useState('');
@@ -269,6 +313,48 @@ export function Transactions(props: {
   const [transactionNetwork, setTransactionNetwork] = useState<'mainnet' | 'signet' | 'regtest' | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Send-form problems are shown beside the field they concern, and anything
+  // else directly above Review, so the popup never hides the reason off-screen.
+  const [recipientError, setRecipientError] = useState<string | undefined>(undefined);
+  const [amountError, setAmountError] = useState<string | undefined>(undefined);
+  const recipientInput = useRef<HTMLInputElement>(null);
+  const amountInput = useRef<HTMLInputElement>(null);
+  const sendFormError = useRef<HTMLParagraphElement>(null);
+  const amountErrorId = useId();
+  const fiat = useFiatPrice(props.initialSection === 'send' && accountNetwork(props.accountId) === 'mainnet');
+  const { activityUnit } = useActivityUnit();
+  // A payment is reviewed in the unit the user typed; a speed-up (opened from
+  // Activity, nothing typed) uses the wallet's display preference.
+  const reviewUnit = plan !== null && (plan.review.kind === 'rbf' || plan.review.kind === 'cpfp')
+    ? activityUnit
+    : sendUnit;
+  /** Review amounts use the unit the user typed, with the other unit beside. */
+  const formatReviewAmount = (sats: bigint): string => reviewUnit === 'btc'
+    ? `${satsToBtcDecimal(sats)} BTC`
+    : `${sats.toLocaleString(lang)} sats`;
+  const reviewFiat = (sats: bigint): string | null =>
+    fiat.quote === null || fiat.stale ? null : formatUsdFromSats(sats, fiat.quote.priceUsdCentsPerBtc, lang);
+  const formatReviewAlternate = (sats: bigint): string => {
+    const other = reviewUnit === 'btc' ? `${sats.toLocaleString(lang)} sats` : `${satsToBtcDecimal(sats)} BTC`;
+    const usd = reviewFiat(sats);
+    return usd === null ? other : `${other} · ≈ ${usd}`;
+  };
+  const network = accountNetwork(props.accountId);
+  /** Checks a typed address as soon as the user leaves the field. Payment
+   *  request URIs are resolved by the worker, so only bare addresses count. */
+  useEffect(() => {
+    if (error === null || plan !== null || result !== null) return;
+    const node = sendFormError.current;
+    node?.scrollIntoView?.({ block: 'nearest' });
+    node?.focus({ preventScroll: true });
+  }, [error, plan, result]);
+  const recipientProblem = (value: string): string | undefined => {
+    const candidate = value.trim();
+    if (candidate === '' || network === null || /^bitcoin:/iu.test(candidate)) return undefined;
+    const resolved = resolvePayableAddress(candidate, network);
+    if (resolved.ok) return undefined;
+    return t(resolved.reason === 'invalid_address' ? 'send.error.invalidAddress' : 'send.error.address');
+  };
   const quoteGeneration = useRef(0);
   const utxoGeneration = useRef(0);
   const activityGeneration = useRef(0);
@@ -293,6 +379,61 @@ export function Transactions(props: {
     : utxos.find((utxo) => `${utxo.txid}:${utxo.vout}` === postageDraftOutpoint)?.valueSats ?? null;
 
   const { expectedVaultId, expectedSessionId } = props;
+  // Unfinished Bitcoin sends survive Back, tab switches and the popup
+  // closing. A recipient handed in by another screen is a new intent and
+  // replaces the draft rather than merging with it.
+  const draftsApply = props.initialSection === 'send' && props.initialOrdinalAction == null;
+  const [draftLoaded, setDraftLoaded] = useState(false);
+  useEffect(() => {
+    if (!draftsApply) return undefined;
+    let current = true;
+    void rpc('send.draft', { expectedVaultId, expectedSessionId, accountId: props.accountId })
+      .then((response) => {
+        if (!current) return;
+        const draft = response.ok ? response.result.draft : null;
+        if (draft !== null && props.initialRecipient === undefined) {
+          setRecipient(draft.recipient);
+          setAmount(draft.amount);
+          setSendUnit(draft.unit);
+          setSendMax(draft.sendMax && draft.additionalRecipients.length === 0);
+          setFeeTier(draft.feeTier);
+          setCustomFee(draft.customFee);
+          setAdditionalRecipients(draft.additionalRecipients.map((entry) => ({
+            id: nextRecipientId.current++,
+            ...entry,
+          })));
+        }
+        setDraftLoaded(true);
+      });
+    return () => { current = false; };
+    // Restore once per account and session; later edits are saved below.
+  }, [draftsApply, expectedSessionId, expectedVaultId, props.accountId, rpc]);
+  useEffect(() => {
+    if (!draftsApply || !draftLoaded || ordinalDraft !== null || result !== null) return undefined;
+    const meaningful = recipient !== '' || amount !== '' || sendMax || additionalRecipients.length > 0;
+    const timer = setTimeout(() => {
+      void rpc('send.draft', {
+        expectedVaultId,
+        expectedSessionId,
+        accountId: props.accountId,
+        draft: meaningful
+          ? {
+              recipient,
+              amount,
+              unit: sendUnit,
+              sendMax,
+              feeTier,
+              customFee,
+              additionalRecipients: additionalRecipients.map(({ address, amount: value }) =>
+                ({ address, amount: value })),
+            }
+          : null,
+      });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [additionalRecipients, amount, customFee, draftLoaded, draftsApply, expectedSessionId,
+    expectedVaultId, feeTier, ordinalDraft, props.accountId, recipient, result, rpc, sendMax,
+    sendUnit]);
   const cancelDetachedPlan = useCallback((planId: string): void => {
     void rpc('transaction.cancel', {
       planId,
@@ -429,10 +570,16 @@ export function Transactions(props: {
   }, [cancelDetachedPlan, expectedSessionId, expectedVaultId]);
 
   const previousSection = useRef(props.initialSection);
+  const previousAccountId = useRef(props.accountId);
   useEffect(() => {
     const leftSend = previousSection.current === 'send' && props.initialSection !== 'send';
+    // A review is bound to the account it was planned for; after a switch it
+    // can no longer be approved, so release it like leaving Send. The typed
+    // recipient and amount stay for re-planning on the new account.
+    const accountChanged = previousAccountId.current !== props.accountId;
     previousSection.current = props.initialSection;
-    if (!leftSend) return;
+    previousAccountId.current = props.accountId;
+    if (!leftSend && !accountChanged) return;
     const abandonedPlan = planRef.current;
     planRef.current = null;
     const commandWasInFlight = commandInFlight.current !== null;
@@ -446,7 +593,7 @@ export function Transactions(props: {
     if (abandonedPlan !== null && !commandWasInFlight) {
       cancelDetachedPlan(abandonedPlan.planId);
     }
-  }, [cancelDetachedPlan, props.initialSection]);
+  }, [cancelDetachedPlan, props.accountId, props.initialSection]);
 
   useEffect(() => {
     setTransactions([]);
@@ -460,6 +607,15 @@ export function Transactions(props: {
     setRecipientPickerOpen(false);
   }, [expectedSessionId, expectedVaultId]);
 
+  useEffect(() => {
+    if (props.initialSection !== 'send') return undefined;
+    let current = true;
+    void rpc('wallet.home', { accountId: props.accountId, expectedVaultId, expectedSessionId })
+      .then((response) => {
+        if (current && response.ok) setSendAvailableSats(parseSats(response.result.balances.availableSats));
+      });
+    return () => { current = false; };
+  }, [expectedSessionId, expectedVaultId, props.accountId, props.initialSection, rpc]);
   useEffect(() => {
     if (props.initialSection === 'send') {
       void loadQuote();
@@ -587,6 +743,8 @@ export function Transactions(props: {
       : { type: 'automatic' as const, tier: feeState.current.feeTier };
     setBusy(true);
     setError(null);
+    setRecipientError(undefined);
+    setAmountError(undefined);
     setResult(null);
     const response = await (async () => {
       try {
@@ -611,10 +769,20 @@ export function Transactions(props: {
     }
     setBusy(false);
     if (!response.ok) {
-      setError(t(intent['kind'] === 'ordinal_postage_manage' &&
+      const message = t(intent['kind'] === 'ordinal_postage_manage' &&
         response.code === 'ERR_NO_SWEEPABLE_EXCESS'
         ? 'ordinal.postage.error.uneconomic'
-        : errorMessageKey(response.code)));
+        : errorMessageKey(response.code));
+      const field = intent['kind'] === 'native_send' ? sendErrorField(response.code) : null;
+      if (field === 'recipient') {
+        setRecipientError(message);
+        recipientInput.current?.focus();
+      } else if (field === 'amount') {
+        setAmountError(message);
+        amountInput.current?.focus();
+      } else {
+        setError(message);
+      }
       return;
     }
     setPlan(response.result);
@@ -630,6 +798,7 @@ export function Transactions(props: {
     setImportedSuggestions({});
     setPaymentRequestLabel('');
     setPaymentRequestMessage('');
+    setRecipientError(undefined);
     setRecipient(next.trim());
   }, []);
 
@@ -674,6 +843,7 @@ export function Transactions(props: {
     const generation = ++paymentImportGeneration.current;
     setPaymentImportBusy(true);
     setError(null);
+    setRecipientError(undefined);
     const response = await rpc('paymentInstruction.resolve', {
       input,
       expectedVaultId,
@@ -682,7 +852,7 @@ export function Transactions(props: {
     if (generation !== paymentImportGeneration.current) return;
     setPaymentImportBusy(false);
     if (!response.ok) {
-      setError(t(errorMessageKey(response.code)));
+      setRecipientError(t(errorMessageKey(response.code)));
       return;
     }
 
@@ -900,6 +1070,17 @@ export function Transactions(props: {
     setPreviewUnavailableAcknowledged(false);
     setNonTaprootDestinationAcknowledged(false);
     setSelected(new Set());
+    if (plan.review.ordinalAction === null) {
+      // The payment left; the next Send starts empty rather than repeating it.
+      setRecipient('');
+      setAmount('');
+      setSendMax(false);
+      setAdditionalRecipients([]);
+      setPaymentRequestLabel('');
+      setPaymentRequestMessage('');
+      setImportedSuggestions({});
+      void rpc('send.draft', { expectedVaultId, expectedSessionId, accountId: props.accountId, draft: null });
+    }
   }, [cancelDetachedPlan, expectedSessionId, expectedVaultId,
     nonTaprootDestinationAcknowledged, password, plan,
     previewUnavailableAcknowledged,
@@ -1095,6 +1276,21 @@ export function Transactions(props: {
   const customFeeValid = parseCustomFeeInput(customFee) !== null;
   const feeSelectionReady = feeTier === 'custom' ? customFeeValid : quote !== null;
 
+  // Plain payments only: Ordinals actions have very different shapes.
+  const estimateVbytes = ordinalDraft === null && props.initialSection === 'send'
+    ? TYPICAL_PAYMENT_VBYTES + EXTRA_RECIPIENT_VBYTES * BigInt(additionalRecipients.length)
+    : null;
+  const feeEstimate = (satPerKvB: bigint | undefined): ReactNode => {
+    if (estimateVbytes === null || satPerKvB === undefined) return null;
+    const sats = estimatedFeeSats(satPerKvB, estimateVbytes);
+    const usd = reviewFiat(sats);
+    return (
+      <span className={styles['feeOptionCost']}>
+        ≈ {sats.toLocaleString(lang)} sats{usd === null ? null : <small> · {usd}</small>}
+      </span>
+    );
+  };
+  const customRate = parseCustomFeeInput(customFee);
   const feeChooser = (
     <fieldset className={styles['fieldset']}>
       <legend>
@@ -1126,7 +1322,10 @@ export function Transactions(props: {
             <span className={styles['feeOptionEta']}>{t(eta)}</span>
           </span>
           <span className={styles['feeOptionRate']}>
-            {rate === undefined ? '—' : `${displaySatPerVb(rate)} sat/vB`}
+            {feeEstimate(rate === undefined ? undefined : BigInt(rate))}
+            <span className={estimateVbytes === null ? undefined : styles['feeOptionRateSecondary']}>
+              {rate === undefined ? '—' : `${displaySatPerVb(rate)} sat/vB`}
+            </span>
           </span>
         </label>
       ))}
@@ -1146,6 +1345,7 @@ export function Transactions(props: {
               if (/^\d*(?:\.\d{0,3})?$/u.test(next)) setCustomFee(next);
             }}
           />
+          {customRate !== null ? feeEstimate(customRate.satPerKvB) : null}
         </>
       ) : null}
       {quoteUnavailable ? (
@@ -1185,7 +1385,9 @@ export function Transactions(props: {
         />
       ) : null}
 
-      {error && plan === null ? <p role="alert" className={styles['error']}>{error}</p> : null}
+      {error && plan === null && (props.initialSection !== 'send' || result !== null)
+        ? <p role="alert" className={styles['error']}>{error}</p>
+        : null}
 
       {props.initialSection === 'send' ? (
         result ? (
@@ -1516,13 +1718,56 @@ export function Transactions(props: {
               </>
             ) : (
               <>
+                {/* Lead with what the user is agreeing to, in the unit they typed:
+                    how much, to whom, and what it costs. Mechanics follow in
+                    Technical details. */}
+                {review.recipients.length > 0 ? (
+                  <div className={styles['reviewHero']} data-testid="send-review-summary">
+                    <span className={styles['reviewLabel']}>{t('send.review.amount')}</span>
+                    <strong className={styles['reviewAmount']}>
+                      {formatReviewAmount(BigInt(review.amountSats))}
+                    </strong>
+                    <span className={styles['reviewAlternate']}>
+                      {formatReviewAlternate(BigInt(review.amountSats))}
+                    </span>
+                    <span className={styles['reviewLabel']}>
+                      {t(review.recipients.length === 1 ? 'approval.destination' : 'approval.destinations')}
+                    </span>
+                    <ul className={styles['reviewRecipients']}>
+                      {review.recipients.map((output, index) => (
+                        <li key={`${output.address}:${index}`}>
+                          <span className={styles['reviewAddress']}>{output.address}</span>
+                          {review.recipients.length > 1 ? (
+                            <strong>{formatReviewAmount(BigInt(output.valueSats))}</strong>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
                 <dl className={styles['details']}>
-                  <div><dt>{t('send.review.amount')}</dt><dd>{BigInt(review.amountSats).toLocaleString(lang)} sats</dd></div>
-                  <div><dt>{t('send.review.fee')}</dt><dd>{BigInt(review.feeSats).toLocaleString(lang)} sats</dd></div>
-                  <div><dt>{t('send.review.change')}</dt><dd>{reviewChangeSats(review).toLocaleString(lang)} sats</dd></div>
-                  <div><dt>{t('send.review.total')}</dt><dd>{BigInt(review.totalSats).toLocaleString(lang)} sats</dd></div>
-                  <div><dt>{t('send.review.rate')}</dt><dd>{displaySatPerVb(review.feeRateSatPerKvB)} sat/vB</dd></div>
-                  <div><dt>{t('send.review.inputs')}</dt><dd>{review.inputs.length}</dd></div>
+                  {review.recipients.length === 0 ? (
+                    <div><dt>{t('send.review.amount')}</dt><dd>{formatReviewAmount(BigInt(review.amountSats))}</dd></div>
+                  ) : null}
+                  <div>
+                    <dt>{t('send.review.fee')}</dt>
+                    <dd>
+                      {/* Fees read best in sats: 0.00000282 BTC is not glanceable. */}
+                      {BigInt(review.feeSats).toLocaleString(lang)} sats
+                      {reviewFiat(BigInt(review.feeSats)) !== null ? (
+                        <span className={styles['reviewFiat']}> ≈ {reviewFiat(BigInt(review.feeSats))}</span>
+                      ) : null}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>{t('send.review.total')}</dt>
+                    <dd>
+                      {formatReviewAmount(BigInt(review.totalSats))}
+                      {reviewFiat(BigInt(review.totalSats)) !== null ? (
+                        <span className={styles['reviewFiat']}> ≈ {reviewFiat(BigInt(review.totalSats))}</span>
+                      ) : null}
+                    </dd>
+                  </div>
                 </dl>
                 {paymentRequestLabel !== '' || paymentRequestMessage !== '' ? (
                   <div className={styles['advisory']} role="note">
@@ -1544,14 +1789,13 @@ export function Transactions(props: {
                     <p>{t('send.paymentInstruction.metadataLocal')}</p>
                   </div>
                 ) : null}
-                {review.recipients.map((output, index) => (
-                  <div className={styles['output']} key={`${output.address}:${index}`}>
-                    <span>{output.address}</span>
-                    <strong>{BigInt(output.valueSats).toLocaleString(lang)} sats</strong>
-                  </div>
-                ))}
                 <details>
                   <summary>{t('send.review.details')}</summary>
+                  <dl className={styles['details']}>
+                    <div><dt>{t('send.review.change')}</dt><dd>{reviewChangeSats(review).toLocaleString(lang)} sats</dd></div>
+                    <div><dt>{t('send.review.rate')}</dt><dd>{displaySatPerVb(review.feeRateSatPerKvB)} sat/vB</dd></div>
+                    <div><dt>{t('send.review.inputs')}</dt><dd>{review.inputs.length}</dd></div>
+                  </dl>
                   {review.change.length > 0 ? (
                     <>
                       <p>{t('send.review.changeOutputs')}</p>
@@ -1777,6 +2021,9 @@ export function Transactions(props: {
               </fieldset>
             ) : null}
             {feeChooser}
+            {error !== null ? (
+              <p ref={sendFormError} tabIndex={-1} role="alert" className={styles['error']}>{error}</p>
+            ) : null}
             <Button
               type="submit"
               disabled={!props.capabilities.canBuildUnsignedPsbt || busy || !feeSelectionReady ||
@@ -1795,10 +2042,13 @@ export function Transactions(props: {
               {Number(account) + 1}
             </label>
             <Field
+              ref={recipientInput}
               label={t('send.recipient.paymentInstruction')}
               value={recipient}
               maxLength={8 * 1024}
+              error={recipientError}
               onChange={(event) => changeRecipientManually(event.target.value)}
+              onBlur={() => setRecipientError(recipientProblem(recipient))}
               onPaste={(event) => void pastePaymentInstruction(event)}
               autoComplete="off"
             />
@@ -1830,10 +2080,14 @@ export function Transactions(props: {
             ) : null}
             <div className={styles['amountField']}>
               <Field
+                ref={amountInput}
                 label={t('send.amount', { unit: sendUnit === 'btc' ? 'BTC' : 'sats' })}
                 inputMode="decimal"
                 value={amount}
+                aria-invalid={amountError !== undefined || undefined}
+                aria-describedby={amountError !== undefined ? amountErrorId : undefined}
                 disabled={sendMax}
+                placeholder={sendMax ? t('send.max') : undefined}
                 onChange={(event) => {
                   const next = event.target.value.trim();
                   if (
@@ -1842,6 +2096,7 @@ export function Transactions(props: {
                       : /^\d*(?:\.\d{0,8})?$/u.test(next)
                   ) {
                     setAmount(next);
+                    setAmountError(undefined);
                   }
                 }}
               />
@@ -1868,6 +2123,42 @@ export function Transactions(props: {
                 ))}
               </span>
             </div>
+            {amountError !== undefined ? (
+              <p id={amountErrorId} role="alert" className={styles['fieldError']}>{amountError}</p>
+            ) : null}
+            {(sendAvailableSats !== null && selected.size === 0) || additionalRecipients.length === 0 ? (
+              <div className={styles['amountAvailable']}>
+                {sendAvailableSats !== null && selected.size === 0 ? (
+                  <span>
+                    {t('runes.available')}:{' '}
+                    <strong>
+                      {amountsHidden
+                        ? t('privacy.amountHidden')
+                        : sendUnit === 'btc'
+                          ? `${satsToBtcDecimal(sendAvailableSats)} BTC`
+                          : `${sendAvailableSats.toLocaleString(lang)} sats`}
+                    </strong>
+                  </span>
+                ) : <span />}
+                {/* One output takes everything, so Max has no meaning once the
+                    payment is split across several recipients. */}
+                {additionalRecipients.length === 0 ? (
+                  <button
+                    type="button"
+                    role="switch"
+                    className={styles['amountMax']}
+                    aria-checked={sendMax}
+                    aria-label={t('send.max')}
+                    onClick={() => {
+                      setSendMax(!sendMax);
+                      setAmountError(undefined);
+                    }}
+                  >
+                    {t('runes.max')}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             {importedSuggestions.amountSats !== undefined ? (
               <div className={styles['advisory']} role="note">
                 <p>{t('send.paymentInstruction.requestedAmount', {
@@ -1944,19 +2235,12 @@ export function Transactions(props: {
               >
                 {t('send.batch.add')}
               </Button>
-              {additionalRecipients.length === 0 ? (
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={sendMax}
-                    onChange={(event) => setSendMax(event.target.checked)}
-                  />{' '}
-                  {t('send.max')}
-                </label>
-              ) : null}
             </div>
             {selected.size > 0 ? <p className={styles['success']}>{t('send.manualInputs', { count: selected.size })}</p> : null}
             {feeChooser}
+            {error !== null ? (
+              <p ref={sendFormError} tabIndex={-1} role="alert" className={styles['error']}>{error}</p>
+            ) : null}
             <Button type="submit" disabled={!props.capabilities.canBuildUnsignedPsbt || busy || !feeSelectionReady || recipient === '' || (!sendMax && validAmountSats === null) || !batchRecipientsReady || (feeTier === 'custom' && !customFeeValid)}>{t('send.review')}</Button>
           </form>
         )

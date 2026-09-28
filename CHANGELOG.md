@@ -3,6 +3,70 @@
 Notable user-facing changes to Drey are recorded here. For earlier releases,
 see the production release tags in the repository.
 
+## 0.16.0
+
+### Added
+
+- Open the welcome screen automatically on a fresh install.
+- Show how much bitcoin is available under the Send amount, with a Max
+  toggle beside it.
+- Save an unfinished Bitcoin send so it survives Back, switching tabs, and the
+  popup closing; a successful send clears it.
+- Show what each fee choice is likely to cost in sats (and USD on mainnet),
+  with confirmation times in minutes instead of blocks.
+- Add "Forgot password?" to the unlock screen, explaining that the password
+  cannot be reset and how to start over from the recovery phrase.
+
+### Changed
+
+- The send review leads with the amount (in the unit you typed), the
+  destination, the fee and the total; change, fee rate and inputs move into
+  Technical details.
+- Show address, amount and funds problems beside the field they concern, and
+  other errors directly above Review.
+- "Back up now" goes straight to the phrase backup instead of the welcome
+  screen.
+- Every page uses the same Back control; ordinary Settings pages keep the
+  section tabs; popup links reuse an open wallet tab.
+- Buttons share one style, and Settings entries show a short description with
+  an Open button.
+- Reject in the approval window is no longer styled as a dangerous action.
+
+### Fixed
+
+- Accept the correct app password for wallets added while unlocked (site
+  reauthentication, Vault and Community Vault actions).
+- Report an accepted site broadcast to the page even if the approval window
+  closed mid-dispatch, so a paid retry is not invited.
+- Rescan once when a new block leaves Rune evidence behind, instead of
+  showing Runes as unavailable until the next background scan.
+- Let the locked popup scroll tall content instead of clipping it.
+
+### Security
+
+- Unfinished send drafts are sealed under the wallet key per account.
+- Consume exact-pinned `@drey/core` v0.20.8 and bind its reproducible recovery
+  artifact.
+
+## 0.15.9
+
+### Fixed
+
+- Keep Rune balances and Rune sending available while any wallet transaction
+  is unconfirmed. Previously one pending transaction, even an unrelated
+  Bitcoin payment, made every Rune balance unavailable until it confirmed.
+- Explain that unconfirmed transactions may hold Runes that appear once
+  confirmed.
+- Count only confirmed Bitcoin as available for Rune transfer fees.
+- Describe detected Runes in activity without the outdated sending notice.
+
+### Security
+
+- Unconfirmed outputs carry no Rune evidence and can never be selected as Rune
+  inputs or fee funding; confirmed outputs still require complete evidence.
+- Consume exact-pinned `@drey/core` v0.20.6 and bind its reproducible recovery
+  artifact.
+
 ## 0.15.8
 
 ### Fixed
@@ -22,6 +86,69 @@ see the production release tags in the repository.
   exact plan hash before they can affect balances or eligibility.
 - Consume exact-pinned `@drey/core` v0.20.5 and bind its reproducible recovery
   artifact.
+
+## 0.15.7
+
+### Changed
+
+- Make the Rune list the predictable entry point, preserve only meaningful
+  transfer drafts, simplify Receive and Send, and keep fees and technical
+  details available without overwhelming the primary flow.
+- Improve large and narrow layouts, focus and scroll recovery, funding and
+  expiry guidance, activity details, hidden-token recovery, and transfer
+  receipts.
+
+## 0.15.6
+
+### Added
+
+- Add Priority, Standard, Economy, and Custom fee choices to Rune sends and a
+  searchable picker for saved and recent Taproot recipients.
+
+### Changed
+
+- Keep Max, available balance, Bitcoin funding, review totals, draft fee tier,
+  and transfer receipts consistent across popup and full-page flows.
+
+## 0.15.4
+
+### Changed
+
+- Keep loaded Rune balances and controls still during background refreshes
+  instead of inserting a transient updating row.
+
+## 0.15.2
+
+### Fixed
+
+- Restore verified Rune balances immediately after popup recreation, publish
+  holdings before slower history reconciliation, and avoid losing a scan event
+  while a list request is in flight.
+- Format exact Rune quantities with grouped whole digits, preserved fractional
+  digits, and the supplied currency symbol without floating-point conversion.
+
+## 0.15.1
+
+### Fixed
+
+- Keep Rune balances visible across warm navigation, background scans, focus
+  changes, and recoverable refresh failures while preventing duplicate reads.
+- Keep exact Rune quantities readable in narrow popup and side-panel layouts.
+
+## 0.15.0
+
+### Added
+
+- Add native Rune balances, receive addresses, search and reversible hiding,
+  plus single-recipient transfers with partial and Max amounts.
+- Show exact token change, Bitcoin fee funding, preserved drafts, review, and
+  receipts while reconciling accepted, uncertain, and conflicted broadcasts.
+
+### Security
+
+- Independently validate final Rune transaction bytes, protected sat flow,
+  token allocation, fee funding, fresh signed evidence, and single dispatch.
+- Consume exact-pinned `@drey/core` v0.20.1.
 
 ## 0.14.18
 

@@ -11,6 +11,7 @@ import { useI18n } from '../../ui/i18n';
 import { errorMessageKey } from '../../ui/errors';
 import { usePortfolioPrivacy } from '../../ui/UiRoot';
 import { Button } from '../../ui/components/Button';
+import { BackLink } from '../../ui/components/BackLink';
 import { Field } from '../../ui/components/Field';
 import { formatRuneAmount } from '../../ui/format-rune-amount';
 import { RuneTransferDetails, RuneTransferRow, runeNetwork } from '../../ui/activity/RuneActivity';
@@ -206,7 +207,7 @@ function RuneScreen(props: RunesProps): ReactNode {
   const savedToken = data?.holdings.find((item) => item.id === saved.draft?.runeId);
   const network = runeNetwork(props.accountId);
 
-  if (receive) return <section ref={root} className={styles.page}><div className={popupStyles.overlayToolbar}><button className={popupStyles.overlayBack} type="button" onClick={() => { setReceive(null); refreshBalances(); }}>{t('common.back')}</button></div><Receive initialKind={receive} runeContext={receive === 'ordinals'} accountName={props.accountName} expectation={props.expectation} activeAccountId={props.accountId} onClose={() => { setReceive(null); refreshBalances(); }} /></section>;
+  if (receive) return <section ref={root} className={styles.page}><div className={popupStyles.overlayToolbar}><BackLink onClick={() => { setReceive(null); refreshBalances(); }} /></div><Receive initialKind={receive} runeContext={receive === 'ordinals'} accountName={props.accountName} expectation={props.expectation} activeAccountId={props.accountId} onClose={() => { setReceive(null); refreshBalances(); }} /></section>;
   if (currentTransfer) return <section ref={root} className={styles.page}>
     <h1>{t(currentTransfer.status === 'indeterminate' ? 'runes.statusChecking' : `runes.${currentTransfer.status}`)}</h1>
     {currentTransfer.status === 'indeterminate' ? <p className={styles.warning} role="status">{t('runes.noResend')}</p> : null}
@@ -217,7 +218,7 @@ function RuneScreen(props: RunesProps): ReactNode {
   </section>;
   return <section ref={root} className={styles.page}>
     <div className={popupStyles.overlayToolbar}>
-      <button className={popupStyles.overlayBack} onClick={back} type="button" disabled={busy}>{t('common.back')}</button>
+      <BackLink onClick={back} disabled={busy} />
       {props.onExpand ? <button className={popupStyles.iconButton} type="button" aria-label={t('runes.expand')} title={t('runes.expand')} disabled={busy} onClick={() => {
         if (review) { void rpc('runes.cancel', { ...binding, planId: review.planId }); setReview(null); setPassword(''); }
         const shouldResume = sending && meaningfulRuneDraft(form);
@@ -290,6 +291,7 @@ function RuneScreen(props: RunesProps): ReactNode {
     </> : <>
       {saved.draft ? <div className={styles.notice}><span className={styles.hint}>{t('runes.savedDraft')}</span><strong>{savedToken?.name ?? saved.draft.runeId}</strong>{ready && !savedToken ? <p className={styles.hint}>{t('runes.draftMissingToken')}</p> : null}<div className={styles.actions}><Button variant="secondary" disabled={!savedToken || !ready} onClick={() => { if (saved.draft) resume(saved.draft); }}>{t('runes.resume')}</Button><Button variant="ghost" onClick={() => { void saved.save(null); setSelected(null); setSending(false); }}>{t('runes.discard')}</Button></div></div> : null}
       {hiddenToken ? <div className={styles.notice} role="status"><p>{t('runes.hiddenNotice')}</p><Button variant="ghost" disabled={busy} onClick={() => void setVisibility(hiddenToken, false)}>{t('runes.undo')}</Button></div> : null}
+      {data?.unconfirmedOutputs ? <p className={styles.hint} role="status">{t('runes.unconfirmed')}</p> : null}
       {(data?.holdings.length ?? 0) > 4 || query ? <Field label={t('runes.search')} value={query} onChange={(event) => setQuery(event.target.value)} /> : null}
       {data?.holdings.some((item) => item.hidden) ? <label className={styles.hint}><input type="checkbox" checked={includeHidden} onChange={(event) => setIncludeHidden(event.target.checked)} /> {t('runes.includeHidden')}</label> : null}
       {matches.map((item) => <button type="button" className={styles.entry} key={item.id} onClick={() => { resumed.current = true; setSelected(item.id); setSending(false); clearErrors(); }}><span className={styles.identity}><strong>{item.name}</strong><small>{item.id}</small>{item.available !== item.total ? <small>{t('runes.partAvailable', { amount: quantity(item.available, item) })}</small> : null}</span><span>{quantity(item.total, item)}</span></button>)}

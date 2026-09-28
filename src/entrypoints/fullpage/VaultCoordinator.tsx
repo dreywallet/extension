@@ -30,6 +30,7 @@ import { useI18n } from '../../ui/i18n';
 import { useRpc } from '../../ui/hooks/use-rpc';
 import { errorMessageKey } from '../../ui/errors';
 import { Button } from '../../ui/components/Button';
+import { BackLink } from '../../ui/components/BackLink';
 import { QrCode } from '../../ui/components/QrCode';
 import { Field } from '../../ui/components/Field';
 import styles from './fullpage.module.css';
@@ -787,6 +788,8 @@ export function VaultCoordinator(props: {
 
   return (
     <>
+      {/* Mid-ceremony, Cancel inside the step is the way out. */}
+      {mode.kind === 'view' ? <BackLink onClick={props.onBack} /> : null}
       <h1 className={styles['title']}>{t('vault.title')}</h1>
       <section className={styles['section']}>
         <p className={styles['warning']}>
@@ -1183,9 +1186,6 @@ export function VaultCoordinator(props: {
               <p className={styles['rowLabel']}>{t('vault.next')}</p>
             ) : null}
             <div className={styles['row']}>
-              <Button variant="secondary" onClick={props.onBack}>
-                {t('common.back')}
-              </Button>
               {roleState === 'absent' ? (
                 <>
                   <Button onClick={() => enterMode({ kind: 'create' })}>

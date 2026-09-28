@@ -6,6 +6,7 @@ import { useRpc } from '../../ui/hooks/use-rpc';
 import type { ActiveSessionExpectation } from '../../ui/hooks/use-session';
 import { errorMessageKey } from '../../ui/errors';
 import { Button } from '../../ui/components/Button';
+import { BackLink } from '../../ui/components/BackLink';
 import { Field } from '../../ui/components/Field';
 import styles from './fullpage.module.css';
 
@@ -109,7 +110,7 @@ export function MessageSigning(props: {
   if (result !== null && review !== null) {
     return (
       <>
-        <Button variant="ghost" onClick={props.onBack}>{t('common.back')}</Button>
+        <BackLink onClick={props.onBack} />
         <h1 className={styles['title']}>{t('messageSigning.resultTitle')}</h1>
         <section className={styles['section']}>
           <dl className={styles['details']}>
@@ -140,9 +141,7 @@ export function MessageSigning(props: {
   if (review !== null) {
     return (
       <>
-        <Button variant="ghost" onClick={() => { setReview(null); setPassword(''); setError(null); }}>
-          {t('common.back')}
-        </Button>
+        <BackLink onClick={() => { setReview(null); setPassword(''); setError(null); }} />
         <h1 className={styles['title']}>{t('messageSigning.reviewTitle')}</h1>
         <section className={styles['section']}>
           <p className={styles['advisory']} role="note">{t('messageSigning.warning')}</p>
@@ -171,7 +170,7 @@ export function MessageSigning(props: {
 
   return (
     <>
-      <Button variant="ghost" onClick={props.onBack}>{t('common.back')}</Button>
+      <BackLink onClick={props.onBack} />
       <h1 className={styles['title']}>{t('messageSigning.title')}</h1>
       <p className={styles['rowLabel']}>{t('messageSigning.intro')}</p>
       <section className={styles['section']}>

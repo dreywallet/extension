@@ -30,6 +30,8 @@ const policy = { allowedSenders: ['popup', 'sidepanel', 'fullpage'], requiresUnl
 export const runeListSchema = z.object({
     status: z.enum(['ready', 'checking', 'unavailable']), holdings: z.array(holding).max(10000),
     historyComplete: z.boolean().optional(), transfers: z.array(transfer).max(1000), canSign: z.boolean(), feeFundingSats: z.string(),
+    // Unconfirmed outputs whose Rune content is unknown until they confirm.
+    unconfirmedOutputs: z.number().int().nonnegative().max(2000).optional(),
   }).strict();
 export const RUNE_SNAPSHOT_KEY = 'drey:runeSnapshot';
 export const RUNE_OP_SCHEMAS = {

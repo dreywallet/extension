@@ -57,9 +57,16 @@ export async function runeMessage<T>(page: Page, op: string, payload: Record<str
     const binding = { expectedVaultId: session.vaultId, expectedSessionId: session.sessionId };
     const active = await chrome.runtime.sendMessage(envelope('account.active.get', binding)) as { ok: boolean; result: { accountId: string } };
     if (!active.ok) throw new Error('active disposable account unavailable');
-    const account = ['account.add', 'account.list', 'account.active.get'].includes(op) ? {} : { accountId: active.result.accountId };
+    const account = ['account.add', 'account.list', 'account.active.get', 'scan.status', 'scan.start'].includes(op) ? {} : { accountId: active.result.accountId };
     return chrome.runtime.sendMessage(envelope(op, { ...binding, ...account, ...payload }));
   }, { op, payload });
+}
+
+/** The wallet learns of a mempool payment only by scanning; start a refresh
+ * unless one is already running, as reopening a wallet view would. */
+export async function refreshScan(page: Page): Promise<void> {
+  const status = await runeMessage<{ kind: string }>(page, 'scan.status');
+  if (status.ok && status.result?.kind !== 'running') await runeMessage(page, 'scan.start', { mode: 'refresh' });
 }
 
 export async function runeState(page: Page): Promise<RuneListResult> {

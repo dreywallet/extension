@@ -289,7 +289,7 @@ describe('ordinal activity presentation', () => {
     );
 
     expect(screen.getByText(
-      '100 MAGIC•INTERNET•MONEY · Rune detected—sending unsupported',
+      '100 MAGIC•INTERNET•MONEY · Rune detected',
     )).toBeInTheDocument();
     expect(screen.queryByText('Asset identity unavailable')).not.toBeInTheDocument();
   });

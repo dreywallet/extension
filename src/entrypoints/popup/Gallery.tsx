@@ -17,6 +17,7 @@ import {
 } from '../../ui/hooks/use-gallery-data';
 import type { ActiveSessionExpectation } from '../../ui/hooks/use-session';
 import { Button } from '../../ui/components/Button';
+import { BackLink } from '../../ui/components/BackLink';
 import {
   dismissRecoveredAddressNotice,
   recoveredAddressNoticeDismissed,
@@ -818,24 +819,26 @@ export function Gallery(props: {
   return <>
     <div className={styles['heading']}>
       <h1>{t('gallery.title')}</h1>
-      {selectionMode ? <button type="button" onClick={cancelSelection}>
+      {selectionMode ? <Button variant="secondary" size="compact" onClick={cancelSelection}>
         {t('common.cancel')}
-      </button> : <div className={styles['headingActions']}>
-        <button
-          className={styles['selectionModeButton']}
+      </Button> : <div className={styles['headingActions']}>
+        <Button
+          variant="secondary"
+          size="compact"
           disabled={unverified || (result?.items.length ?? 0) === 0}
           type="button"
           onClick={() => {
             setSelectionMode(true);
             setNotice(null);
           }}
-        >{t('gallery.selection.select')}</button>
-        <button
+        >{t('gallery.selection.select')}</Button>
+        <Button
+          variant="secondary"
+          size="compact"
           aria-label={t('gallery.refresh')}
           disabled={refreshing || status === 'loading' || status === 'syncing'}
-          type="button"
           onClick={() => void refresh(true, false)}
-        >{t(status === 'syncing' ? 'gateway.state.checking' : 'gallery.refresh')}</button>
+        >{t(status === 'syncing' ? 'gateway.state.checking' : 'gallery.refresh')}</Button>
       </div>}
     </div>
     {selectedGroup === null ? <div className={styles['filters']} role="tablist" aria-label={t('gallery.title')}>
@@ -900,7 +903,7 @@ export function Gallery(props: {
         title={groupTitle(group)}
       />) : <section className={styles['collectionSection']}>
         <header className={styles['collectionDetailHeader']}>
-          <button
+          <BackLink
             onClick={() => {
               const returningKey = selectedGroup.key;
               setSelectedGroupKey(null);
@@ -911,11 +914,7 @@ export function Gallery(props: {
                 shelf?.focus();
               });
             }}
-            type="button"
-          >
-            <span aria-hidden="true">‹</span>
-            {t('common.back')}
-          </button>
+          />
           <div>
             <h2>{groupTitle(selectedGroup)}</h2>
             <span>{selectedGroup.items.length}</span>
@@ -1190,9 +1189,9 @@ export function Gallery(props: {
         })}
       </p>
     ) : null}
-    {!selectionMode ? <button type="button" className={styles['receive']} onClick={props.onReceive}>
+    {!selectionMode ? <Button variant="secondary" onClick={props.onReceive}>
       {t('home.receive')}
-    </button> : null}
+    </Button> : null}
     {media !== null && mediaMessage !== null ? <dialog
       aria-label={t('gallery.viewerTitle')}
       className={styles['viewer']}
@@ -1205,9 +1204,9 @@ export function Gallery(props: {
     >
       <div className={styles['viewerHeader']}>
         <strong>{t('gallery.viewerTitle')}</strong>
-        <button ref={viewerCloseRef} type="button" onClick={() => closeViewer()}>
+        <Button ref={viewerCloseRef} variant="secondary" size="compact" onClick={() => closeViewer()}>
           {t('common.close')}
-        </button>
+        </Button>
       </div>
       <iframe
         key={media.leaseId}
