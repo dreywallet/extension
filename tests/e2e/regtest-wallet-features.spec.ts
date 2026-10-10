@@ -44,7 +44,7 @@ async function createFundableWallet(
   const address = checkedRegtestAddress(
     await popup.page.getByTestId('receive-address').textContent(),
   );
-  await popup.page.getByRole('button', { name: 'Close' }).click();
+  await popup.page.getByRole('button', { name: 'Back', exact: true }).click();
   return address;
 }
 
@@ -264,9 +264,9 @@ test('speeds up a real pending payment without changing its recipient or amount'
       'The recipient and amount stay the same. Drey replaces the pending transaction with a higher-fee version.',
       { exact: true },
     )).toBeVisible();
-    const recipientOutput = speedUpReview.getByText(destination, { exact: true }).locator('..');
-    await expect(recipientOutput).toBeVisible();
-    await expect(recipientOutput.getByText('50,000 sats', { exact: true })).toBeVisible();
+    const summary = speedUpReview.getByTestId('send-review-summary');
+    await expect(summary.getByTitle(destination, { exact: true })).toBeVisible();
+    await expect(summary.getByText('50,000 sats', { exact: true })).toBeVisible();
     const replacementFeeText = await speedUpReview.getByText('Fee', { exact: true })
       .locator('..').locator('dd').textContent();
     const replacementFee = Number((replacementFeeText ?? '').replace(/[^0-9]/gu, ''));

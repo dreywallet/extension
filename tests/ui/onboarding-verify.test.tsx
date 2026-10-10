@@ -234,6 +234,24 @@ describe('CreateFlow', () => {
     expect(screen.queryByText('sausage')).toBeNull();
   });
 
+  it('completes four-letter abbreviations before sending verification words', async () => {
+    const { verifyCalls } = setup([true]);
+    await reachRevealStep();
+    fireEvent.click(screen.getByRole('button', { name: 'I wrote the words down' }));
+    await screen.findByText('Confirm your recovery phrase');
+    const inputs = screen.getAllByRole('textbox');
+    fireEvent.change(inputs[0]!, { target: { value: 'lega' } });
+    fireEvent.blur(inputs[0]!);
+    expect(inputs[0]).toHaveValue('legal');
+    // Submitting straight from a box still completes it.
+    fireEvent.change(inputs[1]!, { target: { value: 'sausa' } });
+    fireEvent.change(inputs[2]!, { target: { value: 'yell' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Verify' }));
+    await waitFor(() => expect(verifyCalls).toHaveLength(1));
+    expect((verifyCalls[0] as { words: Array<{ word: string }> }).words.map((entry) => entry.word))
+      .toEqual(['legal', 'sausage', 'yellow']);
+  });
+
   it('advances only on a verified match and reshuffles on failure', async () => {
     const { onDone, verifyCalls } = setup([false, true]);
     await reachRevealStep();

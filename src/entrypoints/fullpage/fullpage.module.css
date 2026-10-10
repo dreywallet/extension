@@ -1446,7 +1446,16 @@
 .compactTransactions .section {
   background: transparent;
   border: 0;
+  gap: .625rem;
   padding: 0;
+}
+
+.compactTransactions .reviewHero {
+  padding: var(--space-3);
+}
+
+.compactTransactions .reviewLabel:not(:first-child) {
+  margin-top: var(--space-2);
 }
 
 .compactTransactions .title {
@@ -2704,5 +2713,591 @@
     gap: var(--space-2);
     padding-left: var(--space-3);
     padding-right: var(--space-3);
+  }
+}
+
+/* One-line fee choice for the popup: the selected tier, its time and cost,
+   and a way to change it. The whole row is the control. */
+.feeSummary {
+  align-items: center;
+  background: transparent;
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: inherit;
+  cursor: pointer;
+  display: grid;
+  font: inherit;
+  gap: var(--space-3);
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  min-height: 3.25rem;
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  width: 100%;
+}
+
+.feeSummary:hover {
+  background: var(--color-surface-raised);
+}
+
+.feeSummary:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.feeSummaryCopy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.feeSummaryLabel {
+  align-items: center;
+  color: var(--color-text-muted);
+  display: inline-flex;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  gap: var(--space-2);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.feeSummaryChoice {
+  align-items: baseline;
+  display: flex;
+  gap: var(--space-2);
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.feeSummaryChange {
+  color: var(--color-accent);
+  font-size: var(--text-xs);
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+/* An address field whose picker sits on the label line. The label leaves room
+   for it and wraps instead of running underneath. */
+.recipientField {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  position: relative;
+}
+
+.recipientField > div:first-child > label {
+  min-height: 1.75rem;
+  padding-right: 8.5rem;
+  display: flex;
+  align-items: center;
+}
+
+.recipientPickerTrigger {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: 800;
+  gap: .35rem;
+  min-height: 1.75rem;
+  padding: 0 .35rem;
+  position: absolute;
+  right: 0;
+  text-transform: uppercase;
+  top: 0;
+}
+
+.recipientPickerTrigger svg {
+  flex: none;
+  height: 1rem;
+  width: 1rem;
+}
+
+.recipientPickerTrigger:hover {
+  background: var(--color-surface-raised);
+  color: var(--color-accent);
+}
+
+.recipientPickerTrigger:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+/* A secondary action that should not compete with the step's main button. */
+.textAction {
+  align-self: flex-start;
+  background: transparent;
+  border: 0;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 700;
+  min-height: 2rem;
+  padding: 0;
+}
+
+.textAction:hover:not(:disabled) {
+  color: var(--color-text);
+  text-decoration: underline;
+}
+
+.textAction:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.textAction:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+
+/* The step's decision stays in reach however long the content above it is. */
+.stickyActions {
+  background: var(--color-surface);
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  padding: var(--space-3) 0 var(--space-1);
+  position: sticky;
+  z-index: 2;
+}
+
+.stickyActions.row {
+  flex-direction: row;
+  flex-wrap: nowrap;
+}
+
+.stickyActions.row > button {
+  flex: 1 1 auto;
+}
+
+/* Cancel stays its natural width so the signing action keeps one line. */
+.stickyActions.row > button:first-child:not(:last-child) {
+  flex: 0 0 auto;
+}
+
+.compactTransactions .stickyActions {
+  background: var(--color-bg);
+  box-shadow: 0 -1px 0 var(--color-border);
+  margin-bottom: calc(var(--space-3) * -1);
+  padding-bottom: var(--space-3);
+  padding-top: var(--space-2);
+}
+
+/* Label on the left, value on the right: half the height of stacked pairs. */
+.summaryRows {
+  display: grid;
+  margin: 0;
+}
+
+.summaryRows > div {
+  align-items: baseline;
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  gap: var(--space-3);
+  justify-content: space-between;
+  min-width: 0;
+  padding: var(--space-2) 0;
+}
+
+.summaryRows > div:last-child {
+  border-bottom: 0;
+}
+
+.summaryRows dt {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  flex: none;
+}
+
+.summaryRows dd {
+  display: grid;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  justify-items: end;
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.summaryRows dd .reviewFiat {
+  font-size: var(--text-xs);
+}
+
+.summaryTotal dt {
+  color: var(--color-text);
+  font-weight: 800;
+}
+
+.summaryTotal dd {
+  font-weight: 800;
+}
+
+.reviewCostRows {
+  border-top: 1px solid var(--color-border);
+  margin-top: var(--space-3);
+}
+
+.compactTransactions .reviewCostRows {
+  margin-top: var(--space-2);
+}
+
+.compactTransactions .summaryRows > div {
+  padding: .375rem 0;
+}
+
+.compactTransactions .stickyActions {
+  margin-top: 0;
+}
+
+/* In a summary, the destination keeps its own full-width block: label, the
+   grouped address, then whether it is this wallet's. */
+.summaryRows > .ordinalDestination {
+  display: grid;
+  gap: var(--space-1);
+  justify-content: stretch;
+}
+
+.summaryRows > .ordinalDestination dd {
+  justify-items: start;
+  text-align: left;
+}
+
+.ordinalReviewSummary.summaryRows {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 0 var(--space-3);
+}
+
+/* Settings: labelled groups of uniform rows. */
+.settingsGroup {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.settingsGroupTitle {
+  color: var(--color-text-muted);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: 800;
+  letter-spacing: .08em;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.settingsCard {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  display: grid;
+  min-width: 0;
+}
+
+.disclosureSection > .settingsCard {
+  border: 0;
+  border-top: 1px solid var(--color-border);
+  border-radius: 0;
+  margin: 0 calc(clamp(1rem, 3vw, 1.5rem) * -1);
+}
+
+.settingRow,
+.settingBlock,
+.settingDisclosure {
+  border-top: 1px solid var(--color-border);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+}
+
+.settingsCard > :first-child {
+  border-top: 0;
+}
+
+.settingRow {
+  align-items: center;
+  display: flex;
+  gap: var(--space-3);
+  justify-content: space-between;
+  position: relative;
+}
+
+.settingRowWrap {
+  flex-wrap: wrap;
+}
+
+.settingBlock {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.settingRowTitle {
+  color: var(--color-text);
+  display: block;
+  font-family: var(--font-sans);
+  font-size: var(--text-md, 1rem);
+  font-weight: 700;
+  letter-spacing: 0;
+  margin: 0;
+  text-transform: none;
+}
+
+/* The chevron is the row's button; its hit area stretches over the row. */
+.settingRowButton {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  display: flex;
+  flex: none;
+  font-size: 1.5rem;
+  justify-content: center;
+  line-height: 1;
+  min-height: 2rem;
+  padding: 0 var(--space-1);
+}
+
+.settingRowButton::after {
+  content: '';
+  inset: 0;
+  position: absolute;
+}
+
+.settingRow:has(.settingRowButton):hover {
+  background: var(--color-surface-raised);
+}
+
+.settingRow:has(.settingRowButton:focus-visible) {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+.settingRowButton:focus-visible {
+  outline: none;
+}
+
+.settingDisclosure > summary {
+  cursor: pointer;
+  display: flex;
+  list-style: none;
+}
+
+.settingDisclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.settingDisclosure > summary::after {
+  color: var(--color-text-muted);
+  content: '›';
+  font-size: 1.5rem;
+  line-height: 1;
+  margin-left: auto;
+  transition: transform 120ms ease;
+}
+
+.settingDisclosure[open] > summary::after {
+  transform: rotate(90deg);
+}
+
+.settingDisclosureBody {
+  padding-top: var(--space-3);
+}
+
+/* A real on/off switch instead of a small checkbox; still a checkbox to
+   assistive technology. */
+.switch {
+  appearance: none;
+  background: var(--color-border);
+  border-radius: 999px;
+  cursor: pointer;
+  flex: none;
+  height: 1.5rem;
+  margin: 0;
+  position: relative;
+  transition: background 120ms ease;
+  width: 2.75rem;
+}
+
+.switch::after {
+  background: var(--color-text-muted);
+  border-radius: 50%;
+  content: '';
+  height: 1.125rem;
+  left: .1875rem;
+  position: absolute;
+  top: .1875rem;
+  transition: transform 120ms ease, background 120ms ease;
+  width: 1.125rem;
+}
+
+.switch:checked {
+  background: var(--color-accent);
+}
+
+.switch:checked::after {
+  background: var(--color-on-accent);
+  transform: translateX(1.25rem);
+}
+
+.switch:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* The popup's header, carried to the full page. */
+.fullpageHeader {
+  align-items: center;
+  border-bottom: 2px solid var(--color-border);
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding-bottom: var(--space-3);
+}
+
+.fullpageHeaderAccount {
+  display: flex;
+  justify-content: flex-start;
+  min-width: 0;
+}
+
+.fullpageHeaderControls {
+  align-items: center;
+  display: flex;
+  gap: var(--space-1);
+}
+
+.headerIconButton,
+.headerTextButton {
+  align-items: center;
+  background: transparent;
+  border: 2px solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  gap: var(--space-2);
+  height: 2.5rem;
+  justify-content: center;
+  min-width: 2.5rem;
+  padding: 0 var(--space-2);
+}
+
+.headerTextButton {
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.headerIconButton svg,
+.headerTextButton svg {
+  height: 1.25rem;
+  width: 1.25rem;
+}
+
+.headerIconButton:hover,
+.headerTextButton:hover {
+  background: var(--color-surface-raised);
+  border-color: var(--color-border);
+  color: var(--color-accent);
+}
+
+.headerIconButton:focus-visible,
+.headerTextButton:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.headerStatusSlot {
+  align-items: center;
+  display: inline-flex;
+  height: 2.5rem;
+  justify-content: center;
+  min-width: 2.5rem;
+}
+
+/* Settings disclosures read like the rows around them: same type, a
+   chevron that turns when open, no oversized card heading. */
+.settingsPage .disclosureSection {
+  border-radius: var(--radius-lg);
+  border-width: 1px;
+  padding: 0;
+}
+
+.settingsPage .disclosureSection > summary {
+  align-items: center;
+  display: flex;
+  list-style: none;
+  min-height: 0;
+  padding: var(--space-3) var(--space-4);
+}
+
+.settingsPage .disclosureSection > summary::-webkit-details-marker {
+  display: none;
+}
+
+.settingsPage .disclosureSection > summary::after {
+  color: var(--color-text-muted);
+  content: '›';
+  font-size: 1.5rem;
+  line-height: 1;
+  margin-left: auto;
+  transition: transform 120ms ease;
+}
+
+.settingsPage .disclosureSection[open] > summary::after {
+  transform: rotate(90deg);
+}
+
+.settingsPage .disclosureSection > summary > span {
+  margin-left: 0;
+}
+
+.settingsPage .disclosureSection > summary strong {
+  font-size: var(--text-md, 1rem);
+  font-weight: 700;
+}
+
+.settingsPage .disclosureSection > summary small,
+.settingDisclosure > summary small {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.settingsPage .disclosureSection > .disclosureContent {
+  padding: 0 var(--space-4) var(--space-4);
+}
+
+.settingsPage .disclosureSection > .settingsCard {
+  margin: 0;
+}
+
+@media (max-width: 520px) {
+  .headerTextButton {
+    font-size: 0;
+    gap: 0;
+  }
+}
+
+/* On a narrow page the header matches the popup's: account and controls,
+   without the wordmark, so nothing overlaps. */
+@media (max-width: 520px) {
+  .fullpageHeader {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .fullpageHeader > :first-child {
+    display: none;
   }
 }

@@ -8,6 +8,7 @@ import { Button } from '../../ui/components/Button';
 import { Field } from '../../ui/components/Field';
 import { QrCode } from '../../ui/components/QrCode';
 import { CopyButton } from '../../ui/components/CopyButton';
+import { AddressChunks } from '../../ui/components/AddressChunks';
 import { handleRadioKey } from '../../ui/radio-keyboard';
 import type { ActiveSessionExpectation } from '../../ui/hooks/use-session';
 import {
@@ -34,7 +35,6 @@ export function Receive(props: {
   initialKind: Kind;
   expectation: ActiveSessionExpectation;
   activeAccountId: string;
-  onClose: () => void;
 }): ReactNode {
   const { t } = useI18n();
   const rpc = useRpc();
@@ -48,6 +48,7 @@ export function Receive(props: {
   const [error, setError] = useState<string | null>(null);
   const [amount, setAmount] = useState('');
   const [label, setLabel] = useState('');
+  const [requestOpen, setRequestOpen] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [shareStatus, setShareStatus] = useState<string | null>(null);
   const shareIdentityRef = useRef<string | null>(null);
@@ -205,11 +206,18 @@ export function Receive(props: {
             alt={t('receive.qr.alt')}
             errorText={t('receive.qr.tooLong')}
           />
-          <div className={styles['address']} data-testid="receive-address">{address}</div>
-          <CopyButton value={address} kind="address" label={t('receive.copyAddress')} />
+          <div className={styles['addressRow']}>
+            <AddressChunks address={address} className={styles['address']} testId="receive-address" />
+            <CopyButton value={address} kind="address" label={t('receive.copyAddress')} className={styles['addressCopy']} />
+          </div>
 
+          {/* Most people only need the address. Asking for a specific amount
+              is optional, so it waits behind one line until it is wanted. */}
           {kind === 'payment' ? (
-            <>
+            <details className={styles['requestDetails']} open={requestOpen || amount !== '' || label !== ''}
+              onToggle={(event) => setRequestOpen(event.currentTarget.open)}>
+              <summary>{t('receive.request.open')}</summary>
+              <div className={styles['requestBody']}>
               <Field
                 label={t('receive.amount')}
                 value={amount}
@@ -235,16 +243,13 @@ export function Receive(props: {
               ) : null}
               <p className={styles['paymentRequestPrivacy']}>{t('receive.request.privacy')}</p>
               {shareStatus !== null ? <p role="status" className={styles['shareStatus']}>{shareStatus}</p> : null}
-            </>
+              </div>
+            </details>
           ) : null}
         </>
       ) : error === null ? (
         <p>{t('common.loading')}</p>
       ) : null}
-
-      <Button variant="secondary" onClick={props.onClose}>
-        {t('common.close')}
-      </Button>
     </div>
   );
 }

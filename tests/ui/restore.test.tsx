@@ -38,6 +38,38 @@ describe('RestoreFlow phrase paste', () => {
     expect(screen.queryByLabelText('Word 13')).toBeNull();
   });
 
+  it('reads a numbered, one-word-per-line paste straight from the clipboard', () => {
+    setup();
+    const numbered = FULL_24.split(' ').map((word, index) => `${index + 1}. ${word}`).join('\n');
+    fireEvent.paste(screen.getByLabelText('Word 1'), {
+      clipboardData: { getData: () => numbered },
+    });
+    expect(screen.getByRole('radio', { name: '24 words' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByLabelText('Word 1')).toHaveValue('pitch');
+    expect(screen.getByLabelText('Word 24')).toHaveValue('zone');
+  });
+
+  it('completes an abbreviated word and only flags a word once the box is left', () => {
+    setup();
+    const first = screen.getByLabelText('Word 1');
+    fireEvent.change(first, { target: { value: 'aban' } });
+    expect(screen.queryByText('Not a valid recovery word.')).not.toBeInTheDocument();
+    fireEvent.blur(first);
+    expect(first).toHaveValue('abandon');
+
+    const second = screen.getByLabelText('Word 2');
+    fireEvent.change(second, { target: { value: 'abs' } });
+    expect(screen.queryByText('Not a valid recovery word.')).not.toBeInTheDocument();
+    fireEvent.blur(second);
+    expect(second).toHaveValue('abs'); // ambiguous: absent, absorb, abstract…
+    expect(screen.getByText('Not a valid recovery word.')).toBeInTheDocument();
+
+    // Text that can never become a word is flagged while typing.
+    const third = screen.getByLabelText('Word 3');
+    fireEvent.change(third, { target: { value: 'qqq' } });
+    expect(screen.getAllByText('Not a valid recovery word.')).toHaveLength(2);
+  });
+
   it('supports arrow-key navigation for phrase length choices', () => {
     setup();
     const twelve = screen.getByRole('radio', { name: '12 words' });

@@ -47,7 +47,7 @@ describe('compact Rune flow', () => {
     expect(prepare.mock.calls[0]?.[0]).toMatchObject({ amount: '1', recipient: 'tb1precipient' });
     expect(screen.getByText('200 sats')).toBeInTheDocument(); expect(screen.getByText('546 sats')).toBeInTheDocument();
     expect(screen.getByText('Bitcoin network fee')).toBeInTheDocument();
-    expect(screen.getByText('Bitcoin sent with tokens')).toBeInTheDocument();
+    expect(screen.getByText('Bitcoin sent with the Runes')).toBeInTheDocument();
   });
   it('makes hidden tokens reversible and preserves watch-only receiving', async () => {
     const data = listing(); data.holdings[0]!.hidden = true; data.canSign = false;
@@ -57,7 +57,7 @@ describe('compact Rune flow', () => {
     fireEvent.click(screen.getByRole('button', { name: /EXACT•RUNE/ }));
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Receive Runes' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Show token' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show Rune' })).toBeInTheDocument();
   });
   it('rejects excessive token precision before preparing anything', async () => {
     const prepare = vi.fn();
@@ -96,7 +96,7 @@ describe('Rune refresh and draft safety', () => {
     const start = vi.fn();
     installFakeChrome({ 'runes.list': list, 'scan.start': start });
     const entry = render(<Providers><RunesEntry expectation={expectation} accountId={accountId} onOpen={vi.fn()} /></Providers>);
-    await screen.findByText('1 asset');
+    await screen.findByText('1 Rune');
     entry.unmount();
     render(<Providers><Runes expectation={expectation} accountId={accountId} onClose={vi.fn()} onExpand={vi.fn()} /></Providers>);
     const token = screen.getByRole('button', { name: /EXACT•RUNE/ });
@@ -163,7 +163,7 @@ describe('Rune refresh and draft safety', () => {
     expect(list).toHaveBeenCalledOnce();
     expect(start).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Receive Runes' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     await waitFor(() => expect(start).toHaveBeenCalledOnce());
     expect(start.mock.calls[0]).toEqual([{ mode: 'refresh', ...expectation }]);
     const calls = list.mock.calls.length;
@@ -215,7 +215,7 @@ describe('Rune refresh and draft safety', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Max' }));
     expect(screen.getByRole('button', { name: 'Review transfer' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Receive Bitcoin' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     expect(screen.getByLabelText('Recipient’s Runes address')).toHaveValue('tb1precipient');
     expect(screen.getByRole('button', { name: 'Max' })).toHaveAttribute('aria-pressed', 'true');
   });
@@ -262,7 +262,7 @@ it('refreshes promptly when scan completion arrives during a pending checking re
   render(<Providers><RunesEntry expectation={expectation} accountId={accountId} onOpen={vi.fn()} /></Providers>);
   act(() => emitRuntimeMessage({ type: 'squirrel:wallet-data-changed', reason: 'utxo' }));
   await act(async () => resolve({ ok: true, result: { ...listing(), status: 'checking', holdings: [] } }));
-  expect(await screen.findByText('1 asset')).toBeInTheDocument();
+  expect(await screen.findByText('1 Rune')).toBeInTheDocument();
   expect(list).toHaveBeenCalledTimes(2);
 });
 
@@ -273,7 +273,7 @@ it('still hydrates known balances when a checking result wins the startup race',
   render(<Providers><RunesEntry expectation={expectation} accountId={accountId} onOpen={vi.fn()} /></Providers>);
   await act(async () => undefined);
   await act(async () => resolve({ ok: true, result: { data: listing() } }));
-  expect(await screen.findByText('1 asset')).toBeInTheDocument();
+  expect(await screen.findByText('1 Rune')).toBeInTheDocument();
 });
 
 it('uses quoted fee tiers, supports exact custom rates, and hides unnecessary funding actions', async () => {

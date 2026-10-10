@@ -543,7 +543,7 @@ test('renders the restored wallet home at compact popup scale', async ({
   await popup.page.getByRole('button', { name: 'Receive Bitcoin' }).click();
   await expect(popup.page.getByRole('img', { name: 'QR code for your receive address' }))
     .toBeVisible();
-  await popup.page.getByRole('button', { name: 'Close' }).click();
+  await popup.page.getByRole('button', { name: 'Back', exact: true }).click();
   await popup.page.getByRole('button', { name: 'Ordinals', exact: true }).click();
   await openFirstGalleryShelf(popup.page);
   await expect(popup.page.locator('article')).toHaveCount(1);
@@ -573,7 +573,7 @@ test('renders the restored wallet home at compact popup scale', async ({
   expect(await popup.page.evaluate(
     () => document.body.dataset['sawTransientIndexLag'],
   )).toBe('false');
-  await expect(popup.page.getByText(/Unavailable: rare-sat detection/u)).toBeVisible();
+  await expect(popup.page.getByText(/Checks for rare sats/u)).toBeVisible();
   const protectedDisclosure = popup.page.getByRole('button', { name: /Bitcoin set aside from regular sends/u });
   await expect(protectedDisclosure).toHaveAttribute('aria-expanded', 'false');
   await protectedDisclosure.click();
@@ -810,6 +810,12 @@ test('renders the restored wallet home at compact popup scale', async ({
   await expect(popup.page.getByRole('heading', { name: 'Send Bitcoin' })).toBeVisible();
   await expect(popup.page.getByLabel('Amount (BTC)')).toBeVisible();
   await expect(popup.page.getByRole('button', { name: 'Open send in full page' })).toBeVisible();
+  // The popup shows the chosen fee as one line until the user asks to change it.
+  const feeSummary = popup.page.getByRole('button', { name: /Network fee/u });
+  await expect(feeSummary).toHaveAttribute('aria-expanded', 'false');
+  await expect(feeSummary).toContainText('Standard');
+  await expect(feeSummary).toContainText('sats');
+  await feeSummary.click();
   const feeGroup = popup.page.getByRole('group', { name: 'Network fee' });
   const quotedFeeRows = feeGroup.locator('label').filter({ hasText: 'sat/vB' });
   await expect(quotedFeeRows).toHaveCount(3);
@@ -1160,6 +1166,7 @@ test('restores the public fixture, persists privacy, and exercises provider appr
     animations: 'disabled',
   });
 
+  await popup.page.getByText('Request a specific amount').click();
   await popup.page.getByLabel('Amount (sats, optional)').fill('250000');
   const paymentLinkFingerprint = await bitcoinQr.locator('path').getAttribute('d').then((path) =>
     [...(path ?? '')].reduce(
@@ -1169,7 +1176,7 @@ test('restores the public fixture, persists privacy, and exercises provider appr
   expect(paymentLinkFingerprint).not.toBe(bitcoinQrVisual.pathFingerprint);
 
   await popup.page.getByRole('radio', { name: 'Ordinals' }).click();
-  await expect(popup.page.getByText(/inscriptions and protected sats/u)).toBeVisible();
+  await expect(popup.page.getByText(/inscriptions and other collectibles/u)).toBeVisible();
   await expect(bitcoinQr).toBeVisible();
   const ordinalsFingerprint = await bitcoinQr.locator('path').getAttribute('d').then((path) =>
     [...(path ?? '')].reduce(
@@ -1213,7 +1220,7 @@ test('restores the public fixture, persists privacy, and exercises provider appr
     lastContentReachable: true,
     noHorizontalOverflow: true,
   });
-  await popup.page.getByRole('button', { name: 'Close' }).click();
+  await popup.page.getByRole('button', { name: 'Back', exact: true }).click();
 
   await terminateExtensionWorker(extensionContext, extensionId);
   await wakeExtensionWorker(popup.page, extensionId);

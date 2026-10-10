@@ -1,0 +1,20 @@
+/* Groups are inline-blocks spaced by margin rather than separated by
+   characters, so a copied selection is still the exact address. */
+.address {
+  display: block;
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  letter-spacing: .02em;
+  line-height: 1.55;
+  min-width: 0;
+}
+
+.group {
+  display: inline-block;
+  margin-right: .6ch;
+  white-space: nowrap;
+}
+
+.group:last-child {
+  margin-right: 0;
+}

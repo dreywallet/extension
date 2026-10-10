@@ -65,7 +65,7 @@ function setup(gateClosed = false, network: 'mainnet' | 'signet' | 'regtest' = '
   });
   render(
     <Providers>
-      <Receive initialKind="payment" expectation={EXPECTATION} activeAccountId={ACCOUNT_ID} onClose={vi.fn()} />
+      <Receive initialKind="payment" expectation={EXPECTATION} activeAccountId={ACCOUNT_ID} />
     </Providers>,
   );
 }
@@ -73,7 +73,7 @@ function setup(gateClosed = false, network: 'mainnet' | 'signet' | 'regtest' = '
 describe('Receive', () => {
   it('shows the payment address, QR, and copy action', async () => {
     setup();
-    expect(await screen.findByText(PAYMENT_ADDR)).toBeInTheDocument();
+    expect(await screen.findByTitle(PAYMENT_ADDR)).toBeInTheDocument();
     const qr = screen.getByRole('img');
     expect(qr.tagName).toBe('svg');
     expect(qr).not.toHaveAttribute('src');
@@ -96,22 +96,22 @@ describe('Receive', () => {
 
   it('explains the network the worker answered with, not a UI assumption (M6)', async () => {
     setup(false, 'signet');
-    expect(screen.queryByText(/stable Bitcoin address on Mainnet/u)).toBeNull();
-    await screen.findByText(PAYMENT_ADDR);
-    expect(screen.getByText(/stable Bitcoin address on Signet/u)).toBeInTheDocument();
+    expect(screen.queryByText(/bitcoin payments on Mainnet/u)).toBeNull();
+    await screen.findByTitle(PAYMENT_ADDR);
+    expect(screen.getByText(/bitcoin payments on Signet/u)).toBeInTheDocument();
     cleanup();
     setup(false, 'regtest');
-    await screen.findByText(PAYMENT_ADDR);
-    expect(screen.getByText(/stable Bitcoin address on Regtest/u)).toBeInTheDocument();
+    await screen.findByTitle(PAYMENT_ADDR);
+    expect(screen.getByText(/bitcoin payments on Regtest/u)).toBeInTheDocument();
     cleanup();
     setup(false, 'mainnet');
-    await screen.findByText(PAYMENT_ADDR);
-    expect(screen.getByText(/stable Bitcoin address on Mainnet/u)).toBeInTheDocument();
+    await screen.findByTitle(PAYMENT_ADDR);
+    expect(screen.getByText(/bitcoin payments on Mainnet/u)).toBeInTheDocument();
   });
 
   it('builds a BIP-321 payment link once an amount is entered', async () => {
     setup();
-    await screen.findByText(PAYMENT_ADDR);
+    await screen.findByTitle(PAYMENT_ADDR);
     fireEvent.change(screen.getByLabelText(/Amount/u), { target: { value: '250000' } });
     expect(screen.getByRole('button', { name: 'Copy payment link' })).toBeInTheDocument();
     expect(decodeRenderedQr(screen.getByRole('img') as unknown as SVGElement))
@@ -120,7 +120,7 @@ describe('Receive', () => {
 
   it('rejects a non-integer amount with a visible error', async () => {
     setup();
-    await screen.findByText(PAYMENT_ADDR);
+    await screen.findByTitle(PAYMENT_ADDR);
     fireEvent.change(screen.getByLabelText(/Amount/u), { target: { value: '0.5' } });
     expect(screen.getByRole('alert')).toHaveTextContent(/whole number/u);
     expect(screen.getByRole('button', { name: 'Share request' })).toBeDisabled();
@@ -129,7 +129,7 @@ describe('Receive', () => {
 
   it('rejects an amount above the total Bitcoin supply without crashing render', async () => {
     setup();
-    await screen.findByText(PAYMENT_ADDR);
+    await screen.findByTitle(PAYMENT_ADDR);
     fireEvent.change(screen.getByLabelText(/Amount/u), { target: { value: '2100000000000001' } });
     expect(screen.getByRole('alert')).toHaveTextContent(/whole number/u);
     expect(screen.queryByRole('button', { name: 'Copy payment link' })).toBeNull();
@@ -137,30 +137,30 @@ describe('Receive', () => {
 
   it('contains QR encoder capacity errors instead of crashing the receive screen', async () => {
     setup();
-    await screen.findByText(PAYMENT_ADDR);
+    await screen.findByTitle(PAYMENT_ADDR);
     fireEvent.change(screen.getByLabelText(/Message for sender/u), {
       target: { value: 'x'.repeat(3_000) },
     });
     expect(screen.getByRole('alert')).toHaveTextContent(/too long/iu);
-    expect(screen.getByText(PAYMENT_ADDR)).toBeInTheDocument();
+    expect(screen.getByTitle(PAYMENT_ADDR)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Share request' })).toBeDisabled();
   });
 
   it('switches to the ordinals address with its purpose explanation and no amount field', async () => {
     setup();
-    await screen.findByText(PAYMENT_ADDR);
+    await screen.findByTitle(PAYMENT_ADDR);
     fireEvent.click(screen.getByRole('radio', { name: 'Ordinals' }));
-    expect(await screen.findByText(ORDINALS_ADDR)).toBeInTheDocument();
+    expect(await screen.findByTitle(ORDINALS_ADDR)).toBeInTheDocument();
     expect(decodeRenderedQr(screen.getByRole('img') as unknown as SVGElement)).toBe(ORDINALS_ADDR);
-    expect(screen.getByText(/inscriptions and protected sats/u)).toBeInTheDocument();
+    expect(screen.getByText(/inscriptions and other collectibles/u)).toBeInTheDocument();
     expect(screen.queryByLabelText(/Amount/u)).toBeNull();
   });
 
   it('supports arrow-key navigation between receive lanes', async () => {
     setup();
-    await screen.findByText(PAYMENT_ADDR);
+    await screen.findByTitle(PAYMENT_ADDR);
     fireEvent.keyDown(screen.getByRole('radio', { name: 'Bitcoin' }), { key: 'ArrowRight' });
-    expect(await screen.findByText(ORDINALS_ADDR)).toBeInTheDocument();
+    expect(await screen.findByTitle(ORDINALS_ADDR)).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'Ordinals' })).toHaveFocus();
   });
 
@@ -170,7 +170,7 @@ describe('Receive', () => {
       value: { writeText: vi.fn().mockRejectedValue(new Error('denied')) },
     });
     setup();
-    await screen.findByText(PAYMENT_ADDR);
+    await screen.findByTitle(PAYMENT_ADDR);
     fireEvent.click(screen.getByRole('button', { name: 'Copy address' }));
     expect(await screen.findByRole('button', { name: /copy failed/iu })).toBeInTheDocument();
   });
@@ -201,19 +201,19 @@ describe('Receive', () => {
     });
     const rendered = render(
       <Providers>
-        <Receive initialKind="payment" expectation={EXPECTATION} activeAccountId={ACCOUNT_ID} onClose={vi.fn()} />
+        <Receive initialKind="payment" expectation={EXPECTATION} activeAccountId={ACCOUNT_ID} />
       </Providers>,
     );
-    expect(await screen.findByText(PAYMENT_ADDR)).toBeInTheDocument();
+    expect(await screen.findByTitle(PAYMENT_ADDR)).toBeInTheDocument();
 
     const secondAddress = 'bc1qsecondaccountxxxxxxxxxxxxxxxxxxxxxx';
     accountAddress = secondAddress;
     rendered.rerender(
       <Providers>
-        <Receive initialKind="payment" expectation={EXPECTATION} activeAccountId={OTHER_ACCOUNT_ID} onClose={vi.fn()} />
+        <Receive initialKind="payment" expectation={EXPECTATION} activeAccountId={OTHER_ACCOUNT_ID} />
       </Providers>,
     );
-    expect(await screen.findByText(secondAddress)).toBeInTheDocument();
+    expect(await screen.findByTitle(secondAddress)).toBeInTheDocument();
     expect(calls).toBe(2);
   });
 });
@@ -223,8 +223,8 @@ describe('Rune receiving context', () => {
     installFakeChrome({ 'address.receive': () => ({ ok: true, result: {
       accountId: ACCOUNT_ID, address: ORDINALS_ADDR, path: "m/86'/0'/0'/0/0", kind: 'ordinals', network: 'mainnet',
     } }) });
-    render(<Providers><Receive initialKind="ordinals" runeContext accountName="Savings" expectation={EXPECTATION} activeAccountId={ACCOUNT_ID} onClose={vi.fn()} /></Providers>);
-    expect(await screen.findByText(ORDINALS_ADDR)).toBeInTheDocument();
+    render(<Providers><Receive initialKind="ordinals" runeContext accountName="Savings" expectation={EXPECTATION} activeAccountId={ACCOUNT_ID} /></Providers>);
+    expect(await screen.findByTitle(ORDINALS_ADDR)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Receive Runes' })).toBeInTheDocument();
     expect(screen.getByText('Savings')).toBeInTheDocument();
     expect(screen.getByText(/Use this address to receive Runes on/)).toHaveTextContent('Mainnet');
@@ -237,9 +237,9 @@ describe('Rune receiving context', () => {
     installFakeChrome({ 'address.receive': () => ({ ok: true, result: {
       accountId: OTHER_ACCOUNT_ID, address: ORDINALS_ADDR, path: "m/86'/0'/1'/0/0", kind: 'ordinals', network: 'mainnet',
     } }) });
-    render(<Providers><Receive initialKind="ordinals" runeContext expectation={EXPECTATION} activeAccountId={ACCOUNT_ID} onClose={vi.fn()} /></Providers>);
+    render(<Providers><Receive initialKind="ordinals" runeContext expectation={EXPECTATION} activeAccountId={ACCOUNT_ID} /></Providers>);
     expect(await screen.findByRole('alert')).toBeInTheDocument();
-    expect(screen.queryByText(ORDINALS_ADDR)).not.toBeInTheDocument();
+    expect(screen.queryByTitle(ORDINALS_ADDR)).not.toBeInTheDocument();
     expect(screen.queryByRole('img')).not.toBeInTheDocument();
   });
 });

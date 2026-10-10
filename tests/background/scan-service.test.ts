@@ -356,6 +356,15 @@ async function setupWallet(harness: Harness): Promise<{
   };
 }
 
+// A discovery scan derives every address window for real: BIP32 child
+// derivation and Taproot tweaking in pure-JS secp256k1 account for most of its
+// ~0.5 s (the KDF is already TEST_PARAMS). Cases that run two or more full
+// scans clear the 5 s default alone but miss it under full-suite load, which is
+// a property of that curve work rather than of the assertions. Sharing one
+// scanned wallet across cases would couple the fresh cache, idle phase, and
+// request counts each case asserts, so they keep their own setup instead.
+const MULTI_SCAN_TIMEOUT_MS = 20_000;
+
 async function waitForScanEnd(
   service: WalletService,
   expectation: { expectedVaultId: string; expectedSessionId: string; accountId: string },
@@ -519,7 +528,7 @@ describe('discovery scan end-to-end (§8.2, §10.2, §12)', () => {
     expect(raced.fake.counts.classify).toBe(single.fake.counts.classify);
     expect((await raced.service.homeView(raced.expectation)).balances.availableSats)
       .toBe('205556');
-  });
+  }, MULTI_SCAN_TIMEOUT_MS);
 
   it('does not fail a concurrent fresh scan when an overlapping resume has nothing to resume', async () => {
     const cache = new MemoryWalletCache();
@@ -740,7 +749,7 @@ describe('discovery scan end-to-end (§8.2, §10.2, §12)', () => {
       hidden: false,
     })).toEqual({ accountId: accountId(1), account: 1, hidden: false });
     expect((await service.sessionSnapshot()).selectableAccounts).toEqual([0, 1]);
-  });
+  }, MULTI_SCAN_TIMEOUT_MS);
 
   it('allows five consecutive empty accounts, remembers the warning, and reopens after Ordinals confirms', async () => {
     const seed = mnemonicToSeed(DEV_MNEMONIC);
@@ -1305,7 +1314,7 @@ describe('discovery scan end-to-end (§8.2, §10.2, §12)', () => {
     const rescanned = await service.homeView(expectation);
     expect(rescanned.balances.frozenSats).toBe('123456');
     expect(rescanned.balances.availableSats).toBe(after.balances.availableSats);
-  });
+  }, MULTI_SCAN_TIMEOUT_MS);
 
   it('vault switch resets scan state — the new vault starts from idle (§7.3)', async () => {
     const cache = new MemoryWalletCache();
@@ -1344,7 +1353,7 @@ describe('discovery scan end-to-end (§8.2, §10.2, §12)', () => {
     expect(await waitForScanEnd(service, expectationB)).toBe('completed');
     const home = await service.homeView(expectationB);
     expect(home.balances.availableSats).toBe('0');
-  });
+  }, MULTI_SCAN_TIMEOUT_MS);
 
   it('preserves a recorded source conflict across worker restart (§11.4)', async () => {
     const cache = new MemoryWalletCache();
@@ -2305,7 +2314,7 @@ describe('Ordinals gallery preview degradation', () => {
     expect(degraded.items.length).toBeGreaterThan(0);
     expect(degraded.items).toHaveLength(healthy.items.length);
     expect(degraded.previewsUnavailable).toBe(true);
-  });
+  }, MULTI_SCAN_TIMEOUT_MS);
 
   it('never lets a missing preview change what gates Send or Rescue', async () => {
     // The safety invariant. `action` is derived from local authoritative UTXO
@@ -2325,7 +2334,7 @@ describe('Ordinals gallery preview degradation', () => {
     }
     expect(degraded.attentionItems).toEqual(healthy.attentionItems);
     expect(degraded.sweepCandidates).toEqual(healthy.sweepCandidates);
-  });
+  }, MULTI_SCAN_TIMEOUT_MS);
 
   it('marks an unfetchable preview distinctly so the surface does not retry into a failing gateway', async () => {
     const { service, expectation } = await withFailingBatches(() => true);

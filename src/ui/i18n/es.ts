@@ -72,7 +72,7 @@ export const es: Record<MessageKey, string> = {
   'account.manage.restored': 'La Cuenta {account} volvió a mostrarse porque se encontró actividad nueva.',
   'account.manage.blocker.active': 'Cambia a otra cuenta antes de ocultar esta.',
   'account.manage.blocker.last_visible': 'Al menos una cuenta debe permanecer visible.',
-  'account.manage.blocker.stale': 'Actualiza ambas vías de la cuenta antes de ocultarla.',
+  'account.manage.blocker.stale': 'Actualiza las direcciones de Bitcoin y Ordinals de esta cuenta antes de ocultarla.',
   'account.manage.blocker.holdings': 'Mueve todos los bitcoin y ordinals antes de ocultar esta cuenta.',
   'account.manage.blocker.pending': 'Resuelve las transacciones pendientes o inciertas antes de ocultar esta cuenta.',
   'account.manage.import': 'Importar cuenta de solo lectura',
@@ -263,6 +263,7 @@ export const es: Record<MessageKey, string> = {
   'send.fee.standard.eta': '~10–20 min',
   'send.fee.economy': 'Económica',
   'send.fee.economy.eta': '~20–30 min',
+  'send.fee.change': 'Cambiar',
   'send.fee.custom': 'Personalizada',
   'send.fee.rate': 'Tarifa (sat/vB)',
   'send.fee.customWarning':
@@ -335,10 +336,10 @@ export const es: Record<MessageKey, string> = {
     'La salida de transacción que contiene actualmente la inscripción. Debe permanecer sin cambios hasta el envío.',
   'ordinal.composer.rescue.title': 'Rescatar inscripción',
   'ordinal.composer.rescue.body':
-    'Mueve esta inscripción del carril de Bitcoin a tu dirección de Ordinals propia.',
+    'Esta inscripción está en tu dirección de Bitcoin. Muévela a tu dirección de Ordinals para no gastarla por accidente.',
   'ordinal.composer.sweep.title': 'Barrer bitcoin excedente',
   'ordinal.composer.sweep.body':
-    'Devuelve el excedente económico a tu saldo de Bitcoin y conserva el franqueo fijo en el carril de Ordinals.',
+    'Devuelve el bitcoin sobrante a tu saldo de Bitcoin y conserva en tu dirección de Ordinals la pequeña cantidad que necesita cada inscripción.',
   'ordinal.review.transfer.title': '¿Enviar esta inscripción?',
   'ordinal.review.batch.title': '¿Enviar {count} inscripciones a una dirección?',
   'ordinal.review.batch.groups': 'Grupos atómicos de inscripciones',
@@ -390,9 +391,9 @@ export const es: Record<MessageKey, string> = {
   'ordinal.error.inseparable':
     'Esta inscripción comparte un sat o no se puede separar con seguridad, por lo que no puede enviarse sola.',
   'ordinal.error.cleanFees':
-    'No hay una entrada de Bitcoin cardinal limpia disponible para pagar la comisión de red.',
+    'No hay suficiente bitcoin normal (sin inscripciones ni otros activos) para pagar la comisión de red.',
   'ordinal.error.noExcess':
-    'No hay excedente económico que barrer después del franqueo reservado y la comisión de red.',
+    'No hay bitcoin sobrante que mover una vez cubiertas la pequeña cantidad de cada inscripción y la comisión de red.',
   'approval.waiting': 'Esperando una solicitud de un sitio…',
   'approval.reviewUnavailable.title': 'No se puede verificar el resumen de la solicitud',
   'approval.reviewUnavailable.body':
@@ -652,7 +653,7 @@ export const es: Record<MessageKey, string> = {
     'Guardado como franqueo en tu dirección de coleccionables',
   'utxos.reason.userFrozen': 'Congelado por ti — usa Descongelar para habilitarlo',
   'utxos.reason.dustQuarantined':
-    'Por debajo del límite de polvo del script de Bitcoin y separado automáticamente',
+    'Demasiado pequeño para gastar, así que se apartó automáticamente',
   'utxos.reason.unconfirmed': 'Esperando una confirmación de la red',
   'utxos.reason.planLocked': 'Reservado por una transacción pendiente',
   'utxos.reason.uneconomic': 'La comisión para gastar esta entrada consumiría su valor',
@@ -714,7 +715,7 @@ export const es: Record<MessageKey, string> = {
   'scan.resume': 'Reanudar escaneo',
   'scan.rescan': 'Reescanear cuentas',
   'scan.rescan.hint':
-    'Vuelve a comprobar todas las cuentas y las direcciones compatibles con Xverse en busca de saldos y coleccionables.',
+    'Vuelve a buscar saldos y coleccionables en todas las cuentas, incluidas las direcciones que otras carteras hayan podido usar.',
 
   'activity.confirmed': 'Confirmada',
   'activity.title': 'Actividad de transacciones',
@@ -804,7 +805,7 @@ export const es: Record<MessageKey, string> = {
   'gateway.status': 'Estado del servicio de la cartera',
   'gateway.mode.full': 'Seguridad Sat completa',
   'gateway.mode.standard': 'Seguridad Ordinals estándar',
-  'gateway.banner.degraded': 'No disponible: {missing}. Las inscripciones siguen protegidas.',
+  'gateway.banner.degraded': 'Las comprobaciones de {missing} no están disponibles ahora. Las inscripciones siguen protegidas.',
   'gateway.banner.stale':
     'Los datos de la cartera están desactualizados. Los saldos pueden ir con retraso; el gasto sigue bloqueado hasta que los datos estén al día.',
   'gateway.banner.unreachable':
@@ -813,8 +814,8 @@ export const es: Record<MessageKey, string> = {
     'El servicio de la cartera no puede proteger los coleccionables ahora mismo. Solo ver y recibir.',
   'gateway.banner.syncing':
     'Sincronizando con Bitcoin. Tu saldo guardado sigue visible y los gastos se reanudan automáticamente cuando finalice la actualización.',
-  'gateway.protection.rareSats': 'la detección de sats raros',
-  'gateway.protection.runes': 'la detección de Runas y tokens desconocidos',
+  'gateway.protection.rareSats': 'sats raros',
+  'gateway.protection.runes': 'Runas y otros tokens',
 
   'ordinals.empty': 'Tus coleccionables aparecerán aquí.',
   'gallery.title': 'Ordinals',
@@ -929,7 +930,7 @@ export const es: Record<MessageKey, string> = {
   'gallery.action.reason.stale':
     'La verificación de activos está desactualizada. Actualiza antes de gastar.',
   'gallery.action.reason.unconfirmed': 'Espera una confirmación de la red antes de gastar.',
-  'gallery.action.reason.frozen': 'Esta salida está congelada o en cuarentena.',
+  'gallery.action.reason.frozen': 'Esta moneda está congelada o apartada.',
   'gallery.action.reason.unsupported': 'Esta salida también contiene un activo no compatible.',
   'gallery.action.reason.rare': 'Esta salida contiene un sat raro que no es común.',
   'gallery.action.reason.locked': 'Una transacción pendiente ya reserva esta salida.',
@@ -938,11 +939,11 @@ export const es: Record<MessageKey, string> = {
   'gallery.action.reason.unverifiableLocation':
     'No se pudo verificar la ubicación en cadena de esta inscripción, por lo que no se puede enviar de forma segura.',
   'gallery.action.reason.lane':
-    'Esta inscripción no está en un carril de Ordinals que pueda gastarse con seguridad.',
+    'Esta inscripción no está en tu dirección de Ordinals, así que no puede enviarse con seguridad desde aquí.',
   'gallery.attention.title': 'Requiere atención',
   'gallery.attention.body':
-    'Rescata inscripciones del carril de Bitcoin o barre bitcoin excedente del carril de Ordinals.',
-  'gallery.sweep.value': '{sats} sats en el carril de Ordinals',
+    'Mueve las inscripciones que llegaron a tu dirección de Bitcoin o devuelve el bitcoin sobrante de tu dirección de Ordinals.',
+  'gallery.sweep.value': '{sats} sats de bitcoin sobrante en tu dirección de Ordinals',
   'inscription.review.heading': 'Efectos sobre inscripciones',
   'inscription.review.viewAll': 'Ver las {count}',
   'inscription.review.location': 'Ubicación de la inscripción',
@@ -1005,9 +1006,9 @@ export const es: Record<MessageKey, string> = {
   'receive.tab.bitcoin': 'Bitcoin',
   'receive.tab.ordinals': 'Ordinals',
   'receive.bitcoin.explain':
-    'Tu dirección estable de Bitcoin en {network}. Úsala para pagos ordinarios de bitcoin; no cambia entre usos.',
+    'Para pagos de bitcoin en {network}. Esta dirección no cambia.',
   'receive.ordinals.explain':
-    'Tu dirección de Ordinals en {network}. Úsala para inscripciones y sats protegidos: los coleccionables enviados aquí quedan separados del bitcoin gastable.',
+    'Para inscripciones y otros coleccionables en {network}, separados de tu bitcoin gastable.',
   'receive.copyAddress': 'Copiar dirección',
   'receive.amount': 'Cantidad (sats, opcional)',
   'receive.amount.invalid': 'Introduce un número entero de sats.',
@@ -1017,6 +1018,7 @@ export const es: Record<MessageKey, string> = {
   'receive.qr.alt': 'Código QR de tu dirección de recepción',
   'receive.request.title': 'Enviar bitcoin',
   'receive.request.testNetworkWarning': 'RED DE PRUEBAS · SIN VALOR REAL',
+  'receive.request.open': 'Solicitar una cantidad concreta',
   'receive.request.share': 'Compartir solicitud',
   'receive.request.sharing': 'Preparando solicitud…',
   'receive.request.shared': 'Solicitud lista para compartir.',
@@ -1047,6 +1049,8 @@ export const es: Record<MessageKey, string> = {
   'settings.contacts': 'Destinatarios guardados',
   'settings.contacts.summary': 'Guarda direcciones frecuentes en este dispositivo.',
   'settings.security': 'Seguridad',
+  'settings.group.wallet': 'Cartera',
+  'settings.group.contacts': 'Contactos y sitios',
   'settings.advanced': 'Avanzado',
   'settings.advanced.summary': 'Herramientas especializadas de firma y cartera.',
   'settings.activeAccount': 'Cuenta estándar activa',
@@ -1054,7 +1058,7 @@ export const es: Record<MessageKey, string> = {
   'settings.messageSigning.summary': 'Crea una prueba BIP-322 para el texto que elijas.',
   'settings.highSecurity': 'Confirmar cada transacción con contraseña',
   'settings.highSecurity.help':
-    'Desactivado de forma predeterminada. Actívalo para volver a pedir la contraseña antes de cada transacción.',
+    'Pide de nuevo la contraseña de la app antes de cada transacción.',
   'settings.idleTimeout': 'Bloquear tras inactividad',
   'settings.idleTimeout.1h': '1 hora',
   'settings.idleTimeout.12h': '12 horas',
@@ -1065,7 +1069,7 @@ export const es: Record<MessageKey, string> = {
   'settings.reveal.entry': 'Mostrar frase de recuperación',
   'settings.recovery.entry': 'Copia de seguridad y recuperación',
   'settings.recovery.summary':
-    'Revisa la recuperación de Gastos y de la Bóveda, comprueba tu copia o muestra de forma segura la frase de recuperación de Gastos.',
+    'Comprueba tu copia de seguridad, prueba la recuperación o muestra tu frase de recuperación.',
   'settings.recovery.manage': 'Abrir centro de recuperación',
   'settings.changePassword': 'Cambiar contraseña de la app',
   'settings.changePassword.summary': 'Actualiza la contraseña que usas para desbloquear Drey.',

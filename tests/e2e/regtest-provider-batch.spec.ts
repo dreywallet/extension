@@ -62,7 +62,7 @@ async function createProviderWallet(input: {
   const paymentAddress = checkedRegtestAddress(
     await input.popup.page.getByTestId('receive-address').textContent(),
   );
-  await input.popup.page.getByRole('button', { name: 'Close' }).click();
+  await input.popup.page.getByRole('button', { name: 'Back', exact: true }).click();
 
   return paymentAddress;
 }

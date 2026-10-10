@@ -51,7 +51,7 @@ async function reviewFigures(page: Page): Promise<{ feeSats: string; postageSats
     if (!text || !/^(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+) sats$/u.test(text)) throw new Error('Rune review cost was not exact satoshis');
     return text.split(' ')[0]!.replaceAll(',', '');
   };
-  return { feeSats: await value('Bitcoin network fee'), postageSats: await value('Bitcoin sent with tokens') };
+  return { feeSats: await value('Bitcoin network fee'), postageSats: await value('Bitcoin sent with the Runes') };
 }
 
 async function trackSessionPresence(page: Page): Promise<void> {
@@ -80,7 +80,7 @@ test('@runes receives, combines, partially sends, confirms and sends Max with ex
   await expect(popup.page.locator('[role="radiogroup"]')).toHaveCount(0);
   const assetAddress = await receiveAddress(popup.page, 'ordinals');
   if (!assetAddress.startsWith('bcrt1p')) throw new Error('Runes receiving role is not the asset role');
-  await popup.page.getByRole('button', { name: 'Close', exact: true }).click();
+  await popup.page.getByRole('button', { name: 'Back', exact: true }).click();
   const ownedAssets = await ownedRuneAddresses(popup.page, PASSWORD);
   const ownedPayment = await ownedPaymentAddresses(popup.page, PASSWORD);
   const first = createRuneFixture(assetAddress, '250.00');
@@ -104,7 +104,7 @@ test('@runes receives, combines, partially sends, confirms and sends Max with ex
   // An unrelated unconfirmed Bitcoin payment must not hide confirmed Rune
   // balances: the real gateway reports every mempool output incomplete.
   const funding = await fundWithoutConfirmation(paymentAddress, 100_000);
-  await popup.page.getByRole('button', { name: 'Close', exact: true }).click();
+  await popup.page.getByRole('button', { name: 'Back', exact: true }).click();
   await expect(popup.page.getByLabel('Amount', { exact: true })).toHaveValue('300');
   await expect.poll(async () => {
     const state = await runeState(popup.page);
@@ -179,7 +179,7 @@ test('@runes cancels reservations and rejects changed or stale approval authorit
   const payment = await receiveAddress(popup.page);
   await popup.page.getByRole('radio', { name: 'Ordinals', exact: true }).click();
   const asset = await receiveAddress(popup.page, 'ordinals');
-  await popup.page.getByRole('button', { name: 'Close' }).click();
+  await popup.page.getByRole('button', { name: 'Back', exact: true }).click();
   const fixture = createRuneFixture(asset);
   await fundAndConfirm(payment, 100_000);
   await waitForRune(popup.page, fixture, fixture.atomic);
@@ -220,7 +220,7 @@ test('@runes reference negative control decodes and burns a malformed disposable
   await openRunes(popup.page);
   await popup.page.getByRole('button', { name: 'Receive Runes', exact: true }).click();
   const destination = await receiveAddress(popup.page);
-  await popup.page.getByRole('button', { name: 'Close' }).click();
+  await popup.page.getByRole('button', { name: 'Back', exact: true }).click();
   const fixture = createRuneFixture(destination, '250.00');
   await waitForRune(popup.page, fixture, '25000');
   const change = inspectRuneTransaction(fixture.txid).outputs.find((output) => output.ord.address !== destination && output.ord.runes[fixture.name]);
@@ -241,7 +241,7 @@ test('@runes refuses inscription, rare-sat and other-Rune combinations while pre
   const payment = await receiveAddress(popup.page);
   await popup.page.getByRole('radio', { name: 'Ordinals', exact: true }).click();
   const asset = await receiveAddress(popup.page, 'ordinals');
-  await popup.page.getByRole('button', { name: 'Close' }).click();
+  await popup.page.getByRole('button', { name: 'Back', exact: true }).click();
   await fundAndConfirm(payment, 100_000);
   for (const kind of ['inscription', 'rare', 'other-rune']) {
     const fixture = createRuneFixture(asset, '250.00');
@@ -282,7 +282,7 @@ test('@runes reconciles a lost broadcast response without a second dispatch', as
   const payment = await receiveAddress(popup.page);
   await popup.page.getByRole('radio', { name: 'Ordinals', exact: true }).click();
   const asset = await receiveAddress(popup.page, 'ordinals');
-  await popup.page.getByRole('button', { name: 'Close' }).click();
+  await popup.page.getByRole('button', { name: 'Back', exact: true }).click();
   const fixture = createRuneFixture(asset);
   await fundAndConfirm(payment, 100_000);
   await waitForRune(popup.page, fixture, fixture.atomic);
@@ -320,7 +320,7 @@ test('@runes refuses unverified current evidence and never reports unavailable d
   await openRunes(popup.page);
   await popup.page.getByRole('button', { name: 'Receive Runes', exact: true }).click();
   const asset = await receiveAddress(popup.page, 'ordinals');
-  await popup.page.getByRole('button', { name: 'Close' }).click();
+  await popup.page.getByRole('button', { name: 'Back', exact: true }).click();
   const fixture = createRuneFixture(asset);
   await waitForRune(popup.page, fixture, fixture.atomic);
   const before = await mempoolTransactionIds();
@@ -375,7 +375,7 @@ test('@runes reconciles an externally replaced parent and its dispatched extensi
   const payment = await receiveAddress(popup.page);
   await popup.page.getByRole('radio', { name: 'Ordinals', exact: true }).click();
   const asset = await receiveAddress(popup.page, 'ordinals');
-  await popup.page.getByRole('button', { name: 'Close' }).click();
+  await popup.page.getByRole('button', { name: 'Back', exact: true }).click();
   // Fee funding predates the Rune parent, so invalidating only that parent's
   // exact latest block leaves the child's other input confirmed and unchanged.
   await fundAndConfirm(payment, 100_000);
@@ -418,7 +418,7 @@ test('@runes protects Rune coins from ordinary Bitcoin selection, consolidation 
   const payment = await receiveAddress(popup.page);
   await popup.page.getByRole('radio', { name: 'Ordinals', exact: true }).click();
   const asset = await receiveAddress(popup.page, 'ordinals');
-  await popup.page.getByRole('button', { name: 'Close' }).click();
+  await popup.page.getByRole('button', { name: 'Back', exact: true }).click();
   const fixture = createRuneFixture(asset);
   const funding = await fundAndConfirm(payment, 100_000);
   await waitForRune(popup.page, fixture, fixture.atomic);
@@ -553,12 +553,12 @@ test('@runes keeps warm balances through focus with a themed narrow toolbar', as
   const payment = await receiveAddress(popup.page);
   await popup.page.getByRole('radio', { name: 'Ordinals', exact: true }).click();
   const asset = await receiveAddress(popup.page, 'ordinals');
-  await popup.page.getByRole('button', { name: 'Close' }).click();
+  await popup.page.getByRole('button', { name: 'Back', exact: true }).click();
   const fixture = createRuneFixture(asset);
   await fundAndConfirm(payment, 100_000);
   await waitForRune(popup.page, fixture, fixture.atomic);
   const entry = popup.page.getByRole('button', { name: /^Runes/u });
-  await expect(entry).toContainText('1 asset');
+  await expect(entry).toContainText('1 Rune');
   const evidence = `${gatewayOrigin}/v1/runes/outputs`;
   await extensionContext.route(evidence, (route) => route.abort('failed'));
   try {
@@ -571,7 +571,7 @@ test('@runes keeps warm balances through focus with a themed narrow toolbar', as
     await expect(popup.page.getByRole('status').filter({ hasText: 'Showing your last loaded balances' })).toBeVisible({ timeout: 25_000 });
     await expect(row.locator(':scope > span').last()).toHaveText('1,000 R');
     await popup.page.reload();
-    await expect(popup.page.getByRole('button', { name: /^Runes/u })).toContainText('1 asset', { timeout: 3_000 });
+    await expect(popup.page.getByRole('button', { name: /^Runes/u })).toContainText('1 Rune', { timeout: 3_000 });
     await popup.page.getByRole('button', { name: /^Runes/u }).click();
     await expect(row).toBeVisible({ timeout: 3_000 });
     await extensionContext.unroute(evidence);
@@ -584,7 +584,7 @@ test('@runes keeps warm balances through focus with a themed narrow toolbar', as
       await popup.page.reload();
       await popup.page.getByRole('button', { name: /^Runes/u }).click();
       await expect(row).toBeVisible({ timeout: 45_000 });
-      const back = popup.page.getByRole('button', { name: language === 'en' ? '← Back' : '← Atrás', exact: true });
+      const back = popup.page.getByRole('button', { name: language === 'en' ? 'Back' : 'Atrás', exact: true });
       const expand = popup.page.getByRole('button', { name: language === 'en' ? 'Open in full page' : 'Abrir en página completa', exact: true });
       await expect(back).toBeVisible();
       await expect(expand.locator('svg')).toBeVisible();
@@ -616,7 +616,7 @@ test('@runes keeps warm balances through focus with a themed narrow toolbar', as
     }, language);
     await popup.page.reload();
     await expect(fullRow).toBeVisible({ timeout: 45_000 });
-    await expect(popup.page.getByRole('button', { name: language === 'en' ? '← Back' : '← Atrás', exact: true })).toBeVisible();
+    await expect(popup.page.getByRole('button', { name: language === 'en' ? 'Back' : 'Atrás', exact: true })).toBeVisible();
     for (const width of [320, 390]) {
       await popup.page.setViewportSize({ width, height: 720 });
       expect(await popup.page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
@@ -662,7 +662,7 @@ test('@runes lays out send controls and restores fee choices in narrow views', a
   const payment = await receiveAddress(popup.page);
   await popup.page.getByRole('radio', { name: 'Ordinals', exact: true }).click();
   const asset = await receiveAddress(popup.page, 'ordinals');
-  await popup.page.getByRole('button', { name: 'Close' }).click();
+  await popup.page.getByRole('button', { name: 'Back', exact: true }).click();
   const fixture = createRuneFixture(asset);
   await fundAndConfirm(payment, 100_000);
   await waitForRune(popup.page, fixture, fixture.atomic);

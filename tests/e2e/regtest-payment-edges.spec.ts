@@ -71,7 +71,7 @@ async function createFundedWallet(input: {
   const address = checkedRegtestAddress(
     await input.popup.page.getByTestId('receive-address').textContent(),
   );
-  await input.popup.page.getByRole('button', { name: 'Close' }).click();
+  await input.popup.page.getByRole('button', { name: 'Back', exact: true }).click();
 
   const fundings: FundingOutpoint[] = [];
   for (const amount of input.amounts) fundings.push(await fundWithoutConfirmation(address, amount));
@@ -164,10 +164,12 @@ test('sends a two-recipient high-fee payment after explicit password confirmatio
     const reviewHeading = wallet.page.getByRole('heading', { name: 'Review transaction' });
     await expect(reviewHeading).toBeVisible({ timeout: 45_000 });
     const review = reviewHeading.locator('xpath=ancestor::section[1]');
-    await expect(review.getByText(firstDestination, { exact: true })).toBeVisible();
-    await expect(review.getByText(secondDestination, { exact: true })).toBeVisible();
-    await expect(review.getByText('1,001 sats', { exact: true })).toBeVisible();
-    await expect(review.getByText('1,002 sats', { exact: true })).toBeVisible();
+    // Destinations are shown in groups of four (title carries the exact
+    // address) and per-recipient amounts use the unit the user typed.
+    await expect(review.getByTitle(firstDestination, { exact: true })).toBeVisible();
+    await expect(review.getByTitle(secondDestination, { exact: true })).toBeVisible();
+    await expect(review.getByText('0.00001001 BTC', { exact: true })).toBeVisible();
+    await expect(review.getByText('0.00001002 BTC', { exact: true })).toBeVisible();
     await expect(review.getByText(
       'The network fee is more than 10% of the amount being sent.',
       { exact: true },
@@ -551,8 +553,9 @@ test('@extended preserves an unknown broadcast without retrying after a lost res
     const reviewHeading = wallet.page.getByRole('heading', { name: 'Review transaction' });
     await expect(reviewHeading).toBeVisible({ timeout: 45_000 });
     const review = reviewHeading.locator('xpath=ancestor::section[1]');
-    await expect(review.getByText(destination, { exact: true })).toBeVisible();
-    await expect(review.getByRole('definition').filter({ hasText: '30,000 sats' })).toBeVisible();
+    await expect(review.getByTitle(destination, { exact: true })).toBeVisible();
+    await expect(review.getByTestId('send-review-summary').getByText('30,000 sats', { exact: true }))
+      .toBeVisible();
     const password = wallet.page.getByLabel('Confirm app password');
     if (await password.count() > 0) await fillPrivate(password, TEST_PASSWORD);
     const before = await mempoolTransactionIds();

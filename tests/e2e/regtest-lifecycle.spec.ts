@@ -50,7 +50,7 @@ test('creates, funds, spends, and confirms a disposable wallet on real regtest',
   const receiveAddress = checkedRegtestAddress(
     await popup.page.getByTestId('receive-address').textContent(),
   );
-  await popup.page.getByRole('button', { name: 'Close' }).click();
+  await popup.page.getByRole('button', { name: 'Back', exact: true }).click();
 
   const funding = await fundAndConfirm(receiveAddress, FUNDING_SATS);
   let expectedFinalBalance = 0;

@@ -36,7 +36,7 @@ function degradedGatewayBanner(view: GatewayStatusView, t: I18n['t']): string {
       : null,
   ]
     .filter((s): s is string => s !== null)
-    .join(' · ');
+    .join(', ');
   return t('gateway.banner.degraded', { missing });
 }
 
@@ -131,7 +131,14 @@ export function Home(props: {
   }, [homeGatingState]);
   // Data gating (§11.4) outranks the capability banner: showing both would
   // bury the one that blocks actions.
-  const banner = gatingBanner(home, t) ?? gatewayBanner(props.gateway, t);
+  const gating = gatingBanner(home, t);
+  const banner = gating ?? gatewayBanner(props.gateway, t);
+  // A missing optional detection capability is context, not a problem the
+  // user can act on (protected coins stay protected), so it reads as a quiet
+  // note. Orange stays for states that block or degrade what the user does.
+  const bannerIsNotice = gating === null && props.gateway !== null &&
+    (props.gateway.state === 'degraded' ||
+      (isGatewaySyncing(props.gateway) && props.gateway.mode === 'standard_ordinals_safety'));
   const showSyncing =
     banner === null &&
     (home?.scan.kind === 'running' ||
@@ -206,7 +213,8 @@ export function Home(props: {
   return (
     <>
       {banner !== null ? (
-        <p role="status" className={styles['statusBanner']}>
+        <p role="status" className={styles[bannerIsNotice ? 'infoBanner' : 'statusBanner']}
+          data-tone={bannerIsNotice ? 'notice' : 'warning'}>
           {banner}
         </p>
       ) : null}

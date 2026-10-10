@@ -149,14 +149,14 @@ describe('Rune send feedback', () => {
     await screen.findByText(/Do not send again/); expect(approve).toHaveBeenCalledOnce(); expect(prepare).toHaveBeenCalledOnce();
     expect(screen.getByRole('button', { name: 'Review transfer' })).toBeDisabled();
   });
-  it('explains no search matches and supports undoing Hide token', async () => {
+  it('explains no search matches and supports undoing Hide Rune', async () => {
     const data = listing(); data.holdings = Array.from({ length: 5 }, (_, index) => ({ ...data.holdings[0]!, id: `840000:${index + 1}`, name: `TOKEN•${String.fromCharCode(65 + index)}` }));
     setup({ 'runes.list': () => ok(data), 'runes.visibility': (payload) => { data.holdings[0]!.hidden = (payload as { hidden: boolean }).hidden; return ok({ updated: true }); } }); mount();
     fireEvent.change(await screen.findByLabelText('Search name or ID'), { target: { value: 'zzzz' } });
     expect(screen.getByText('No matching Runes')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Clear search' })); fireEvent.click(screen.getByRole('button', { name: /TOKEN•A/ }));
-    fireEvent.click(screen.getByText('Token options')); fireEvent.click(screen.getByRole('button', { name: 'Hide token' }));
-    await screen.findByText('Token hidden from your list.'); expect(screen.queryByRole('button', { name: /TOKEN•A/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('Rune options')); fireEvent.click(screen.getByRole('button', { name: 'Hide Rune' }));
+    await screen.findByText('Rune hidden from your list.'); expect(screen.queryByRole('button', { name: /TOKEN•A/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Undo' })); expect(await screen.findByRole('button', { name: /TOKEN•A/ })).toBeInTheDocument();
   });
 });
@@ -164,8 +164,8 @@ describe('Rune send feedback', () => {
 it('pins Rune receiving to the asset role even if the caller supplies payment', async () => {
   const receive = vi.fn(() => ok({ accountId, address: 'tb1pfixture', path: "m/86'/1'/0'/0/0", kind: 'ordinals', network: 'signet' }));
   setup({ 'address.receive': receive });
-  render(<Providers><Receive initialKind="payment" runeContext expectation={expectation} activeAccountId={accountId} onClose={vi.fn()} /></Providers>);
-  await screen.findByText('tb1pfixture'); expect(receive).toHaveBeenCalledWith(expect.objectContaining({ kind: 'ordinals' }));
+  render(<Providers><Receive initialKind="payment" runeContext expectation={expectation} activeAccountId={accountId} /></Providers>);
+  await screen.findByTitle('tb1pfixture'); expect(receive).toHaveBeenCalledWith(expect.objectContaining({ kind: 'ordinals' }));
   expect(screen.queryByRole('radio', { hidden: true })).not.toBeInTheDocument();
 });
 

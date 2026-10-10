@@ -31,35 +31,47 @@ type IdleTimeoutMs = (typeof TIMEOUTS)[number]['ms'];
 const TIMEOUT_VALUES: readonly IdleTimeoutMs[] = TIMEOUTS.map((entry) => entry.ms);
 
 /**
- * A Settings entry: what it is and why you'd open it on the left, one verb on
- * the right. The button's accessible name is "Open <title>".
+ * One Settings entry: title and a one-line summary on the left, a chevron on
+ * the right, and the whole row is the control. Every page-opening entry looks
+ * and behaves the same. The accessible name is "Open <title>" unless the
+ * caller supplies its established label.
  */
-function SettingLink(props: {
+function SettingRow(props: {
   title: string;
-  summary: string;
+  summary?: string | undefined;
   onOpen: () => void;
-  /** A card of its own titles itself with a heading; rows inside a card don't. */
-  heading?: boolean;
+  label?: string;
 }): ReactNode {
   const { t } = useI18n();
   const id = useId();
   return (
-    <div className={styles['row']}>
+    <div className={styles['settingRow']}>
       <div className={styles['settingText']}>
-        {props.heading === true
-          ? <h2 id={`${id}-title`} className={styles['sectionTitle']}>{props.title}</h2>
-          : <strong id={`${id}-title`}>{props.title}</strong>}
-        <p className={styles['rowLabel']}>{props.summary}</p>
+        <h3 id={`${id}-title`} className={styles['settingRowTitle']}>{props.title}</h3>
+        {props.summary !== undefined
+          ? <p className={styles['rowLabel']}>{props.summary}</p>
+          : null}
       </div>
-      <Button
-        id={`${id}-action`}
-        variant="secondary"
-        aria-labelledby={`${id}-action ${id}-title`}
+      <button
+        type="button"
+        className={styles['settingRowButton']}
+        aria-label={props.label ?? `${t('common.open')} ${props.title}`}
         onClick={props.onOpen}
       >
-        {t('common.open')}
-      </Button>
+        <span aria-hidden="true">›</span>
+      </button>
     </div>
+  );
+}
+
+/** A labelled group of settings rows. */
+function SettingsGroup(props: { title: string; children: ReactNode }): ReactNode {
+  const id = useId();
+  return (
+    <section className={styles['settingsGroup']} aria-labelledby={id}>
+      <h2 id={id} className={styles['settingsGroupTitle']}>{props.title}</h2>
+      <div className={styles['settingsCard']}>{props.children}</div>
+    </section>
   );
 }
 
@@ -202,31 +214,220 @@ export function Settings(props: { session: SessionView }): ReactNode {
     }
   }
 
+  const changePasswordForm = (
+    <form
+      className={styles['form']}
+      onSubmit={(e) => {
+        e.preventDefault();
+        void submitChangePassword();
+      }}
+    >
+      <Field
+        label={t('settings.changePassword.old')}
+        type={showChangePasswords ? 'text' : 'password'}
+        value={oldPassword}
+        onChange={(e) => setOldPassword(e.target.value)}
+        autoComplete="current-password"
+      />
+      <Field
+        label={t('settings.changePassword.new')}
+        type={showChangePasswords ? 'text' : 'password'}
+        value={newPassword}
+        onChange={(e) => setNewPassword(e.target.value)}
+        autoComplete="new-password"
+      />
+      <Field
+        label={t('settings.changePassword.confirm')}
+        type={showChangePasswords ? 'text' : 'password'}
+        value={confirmNew}
+        onChange={(e) => setConfirmNew(e.target.value)}
+        autoComplete="new-password"
+      />
+      <label>
+        <input
+          type="checkbox"
+          checked={showChangePasswords}
+          onChange={(event) => setShowChangePasswords(event.target.checked)}
+        />{' '}
+        {t('onboarding.password.show')}
+      </label>
+      <div className={styles['formFeedback']} aria-live="polite">
+        {pwError !== null ? (
+          <p role="alert" className={styles['error']}>{pwError}</p>
+        ) : pwDone ? (
+          <p role="status" className={styles['success']}>
+            {t('settings.changePassword.done')}
+          </p>
+        ) : confirmNew !== '' && newPassword !== confirmNew ? (
+          <p role="status" className={styles['advisory']}>
+            {t('onboarding.password.mismatch')}
+          </p>
+        ) : isCommonNewPassword(newPassword) ? (
+          <p role="status" className={styles['advisory']}>
+            {t('onboarding.password.common')}
+          </p>
+        ) : (
+          <p className={styles['rowLabel']}>{t('settings.changePassword.hint')}</p>
+        )}
+      </div>
+      <div className={styles['row']}>
+        <span />
+        <Button
+          type="submit"
+          disabled={
+            busy || !passwordChangeReady || props.session.quarantinedVaultCount > 0
+          }
+        >
+          {t('settings.changePassword')}
+        </Button>
+      </div>
+    </form>
+  );
+
+  // Most important first: the wallet and its backup, security, the people
+  // and sites it talks to, then how it looks. Rarely needed tools sit last,
+  // collapsed.
   return (
     <div className={styles['settingsPage']}>
       <h1 className={styles['title']}>{t('settings.title')}</h1>
 
-      <section className={`${styles['section']} ${styles['walletAccountsEntry']}`}>
-        <div>
-          <h2 className={styles['sectionTitle']}>{t('settings.walletAccounts.title')}</h2>
-          <p className={styles['rowLabel']}>{t('settings.walletAccounts.summary')}</p>
+      <SettingsGroup title={t('settings.group.wallet')}>
+        <SettingRow
+          title={t('settings.walletAccounts.title')}
+          summary={`${activeWallet?.name ?? t('settings.vaults')} · ${
+            activeAccount?.name ?? t('account.number', { account: props.session.activeAccount + 1 })}`}
+          label={t('settings.walletAccounts.open')}
+          onOpen={() => (window.location.hash = FULLPAGE_HASH.walletAccounts)}
+        />
+        {props.session.capabilities.canRevealSeed ? (
+          <SettingRow
+            title={t('settings.recovery.entry')}
+            summary={t('settings.recovery.summary')}
+            label={t('settings.recovery.manage')}
+            onOpen={() => (window.location.hash = FULLPAGE_HASH.recovery)}
+          />
+        ) : null}
+      </SettingsGroup>
+
+      <SettingsGroup title={t('settings.security')}>
+        <div className={styles['settingRow']}>
+          <div className={styles['settingText']}>
+            <label className={styles['settingRowTitle']} htmlFor="high-security-mode">
+              {t('settings.highSecurity')}
+            </label>
+            <p className={styles['rowLabel']}>{t('settings.highSecurity.help')}</p>
+          </div>
+          <input
+            id="high-security-mode"
+            className={styles['switch']}
+            type="checkbox"
+            checked={highSecurityMode}
+            onChange={(event) => void toggleHighSecurity(event.target.checked)}
+          />
         </div>
-        <div className={styles['walletAccountsEntryAction']}>
-          <strong>
-            {activeWallet?.name ?? t('settings.vaults')}
-            {' · '}
-            {activeAccount?.name ?? t('account.number', { account: props.session.activeAccount + 1 })}
-          </strong>
-          <Button onClick={() => (window.location.hash = FULLPAGE_HASH.walletAccounts)}>
-            {t('settings.walletAccounts.open')}
+        <div className={`${styles['settingRow']} ${styles['settingRowWrap']}`}>
+          <div className={styles['settingText']}>
+            <span className={styles['settingRowTitle']}>{t('settings.idleTimeout')}</span>
+          </div>
+          <div className={styles['segmented']} role="radiogroup" aria-label={t('settings.idleTimeout')}>
+            {TIMEOUTS.map((option) => (
+              <Button
+                key={option.ms}
+                variant={idleTimeoutMs === option.ms ? 'primary' : 'secondary'}
+                size="compact"
+                role="radio"
+                aria-checked={idleTimeoutMs === option.ms}
+                tabIndex={idleTimeoutMs === option.ms || (idleTimeoutMs === null && option === TIMEOUTS[0]) ? 0 : -1}
+                onClick={() => void pickTimeout(option.ms)}
+                onKeyDown={(event) =>
+                  handleRadioKey(
+                    event,
+                    TIMEOUT_VALUES,
+                    selectedTimeout,
+                    (value) => void pickTimeout(value),
+                  )
+                }
+              >
+                {t(option.key)}
+              </Button>
+            ))}
+          </div>
+        </div>
+        {passkeySettingsAvailable() ? (
+          <SettingRow
+            title={t('settings.passkeys.entry')}
+            summary={t('passkey.settings.entrySummary')}
+            onOpen={() => (window.location.hash = FULLPAGE_HASH.passkeys)}
+          />
+        ) : null}
+        <details className={styles['settingDisclosure']}>
+          <summary>
+            <span className={styles['settingText']}>
+              <strong className={styles['settingRowTitle']}>{t('settings.changePassword')}</strong>
+              <small className={styles['rowLabel']}>{t('settings.changePassword.summary')}</small>
+            </span>
+          </summary>
+          <div className={styles['settingDisclosureBody']}>{changePasswordForm}</div>
+        </details>
+        <div className={styles['settingRow']}>
+          <div className={styles['settingText']}>
+            <span className={styles['settingRowTitle']}>{t('nav.lock')}</span>
+            <p className={styles['rowLabel']}>{t('settings.lock.summary')}</p>
+          </div>
+          <Button
+            variant="secondary"
+            size="compact"
+            onClick={() => {
+              void rpc('vault.lock', {}).then(() => props.session.refresh());
+            }}
+          >
+            {t('settings.lockNow')}
           </Button>
         </div>
-      </section>
+      </SettingsGroup>
 
-      <section className={styles['section']}>
-        <h2 className={styles['sectionTitle']}>{t('settings.appearance')}</h2>
-        <div className={styles['row']}>
-          <span className={styles['rowLabel']}>{t('settings.accent')}</span>
+      <SettingsGroup title={t('settings.group.contacts')}>
+        <SettingRow
+          title={t('settings.contacts')}
+          summary={t('settings.contacts.summary')}
+          onOpen={() => (window.location.hash = FULLPAGE_HASH.addressBook)}
+        />
+        <div className={styles['settingBlock']}>
+          <h3 className={styles['settingRowTitle']}>{t('settings.connectedSites')}</h3>
+          {connectedSites.length === 0
+            ? <p className={styles['rowLabel']} role="status">{t('settings.connectedSites.empty')}</p>
+            : null}
+          {connectedSites.map((site) => (
+            <div key={site.resourceId} className={styles['vaultRow']}>
+              <div>
+                <strong>{site.origin}</strong>
+                <p className={styles['rowLabel']}>
+                  {site.network === 'mainnet'
+                    ? t('home.network.mainnet')
+                    : site.network === 'regtest'
+                      ? t('home.network.regtest')
+                      : t('home.network.signet')}
+                  {' · '}{t('approval.accountNumber', { number: site.account + 1 })}
+                  {' · '}{site.categories.map((category) =>
+                    t(`approval.category.${category}` as MessageKey)).join(', ')}
+                </p>
+              </div>
+              <Button variant="danger" size="compact" onClick={() => void revokeSite(site.resourceId)}>
+                {t('settings.connectedSites.disconnect')}
+              </Button>
+            </div>
+          ))}
+          <p className={styles['rowLabel']}>
+            <a href={FULLPAGE_HASH.siteBlocked}>{t('settings.connectedSites.blockedHelp')}</a>
+          </p>
+        </div>
+      </SettingsGroup>
+
+      <SettingsGroup title={t('settings.appearance')}>
+        <div className={`${styles['settingRow']} ${styles['settingRowWrap']}`}>
+          <div className={styles['settingText']}>
+            <span className={styles['settingRowTitle']}>{t('settings.accent')}</span>
+          </div>
           <div
             className={styles['accentPicker']}
             role="radiogroup"
@@ -252,13 +453,16 @@ export function Settings(props: { session: SessionView }): ReactNode {
             ))}
           </div>
         </div>
-        <div className={styles['row']}>
-          <span className={styles['rowLabel']}>{t('settings.language')}</span>
+        <div className={`${styles['settingRow']} ${styles['settingRowWrap']}`}>
+          <div className={styles['settingText']}>
+            <span className={styles['settingRowTitle']}>{t('settings.language')}</span>
+          </div>
           <div className={styles['segmented']} role="radiogroup" aria-label={t('settings.language')}>
             {LANGS.map((option) => (
               <Button
                 key={option.value}
                 variant={lang === option.value ? 'primary' : 'secondary'}
+                size="compact"
                 role="radio"
                 aria-checked={lang === option.value}
                 tabIndex={lang === option.value ? 0 : -1}
@@ -277,122 +481,7 @@ export function Settings(props: { session: SessionView }): ReactNode {
             ))}
           </div>
         </div>
-      </section>
-
-      {props.session.capabilities.canRevealSeed ? (
-        <section className={`${styles['section']} ${styles['recoverySettingsCard']}`}>
-          <div>
-            <h2 className={styles['sectionTitle']}>{t('settings.recovery.entry')}</h2>
-            <p className={styles['rowLabel']}>{t('settings.recovery.summary')}</p>
-          </div>
-          <Button onClick={() => (window.location.hash = FULLPAGE_HASH.recovery)}>
-            {t('settings.recovery.manage')}
-          </Button>
-        </section>
-      ) : null}
-
-      <section className={styles['section']}>
-        <SettingLink
-          heading
-          title={t('settings.contacts')}
-          summary={t('settings.contacts.summary')}
-          onOpen={() => (window.location.hash = FULLPAGE_HASH.addressBook)}
-        />
-      </section>
-
-      <section className={styles['section']}>
-        <h2 className={styles['sectionTitle']}>{t('settings.connectedSites')}</h2>
-        <p><a href={FULLPAGE_HASH.siteBlocked}>{t('settings.connectedSites.blockedHelp')}</a></p>
-        {connectedSites.length === 0
-          ? (
-              <div className={styles['emptyState']} role="status">
-                <p className={styles['rowLabel']}>{t('settings.connectedSites.empty')}</p>
-              </div>
-            )
-          : null}
-        {connectedSites.map((site) => (
-          <div key={site.resourceId} className={styles['vaultRow']}>
-            <div>
-              <strong>{site.origin}</strong>
-              <p className={styles['rowLabel']}>
-                {site.network === 'mainnet'
-                  ? t('home.network.mainnet')
-                  : site.network === 'regtest'
-                    ? t('home.network.regtest')
-                    : t('home.network.signet')}
-                {' · '}{t('approval.accountNumber', { number: site.account + 1 })}
-                {' · '}{site.categories.map((category) =>
-                  t(`approval.category.${category}` as MessageKey)).join(', ')}
-              </p>
-            </div>
-            <Button variant="danger" onClick={() => void revokeSite(site.resourceId)}>
-              {t('settings.connectedSites.disconnect')}
-            </Button>
-          </div>
-        ))}
-      </section>
-
-      <section className={styles['section']}>
-        <h2 className={styles['sectionTitle']}>{t('settings.security')}</h2>
-        <div className={styles['row']}>
-          <label className={styles['rowLabel']} htmlFor="high-security-mode">
-            {t('settings.highSecurity')}
-          </label>
-          <input
-            id="high-security-mode"
-            type="checkbox"
-            checked={highSecurityMode}
-            onChange={(event) => void toggleHighSecurity(event.target.checked)}
-          />
-        </div>
-        <p className={styles['rowLabel']}>{t('settings.highSecurity.help')}</p>
-        <div className={styles['row']}>
-          <span className={styles['rowLabel']}>{t('settings.idleTimeout')}</span>
-          <div className={styles['segmented']} role="radiogroup" aria-label={t('settings.idleTimeout')}>
-            {TIMEOUTS.map((option) => (
-              <Button
-                key={option.ms}
-                variant={idleTimeoutMs === option.ms ? 'primary' : 'secondary'}
-                role="radio"
-                aria-checked={idleTimeoutMs === option.ms}
-                tabIndex={idleTimeoutMs === option.ms || (idleTimeoutMs === null && option === TIMEOUTS[0]) ? 0 : -1}
-                onClick={() => void pickTimeout(option.ms)}
-                onKeyDown={(event) =>
-                  handleRadioKey(
-                    event,
-                    TIMEOUT_VALUES,
-                    selectedTimeout,
-                    (value) => void pickTimeout(value),
-                  )
-                }
-              >
-                {t(option.key)}
-              </Button>
-            ))}
-          </div>
-        </div>
-        {passkeySettingsAvailable() ? (
-          <SettingLink
-            title={t('settings.passkeys.entry')}
-            summary={t('passkey.settings.entrySummary')}
-            onOpen={() => (window.location.hash = FULLPAGE_HASH.passkeys)}
-          />
-        ) : null}
-        <div className={styles['row']}>
-          <div className={styles['settingText']}>
-            <strong>{t('nav.lock')}</strong>
-            <p className={styles['rowLabel']}>{t('settings.lock.summary')}</p>
-          </div>
-          <Button
-            variant="secondary"
-            onClick={() => {
-              void rpc('vault.lock', {}).then(() => props.session.refresh());
-            }}
-          >
-            {t('settings.lockNow')}
-          </Button>
-        </div>
-      </section>
+      </SettingsGroup>
 
       <details className={styles['disclosureSection']}>
         <summary>
@@ -401,21 +490,37 @@ export function Settings(props: { session: SessionView }): ReactNode {
             <small>{t('settings.advanced.summary')}</small>
           </span>
         </summary>
-        <div className={styles['disclosureContent']}>
-          <SettingLink
+        <div className={styles['settingsCard']}>
+          <div className={`${styles['settingRow']} ${styles['settingRowWrap']}`}>
+            <div className={styles['settingText']}>
+              <h3 className={styles['settingRowTitle']}>{t('scan.rescan')}</h3>
+              <p className={styles['rowLabel']}>{t('scan.rescan.hint')}</p>
+            </div>
+            {props.session.expectation !== null && !rescanning ? (
+              <Button variant="secondary" size="compact" onClick={() => setRescanning(true)}>
+                {t('scan.rescan')}
+              </Button>
+            ) : null}
+          </div>
+          {props.session.expectation !== null && rescanning ? (
+            <div className={styles['settingBlock']}>
+              <ScanProgress expectation={props.session.expectation} autoStart="rescan" />
+            </div>
+          ) : null}
+          <SettingRow
             title={t('communityVault.title')}
             summary={t('communityVault.entry.summary')}
             onOpen={() => (window.location.hash = FULLPAGE_HASH.communityVault)}
           />
           {vaultCoordinatorChannelEnabled() ? (
-            <SettingLink
+            <SettingRow
               title={t('settings.vault.entry')}
               summary={t('vault.settings.entrySummary')}
               onOpen={() => (window.location.hash = FULLPAGE_HASH.vault)}
             />
           ) : null}
           {props.session.capabilities.canSignMessages ? (
-            <SettingLink
+            <SettingRow
               title={t('settings.messageSigning')}
               summary={t('settings.messageSigning.summary')}
               onOpen={() => (window.location.hash = FULLPAGE_HASH.messageSigning)}
@@ -423,98 +528,6 @@ export function Settings(props: { session: SessionView }): ReactNode {
           ) : null}
         </div>
       </details>
-
-      <details className={styles['disclosureSection']}>
-        <summary>
-          <span>
-            <strong>{t('settings.changePassword')}</strong>
-            <small>{t('settings.changePassword.summary')}</small>
-          </span>
-        </summary>
-        <div className={styles['disclosureContent']}>
-          <form
-            className={styles['form']}
-            onSubmit={(e) => {
-              e.preventDefault();
-              void submitChangePassword();
-            }}
-          >
-          <Field
-            label={t('settings.changePassword.old')}
-            type={showChangePasswords ? 'text' : 'password'}
-            value={oldPassword}
-            onChange={(e) => setOldPassword(e.target.value)}
-            autoComplete="current-password"
-          />
-          <Field
-            label={t('settings.changePassword.new')}
-            type={showChangePasswords ? 'text' : 'password'}
-            value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)}
-            autoComplete="new-password"
-          />
-          <Field
-            label={t('settings.changePassword.confirm')}
-            type={showChangePasswords ? 'text' : 'password'}
-            value={confirmNew}
-            onChange={(e) => setConfirmNew(e.target.value)}
-            autoComplete="new-password"
-          />
-          <label>
-            <input
-              type="checkbox"
-              checked={showChangePasswords}
-              onChange={(event) => setShowChangePasswords(event.target.checked)}
-            />{' '}
-            {t('onboarding.password.show')}
-          </label>
-          <div className={styles['formFeedback']} aria-live="polite">
-            {pwError !== null ? (
-              <p role="alert" className={styles['error']}>{pwError}</p>
-            ) : pwDone ? (
-              <p role="status" className={styles['success']}>
-                {t('settings.changePassword.done')}
-              </p>
-            ) : confirmNew !== '' && newPassword !== confirmNew ? (
-              <p role="status" className={styles['advisory']}>
-                {t('onboarding.password.mismatch')}
-              </p>
-            ) : isCommonNewPassword(newPassword) ? (
-              <p role="status" className={styles['advisory']}>
-                {t('onboarding.password.common')}
-              </p>
-            ) : (
-              <p className={styles['rowLabel']}>{t('settings.changePassword.hint')}</p>
-            )}
-          </div>
-          <div className={styles['row']}>
-            <span />
-            <Button
-              type="submit"
-              disabled={
-                busy || !passwordChangeReady || props.session.quarantinedVaultCount > 0
-              }
-            >
-              {t('settings.changePassword')}
-            </Button>
-          </div>
-          </form>
-        </div>
-      </details>
-
-      <section className={styles['section']}>
-        <h2 className={styles['sectionTitle']}>{t('scan.rescan')}</h2>
-        <p className={styles['rowLabel']}>{t('scan.rescan.hint')}</p>
-        {props.session.expectation !== null ? (
-          rescanning ? (
-            <ScanProgress expectation={props.session.expectation} autoStart="rescan" />
-          ) : (
-            <Button variant="secondary" onClick={() => setRescanning(true)}>
-              {t('scan.rescan')}
-            </Button>
-          )
-        ) : null}
-      </section>
 
       {/* §18.5 MUST: the privacy policy and onboarding disclose that the
           hosted gateway can correlate queried scripts by connection. Kept

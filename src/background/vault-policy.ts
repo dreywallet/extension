@@ -62,7 +62,7 @@ export const VAULT_STANDALONE_TOOL_DIGEST_UNPUBLISHED = '00'.repeat(32);
  *
  * Reproduce both values from a clean checkout:
  *
- *   git clone --branch v0.20.8 https://github.com/dreywallet/core.git
+ *   git clone --branch v0.20.9 https://github.com/dreywallet/core.git
  *   cd core && pnpm install --frozen-lockfile && pnpm recovery:verify
  *
  * The artifact digest is deliberately the narrower claim. It stayed
@@ -131,8 +131,8 @@ export const VAULT_STANDALONE_TOOL_DIGEST_UNPUBLISHED = '00'.repeat(32);
  * artifact; each source digest binds its release.
  */
 export const VAULT_STANDALONE_TOOL_RELEASE = Object.freeze({
-  coreTag: 'v0.20.8',
-  sourceDigest: 'd0fd66275e89818c179e61e1d62834d99eda230554d04255280cd53373a5035c',
+  coreTag: 'v0.20.9',
+  sourceDigest: '92286cb222441ffab6387b2e3de033940bb41f50631175c9a804c92ceebb3b70',
   artifactDigest: 'ca61941830fb1a33a142da8551604e66239c4adb5b68ba8900923ec5beb9162f',
 });
 

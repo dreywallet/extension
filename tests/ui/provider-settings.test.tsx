@@ -81,9 +81,13 @@ describe('provider settings', () => {
     const security = screen.getByRole('heading', { name: 'Security' });
     expect(walletAccounts.compareDocumentPosition(recovery) & Node.DOCUMENT_POSITION_FOLLOWING)
       .toBeTruthy();
-    expect(recovery.compareDocumentPosition(recipients) & Node.DOCUMENT_POSITION_FOLLOWING)
+    // Most important first: wallets, backup, security, then everyday lists.
+    expect(recovery.compareDocumentPosition(security) & Node.DOCUMENT_POSITION_FOLLOWING)
       .toBeTruthy();
-    expect(recipients.compareDocumentPosition(security) & Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(security.compareDocumentPosition(recipients) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBeTruthy();
+    const appearance = screen.getByRole('heading', { name: 'Appearance' });
+    expect(recipients.compareDocumentPosition(appearance) & Node.DOCUMENT_POSITION_FOLLOWING)
       .toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'Accounts' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Wallets' })).not.toBeInTheDocument();

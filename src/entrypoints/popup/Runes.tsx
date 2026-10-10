@@ -10,6 +10,7 @@ import { useRpc } from '../../ui/hooks/use-rpc';
 import { useI18n } from '../../ui/i18n';
 import { errorMessageKey } from '../../ui/errors';
 import { usePortfolioPrivacy } from '../../ui/UiRoot';
+import { AddressChunks } from '../../ui/components/AddressChunks';
 import { Button } from '../../ui/components/Button';
 import { BackLink } from '../../ui/components/BackLink';
 import { Field } from '../../ui/components/Field';
@@ -207,7 +208,7 @@ function RuneScreen(props: RunesProps): ReactNode {
   const savedToken = data?.holdings.find((item) => item.id === saved.draft?.runeId);
   const network = runeNetwork(props.accountId);
 
-  if (receive) return <section ref={root} className={styles.page}><div className={popupStyles.overlayToolbar}><BackLink onClick={() => { setReceive(null); refreshBalances(); }} /></div><Receive initialKind={receive} runeContext={receive === 'ordinals'} accountName={props.accountName} expectation={props.expectation} activeAccountId={props.accountId} onClose={() => { setReceive(null); refreshBalances(); }} /></section>;
+  if (receive) return <section ref={root} className={styles.page}><div className={popupStyles.overlayToolbar}><BackLink onClick={() => { setReceive(null); refreshBalances(); }} /></div><Receive initialKind={receive} runeContext={receive === 'ordinals'} accountName={props.accountName} expectation={props.expectation} activeAccountId={props.accountId} /></section>;
   if (currentTransfer) return <section ref={root} className={styles.page}>
     <h1>{t(currentTransfer.status === 'indeterminate' ? 'runes.statusChecking' : `runes.${currentTransfer.status}`)}</h1>
     {currentTransfer.status === 'indeterminate' ? <p className={styles.warning} role="status">{t('runes.noResend')}</p> : null}
@@ -232,12 +233,14 @@ function RuneScreen(props: RunesProps): ReactNode {
     {error ? <div className={styles.error} role="alert" tabIndex={-1} data-rune-error><p>{error}</p>{needsReview ? <Button variant="secondary" disabled={busy} onClick={() => void prepare()}>{t('runes.reviewAgain')}</Button> : null}{uncertainApproval ? <><Button variant="secondary" onClick={() => void refresh()}>{t('runes.checkStatus')}</Button>{data?.transfers.map((item) => <RuneTransferRow key={`${item.txid}:${item.rune.id}`} transfer={item} network={network} />)}</> : null}</div> : null}
     {review ? <>
       <div className={styles.tokenSummary}><strong>{review.rune.name}</strong><span>{review.rune.id}</span></div>
+      {/* Label left, value right; the recipient gets a full-width grouped
+          address, and the bitcoin total follows the two amounts it adds up. */}
       <dl className={styles.review}>
         <dt>{t('runes.amount')}</dt><dd className={styles.balance}>{formatRuneAmount(review.amount, review.rune.divisibility, lang, review.rune.symbol)}</dd>
-        <dt>{t('runes.recipient')}</dt><dd>{review.recipient}</dd>
-        <dt>{t('runes.totalBitcoin')}</dt><dd><strong>{sats((BigInt(review.feeSats) + BigInt(review.postageSats)).toString())} sats</strong></dd>
+        <dt className={styles.wide}>{t('runes.recipient')}</dt><dd className={styles.wide}><AddressChunks address={review.recipient} /></dd>
         <dt>{t('runes.fee')}</dt><dd>{sats(review.feeSats)} sats</dd>
         <dt>{t('runes.postage')}</dt><dd>{sats(review.postageSats)} sats</dd>
+        <dt className={styles.total}>{t('runes.totalBitcoin')}</dt><dd className={styles.total}><strong>{sats((BigInt(review.feeSats) + BigInt(review.postageSats)).toString())} sats</strong></dd>
       </dl>
       <p className={styles.hint}>{t('runes.postageHint')}</p>
       <p className={styles.hint}>{t('runes.retained')}: {formatRuneAmount(review.retained, review.rune.divisibility, lang, review.rune.symbol)}</p>

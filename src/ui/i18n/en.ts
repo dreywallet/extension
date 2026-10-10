@@ -70,7 +70,7 @@ export const en = {
   'account.manage.restored': 'Account {account} was shown again because new activity was found.',
   'account.manage.blocker.active': 'Switch to another account before hiding this one.',
   'account.manage.blocker.last_visible': 'At least one account must remain visible.',
-  'account.manage.blocker.stale': 'Refresh both account lanes before hiding this account.',
+  'account.manage.blocker.stale': 'Refresh this account’s Bitcoin and Ordinals addresses before hiding it.',
   'account.manage.blocker.holdings': 'Move all bitcoin and ordinals out before hiding this account.',
   'account.manage.blocker.pending': 'Resolve pending or uncertain transactions before hiding this account.',
   'account.manage.import': 'Import watch-only account',
@@ -258,6 +258,7 @@ export const en = {
   'send.fee.standard.eta': '~10–20 min',
   'send.fee.economy': 'Economy',
   'send.fee.economy.eta': '~20–30 min',
+  'send.fee.change': 'Change',
   'send.fee.custom': 'Custom',
   'send.fee.rate': 'Fee rate (sat/vB)',
   'send.fee.customWarning':
@@ -330,10 +331,10 @@ export const en = {
     'The transaction output that currently holds the inscription. It must remain unchanged until you send.',
   'ordinal.composer.rescue.title': 'Rescue inscription',
   'ordinal.composer.rescue.body':
-    'Move this inscription from the Bitcoin lane to your owned Ordinals address.',
+    'This inscription is at your Bitcoin address. Move it to your Ordinals address so it isn’t spent by accident.',
   'ordinal.composer.sweep.title': 'Sweep excess bitcoin',
   'ordinal.composer.sweep.body':
-    'Return economic excess to your Bitcoin balance while reserving fixed postage in the Ordinals lane.',
+    'Move extra bitcoin back to your Bitcoin balance, keeping the small amount each inscription needs at your Ordinals address.',
   'ordinal.review.transfer.title': 'Send this inscription?',
   'ordinal.review.batch.title': 'Send {count} inscriptions to one address?',
   'ordinal.review.batch.groups': 'Atomic inscription groups',
@@ -383,9 +384,9 @@ export const en = {
   'ordinal.error.inseparable':
     'This inscription shares a sat or cannot be separated safely, so it cannot be sent alone.',
   'ordinal.error.cleanFees':
-    'No cardinal-clean Bitcoin input is available to pay the network fee.',
+    'There isn’t enough ordinary bitcoin (without inscriptions or other assets) to pay the network fee.',
   'ordinal.error.noExcess':
-    'There is no economic excess to sweep after reserved postage and the network fee.',
+    'There is no extra bitcoin to move once each inscription’s small amount and the network fee are covered.',
   'approval.waiting': 'Waiting for a site request…',
   'approval.reviewUnavailable.title': 'Unable to verify request summary',
   'approval.reviewUnavailable.body':
@@ -651,7 +652,7 @@ export const en = {
     'Kept as postage at your collectibles address',
   'utxos.reason.userFrozen': 'Frozen by you — use Unfreeze to make it available',
   'utxos.reason.dustQuarantined':
-    "Below Bitcoin's script dust limit and set aside automatically",
+    'Too small to spend, so set aside automatically',
   'utxos.reason.unconfirmed': 'Waiting for a network confirmation',
   'utxos.reason.planLocked': 'Reserved by a pending transaction',
   'utxos.reason.uneconomic': 'The fee to spend this input would consume its value',
@@ -712,7 +713,7 @@ export const en = {
   'scan.interrupted': 'An account scan was interrupted.',
   'scan.resume': 'Resume scan',
   'scan.rescan': 'Rescan accounts',
-  'scan.rescan.hint': 'Re-check all accounts and Xverse-compatible addresses for balances and collectibles.',
+  'scan.rescan.hint': 'Look again for balances and collectibles in every account, including addresses other wallets may have used.',
 
   'activity.confirmed': 'Confirmed',
   'activity.title': 'Transaction activity',
@@ -802,7 +803,7 @@ export const en = {
   'gateway.status': 'Wallet service status',
   'gateway.mode.full': 'Full Sat Safety',
   'gateway.mode.standard': 'Standard Ordinals Safety',
-  'gateway.banner.degraded': 'Unavailable: {missing}. Inscriptions stay protected.',
+  'gateway.banner.degraded': 'Checks for {missing} are unavailable right now. Inscriptions stay protected.',
   'gateway.banner.stale':
     'Wallet data is out of date. Balances may be behind; spending stays blocked until data is fresh.',
   'gateway.banner.unreachable':
@@ -811,8 +812,8 @@ export const en = {
     'The wallet service cannot protect collectibles right now. Viewing and receiving only.',
   'gateway.banner.syncing':
     'Syncing with Bitcoin. Your saved balance stays visible, and spending resumes automatically when the update finishes.',
-  'gateway.protection.rareSats': 'rare-sat detection',
-  'gateway.protection.runes': 'Rune and unknown-token detection',
+  'gateway.protection.rareSats': 'rare sats',
+  'gateway.protection.runes': 'Runes and other tokens',
 
   'ordinals.empty': 'Your collectibles will appear here.',
   'gallery.title': 'Ordinals',
@@ -926,7 +927,7 @@ export const en = {
   'gallery.action.unavailableDetails': 'Why unavailable?',
   'gallery.action.reason.stale': 'Asset verification is out of date. Refresh before spending.',
   'gallery.action.reason.unconfirmed': 'Wait for one network confirmation before spending.',
-  'gallery.action.reason.frozen': 'This output is frozen or quarantined.',
+  'gallery.action.reason.frozen': 'This coin is frozen or set aside.',
   'gallery.action.reason.unsupported': 'This output also contains an unsupported asset.',
   'gallery.action.reason.rare': 'This output contains a non-common rare sat.',
   'gallery.action.reason.locked': 'A pending transaction already reserves this output.',
@@ -934,11 +935,11 @@ export const en = {
     'This inscription is co-located with another inscription and cannot be sent alone.',
   'gallery.action.reason.unverifiableLocation':
     'This inscription’s on-chain location could not be verified, so it cannot be sent safely.',
-  'gallery.action.reason.lane': 'This inscription is not in a safely spendable Ordinals lane.',
+  'gallery.action.reason.lane': 'This inscription isn’t at your Ordinals address, so it can’t be sent safely from here.',
   'gallery.attention.title': 'Needs attention',
   'gallery.attention.body':
-    'Rescue inscriptions in the Bitcoin lane or sweep excess bitcoin from the Ordinals lane.',
-  'gallery.sweep.value': '{sats} sats in the Ordinals lane',
+    'Move inscriptions that landed at your Bitcoin address, or return extra bitcoin from your Ordinals address.',
+  'gallery.sweep.value': '{sats} sats of extra bitcoin at your Ordinals address',
   'inscription.review.heading': 'Inscription effects',
   'inscription.review.viewAll': 'View all {count}',
   'inscription.review.location': 'Inscription location',
@@ -995,9 +996,9 @@ export const en = {
   'receive.tab.bitcoin': 'Bitcoin',
   'receive.tab.ordinals': 'Ordinals',
   'receive.bitcoin.explain':
-    'Your stable Bitcoin address on {network}. Use it for ordinary bitcoin payments — it stays the same between uses.',
+    'For bitcoin payments on {network}. This address stays the same.',
   'receive.ordinals.explain':
-    'Your Ordinals address on {network}. Use it for inscriptions and protected sats — collectibles sent here stay separated from spendable bitcoin.',
+    'For inscriptions and other collectibles on {network}, kept apart from your spendable bitcoin.',
   'receive.copyAddress': 'Copy address',
   'receive.amount': 'Amount (sats, optional)',
   'receive.amount.invalid': 'Enter a whole number of sats.',
@@ -1007,6 +1008,7 @@ export const en = {
   'receive.qr.alt': 'QR code for your receive address',
   'receive.request.title': 'Send bitcoin',
   'receive.request.testNetworkWarning': 'TEST NETWORK · NO REAL VALUE',
+  'receive.request.open': 'Request a specific amount',
   'receive.request.share': 'Share request',
   'receive.request.sharing': 'Preparing request…',
   'receive.request.shared': 'Request ready to share.',
@@ -1036,6 +1038,8 @@ export const en = {
   'settings.contacts': 'Saved recipients',
   'settings.contacts.summary': 'Keep frequently used addresses on this device.',
   'settings.security': 'Security',
+  'settings.group.wallet': 'Wallet',
+  'settings.group.contacts': 'Contacts & sites',
   'settings.advanced': 'Advanced',
   'settings.advanced.summary': 'Specialized signing and wallet tools.',
   'settings.activeAccount': 'Active standard account',
@@ -1043,7 +1047,7 @@ export const en = {
   'settings.messageSigning.summary': 'Create a BIP-322 proof for text you choose.',
   'settings.highSecurity': 'Confirm every transaction with password',
   'settings.highSecurity.help':
-    'Off by default. Turn this on to require your app password again before every transaction.',
+    'Ask for your app password again before every transaction.',
   'settings.idleTimeout': 'Lock after inactivity',
   'settings.idleTimeout.1h': '1 hour',
   'settings.idleTimeout.12h': '12 hours',
@@ -1054,7 +1058,7 @@ export const en = {
   'settings.reveal.entry': 'Reveal recovery phrase',
   'settings.recovery.entry': 'Backup & recovery',
   'settings.recovery.summary':
-    'Review Spending and Vault recovery, check your backup, or securely reveal your Spending recovery phrase.',
+    'Check your backup, test recovery, or reveal your recovery phrase.',
   'settings.recovery.manage': 'Open recovery center',
   'settings.changePassword': 'Change app password',
   'settings.changePassword.summary': 'Update the password used to unlock Drey.',

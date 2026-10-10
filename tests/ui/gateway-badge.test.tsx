@@ -139,9 +139,11 @@ describe('Home degraded-status slot (§10.2)', () => {
       </Providers>,
     );
     const banner = screen.getByRole('status');
-    expect(banner.textContent).toContain('rare-sat detection');
-    expect(banner.textContent).toContain('Rune and unknown-token detection');
+    expect(banner.textContent).toContain('rare sats');
+    expect(banner.textContent).toContain('Runes and other tokens');
     expect(banner.textContent).toContain('Inscriptions stay protected');
+    // Context, not an alarm: the user cannot act on a missing capability.
+    expect(banner).toHaveAttribute('data-tone', 'notice');
   });
 
   it('shows the stale and unreachable one-liners', () => {

@@ -59,3 +59,15 @@
 .options summary { cursor: pointer; padding-block: 10px; }
 .options > p { margin-bottom: 8px; overflow-wrap: anywhere; }
 .empty { text-align: center; display: grid; gap: 10px; padding-block: 20px; }
+
+/* Review rows: label left, value right. */
+.review { grid-template-columns: auto minmax(0, 1fr); column-gap: 0; row-gap: 0; align-items: stretch; }
+.review dt, .review dd { display: flex; align-items: center; }
+.review dd { justify-content: flex-end; }
+.review dd.wide { display: block; }
+.review dd:not(.wide) { padding-left: 12px; }
+.review dt, .review dd { border-bottom: 1px solid var(--color-border); padding: 8px 0; margin: 0; }
+.review dd { text-align: right; }
+.review .wide { grid-column: 1 / -1; text-align: left; }
+.review dt.wide { border-bottom: 0; padding-bottom: 2px; }
+.review .total { border-bottom: 0; font-weight: 800; opacity: 1; }

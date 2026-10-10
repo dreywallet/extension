@@ -21,6 +21,7 @@ import { Runes } from '../popup/Runes';
 import { BlockedSiteSupport } from './BlockedSiteSupport';
 import { BrandMark } from '../../ui/components/BrandMark';
 import { FullpageNav } from './FullpageNav';
+import { FullpageHeader } from './FullpageHeader';
 import {
   FULLPAGE_HASH,
   fullpageViewFromHash,
@@ -36,9 +37,14 @@ const SETTINGS_PAGES_WITH_NAV: ReadonlySet<FullpageView> = new Set<FullpageView>
   'walletAccounts', 'accounts', 'passkeys', 'messageSigning', 'addressBook',
 ]);
 
-function PageShell(props: { children: ReactNode }): ReactNode {
-  return <div className={styles['page']}><BrandMark />{props.children}</div>;
+function PageShell(props: { children: ReactNode; header?: ReactNode }): ReactNode {
+  return <div className={styles['page']}>{props.header ?? <BrandMark />}{props.children}</div>;
 }
+
+/** Pages that show recovery words, keys or a signing ceremony. */
+const CEREMONY_VIEWS: ReadonlySet<FullpageView> = new Set<FullpageView>([
+  'recovery', 'reveal', 'vault', 'communityVault', 'passkeys',
+]);
 
 export function App(): ReactNode {
   const { t } = useI18n();
@@ -122,7 +128,13 @@ export function App(): ReactNode {
   }
 
   return (
-    <PageShell>
+    <PageShell header={(
+      <FullpageHeader
+        session={session}
+        ceremony={CEREMONY_VIEWS.has(view)}
+        hideAccount={view === 'walletAccounts' || view === 'accounts'}
+      />
+    )}>
       {session.backupDeferred ? (
         <div role="alert" data-testid="backup-reminder">
           <strong>{t('backup.reminder.title')}</strong>

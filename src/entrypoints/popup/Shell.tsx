@@ -180,7 +180,6 @@ export function Shell(props: {
                 initialKind={receiveKind}
                 expectation={props.session.expectation}
                 activeAccountId={props.session.activeAccountId}
-                onClose={() => setOverlay('none')}
               />
             </>
           ) : null

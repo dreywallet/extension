@@ -3,6 +3,43 @@
 Notable user-facing changes to Drey are recorded here. For earlier releases,
 see the production release tags in the repository.
 
+## 0.17.0
+
+### Changed
+
+- Send keeps Review pinned at the bottom, so the next step is always in
+  view. In the popup the fee choice is one summary line ("Standard ·
+  ~10–20 min · ≈ 282 sats") that opens the full list; Address book moves
+  onto the recipient field and adding another recipient is a text link.
+- The send review opens at its top and puts the amount, the destination in
+  groups of four, the fee and the total (in sats, so they add up) in one
+  card, with Cancel and Sign pinned. Ordinal and Rune reviews use the same
+  one-line rows.
+- Receive shows a one-line explanation, Copy directly under the grouped
+  address, and the optional amount and message behind "Request a specific
+  amount". Back is the single way out.
+- Settings is grouped into Wallet, Security, Contacts & sites, Appearance
+  and Advanced, with one row style; "Confirm every transaction with
+  password" is a switch; Rescan accounts moves to Advanced.
+- The full page shows the same header as the popup (account, network,
+  Lock) and a Wallet shortcut that opens the side panel.
+- A temporarily unavailable rare-sat or Rune check is shown as a quiet
+  note instead of an orange alert; inscriptions stay protected.
+- Plainer words throughout: "your Bitcoin/Ordinals address", "extra
+  bitcoin", "set aside", "too small to spend", "ordinary bitcoin", and
+  "Runes" everywhere.
+- Settings lists the most important items first.
+
+### Added
+
+- Recovery phrase entry completes a word from a unique prefix of three or
+  more letters, flags a wrong word only once you leave the box, and accepts
+  pasted phrases with numbering, one word per line, or commas.
+
+### Security
+
+- Consume exact-pinned `@drey/core` v0.20.9.
+
 ## 0.16.0
 
 ### Added

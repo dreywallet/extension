@@ -6,6 +6,7 @@ import { Button } from '../../ui/components/Button';
 import { Field } from '../../ui/components/Field';
 import { MnemonicGrid } from '../../ui/components/MnemonicGrid';
 import { WordInput } from '../../ui/components/WordInput';
+import { completeSeedWord } from '../../ui/seed-words';
 import { pickPositions } from '../../ui/random';
 import type { ActiveSessionExpectation } from '../../ui/hooks/use-session';
 import styles from './onboarding.module.css';
@@ -51,7 +52,7 @@ export function ResumeVerify(props: {
     setBusy(true);
     try {
       const result = await rpc('vault.verifyBackup', {
-        words: positions.map((index, i) => ({ index, word: typed[i]?.trim() ?? '' })),
+        words: positions.map((index, i) => ({ index, word: completeSeedWord(typed[i] ?? '') })),
         wordCount: 12,
         ...props.expectation,
       });
@@ -239,6 +240,15 @@ export function ResumeVerify(props: {
               const next: [string, string, string] = [...typed];
               next[i] = e.target.value;
               setTyped(next);
+            }}
+            onBlur={() => {
+              const completed = completeSeedWord(typed[i] ?? '');
+              if (completed === (typed[i] ?? '')) return;
+              setTyped((current) => {
+                const next: [string, string, string] = [...current];
+                next[i] = completed;
+                return next;
+              });
             }}
           />
         ))}

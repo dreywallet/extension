@@ -1,5 +1,4 @@
 import { useRef, useState, type ReactNode } from 'react';
-import { wordlist as english } from '@scure/bip39/wordlists/english';
 import { validateMnemonic } from '@drey/core/domain/keys/mnemonic';
 import { useI18n } from '../../ui/i18n';
 import { useRpc } from '../../ui/hooks/use-rpc';
@@ -9,6 +8,9 @@ import { Field } from '../../ui/components/Field';
 import { ScanProgress } from '../../ui/components/ScanProgress';
 import { WordInput } from '../../ui/components/WordInput';
 import { handleRadioKey } from '../../ui/radio-keyboard';
+import {
+  completeSeedWord, couldBecomeSeedWord, isSeedWord, splitPastedPhrase,
+} from '../../ui/seed-words';
 import { checkPasswordPolicy } from '@drey/core/domain/vault/password';
 import { isCommonNewPassword } from '../../ui/password-guidance';
 import type { ActiveSessionExpectation } from '../../ui/hooks/use-session';
@@ -18,8 +20,6 @@ import { PasskeyOffer } from './PasskeyOffer';
 
 const WORD_COUNTS = [12, 15, 18, 21, 24] as const;
 type WordCount = (typeof WORD_COUNTS)[number];
-
-const WORD_SET = new Set(english);
 
 function isWordCount(value: number): value is WordCount {
   return WORD_COUNTS.some((count) => count === value);
@@ -54,6 +54,8 @@ export function RestoreFlow(props: {
   const [passphrase, setPassphrase] = useState('');
   const [showPassphrase, setShowPassphrase] = useState(false);
   const [wordsHidden, setWordsHidden] = useState(true);
+  // A box is judged once the user leaves it, not on every keystroke.
+  const [checkedWords, setCheckedWords] = useState<ReadonlySet<number>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const operationId = useRef(globalThis.crypto.randomUUID()).current;
@@ -77,13 +79,40 @@ export function RestoreFlow(props: {
     setWords((prev) => Array.from({ length: next }, (_, i) => prev[i] ?? ''));
   }
 
+  /** Spread several words across the boxes starting at `start`. */
+  function placeWords(start: number, parts: string[]): void {
+    if (start === 0 && isWordCount(parts.length)) {
+      setCount(parts.length);
+      setWords(parts);
+      setCheckedWords(new Set(parts.map((_, index) => index)));
+      setError(null);
+      return;
+    }
+    if (start + parts.length > words.length) {
+      setError(t('restore.invalidPhrase'));
+      return;
+    }
+    const next = [...words];
+    const checked = new Set(checkedWords);
+    for (let j = 0; j < parts.length; j += 1) {
+      next[start + j] = parts[j] ?? '';
+      checked.add(start + j);
+    }
+    setWords(next);
+    setCheckedWords(checked);
+  }
+
   function normalized(): string {
     return words.map((w) => w.trim().toLowerCase().normalize('NFKD')).join(' ');
   }
 
   function submitWords(): void {
     setError(null);
-    if (!validateMnemonic(normalized())) {
+    // Finish any word the user abbreviated in the last box before checking.
+    const completed = words.map(completeSeedWord);
+    setWords(completed);
+    setCheckedWords(new Set(completed.map((_, index) => index)));
+    if (!validateMnemonic(completed.map((w) => w.normalize('NFKD')).join(' '))) {
       setError(t('restore.invalidPhrase'));
       return;
     }
@@ -203,7 +232,8 @@ export function RestoreFlow(props: {
         <div className={styles['wordRow']}>
           {words.map((word, i) => {
             const trimmed = word.trim().toLowerCase();
-            const invalid = trimmed !== '' && !WORD_SET.has(trimmed);
+            const invalid = trimmed !== '' && !isSeedWord(trimmed) &&
+              (checkedWords.has(i) || !couldBecomeSeedWord(trimmed));
             return (
               <WordInput
                 key={i}
@@ -211,25 +241,26 @@ export function RestoreFlow(props: {
                 value={word}
                 masked={wordsHidden}
                 error={invalid ? t('restore.invalidWord') : undefined}
+                onPaste={(e) => {
+                  // Read the clipboard directly: a single-line input would
+                  // otherwise glue one-word-per-line phrases together.
+                  const parts = splitPastedPhrase(e.clipboardData.getData('text'));
+                  if (parts.length === 0) return;
+                  e.preventDefault();
+                  placeWords(i, parts);
+                }}
+                onBlur={() => {
+                  const completed = completeSeedWord(word);
+                  if (completed !== word) {
+                    setWords((current) => current.map((value, index) => index === i ? completed : value));
+                  }
+                  if (completed !== '') setCheckedWords((current) => new Set(current).add(i));
+                }}
                 onChange={(e) => {
-                  // Support pasting a whole space-separated phrase into word 1.
-                  const parts = e.target.value.split(/\s+/u).filter((p) => p !== '');
+                  // Typed or programmatic input containing several words.
+                  const parts = splitPastedPhrase(e.target.value);
                   if (parts.length > 1) {
-                    if (i === 0 && isWordCount(parts.length)) {
-                      setCount(parts.length);
-                      setWords(parts);
-                      setError(null);
-                      return;
-                    }
-                    if (i + parts.length > words.length) {
-                      setError(t('restore.invalidPhrase'));
-                      return;
-                    }
-                    const next = [...words];
-                    for (let j = 0; j < parts.length; j += 1) {
-                      next[i + j] = parts[j] ?? '';
-                    }
-                    setWords(next);
+                    placeWords(i, parts);
                   } else {
                     const next = [...words];
                     next[i] = e.target.value;

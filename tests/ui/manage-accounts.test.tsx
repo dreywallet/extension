@@ -101,7 +101,7 @@ describe('ManageAccounts', () => {
     expect(screen.getByText(/Hiding never deletes an account/iu)).toBeInTheDocument();
     const stale = await screen.findByRole('article', { name: 'Account 2' });
     expect(within(stale).getByRole('button', { name: 'Hide account' })).toBeDisabled();
-    expect(within(stale).getByText(/Refresh both account lanes/iu)).toBeInTheDocument();
+    expect(within(stale).getByText(/Refresh this account’s Bitcoin and Ordinals addresses/iu)).toBeInTheDocument();
 
     const hideable = screen.getByRole('article', { name: 'Account 3' });
     const hide = within(hideable).getByRole('button', { name: 'Hide account' });

@@ -11,6 +11,7 @@ import {
 } from 'react';
 import type { OpResult } from '../../adapters/rpc-client';
 import { Button } from '../../ui/components/Button';
+import { AddressChunks } from '../../ui/components/AddressChunks';
 import { Field } from '../../ui/components/Field';
 import { InscriptionReview, parseInscriptionReview } from '../../ui/components/InscriptionReview';
 import { MediaBadgeTile, TextExcerptTile } from '../../ui/components/PreviewTile';
@@ -287,6 +288,8 @@ export function Transactions(props: {
     useState<ImportedPaymentSuggestions>({});
   const [paymentImportBusy, setPaymentImportBusy] = useState(false);
   const [feeTier, setFeeTier] = useState<'priority' | 'standard' | 'economy' | 'custom'>('standard');
+  const [feeExpanded, setFeeExpanded] = useState(false);
+  const transactionsRoot = useRef<HTMLDivElement>(null);
   const [customFee, setCustomFee] = useState('');
   const [quote, setQuote] = useState<OpResult<'fees.quote'> | null>(null);
   const [quoteUnavailable, setQuoteUnavailable] = useState(false);
@@ -340,6 +343,19 @@ export function Transactions(props: {
     return usd === null ? other : `${other} · ≈ ${usd}`;
   };
   const network = accountNetwork(props.accountId);
+  // Each step (form, review, result) starts at its own top. Without this the
+  // review inherits the form's scroll position and opens mid-way down, with
+  // its heading and the Back control out of sight.
+  const reviewStepKey = plan?.review?.psbtHash ?? null;
+  const resultStepKey = result?.txid ?? null;
+  useEffect(() => {
+    const root = transactionsRoot.current;
+    if (root === null) return;
+    const scroller = root.closest('main');
+    if (scroller) scroller.scrollTop = 0;
+    const page = document.scrollingElement;
+    if (page) page.scrollTop = 0;
+  }, [reviewStepKey, resultStepKey]);
   /** Checks a typed address as soon as the user leaves the field. Payment
    *  request URIs are resolved by the worker, so only bare addresses count. */
   useEffect(() => {
@@ -1201,17 +1217,24 @@ export function Transactions(props: {
 
   const recipientPicker = (target = 0) => (
     <>
-      <Button
+      {/* Sits on the field's label line (see .recipientField) rather than
+          taking a full-width row of its own under every address field. */}
+      <button
         ref={target === 0 ? recipientPickerTrigger : undefined}
         type="button"
-        variant="secondary"
+        className={styles['recipientPickerTrigger']}
         onClick={(event) => {
           recipientPickerTrigger.current = event.currentTarget;
           void openRecipientPicker(target);
         }}
       >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+          <rect x="5" y="3" width="15" height="18" rx="2" />
+          <path d="M2 7h5M2 12h5M2 17h5M9 17c0-4 7-4 7 0" />
+          <circle cx="12.5" cy="9" r="2" />
+        </svg>
         {t('contacts.addressBook')}
-      </Button>
+      </button>
       {target === 0 && selfTransfer ? <p className={styles['advisory']} role="note">{t('contacts.selfTransfer')}</p> : null}
       {recipientPickerOpen && recipientPickerTarget === target ? (
         <div className={`${styles['dialogBackdrop']} ${props.compact ? styles['dialogBackdropCompact'] : ''}`} role="presentation">
@@ -1291,7 +1314,49 @@ export function Transactions(props: {
     );
   };
   const customRate = parseCustomFeeInput(customFee);
-  const feeChooser = (
+  const feeTiers = [
+    ['priority', quote?.prioritySatPerKvB, 'send.fee.priority', 'send.fee.priority.eta'],
+    ['standard', quote?.standardSatPerKvB, 'send.fee.standard', 'send.fee.standard.eta'],
+    ['economy', quote?.economySatPerKvB, 'send.fee.economy', 'send.fee.economy.eta'],
+  ] as const;
+  const selectedFeeTier = feeTiers.find(([tier]) => tier === feeTier);
+  // The popup has room for one line of fee information, not four. Standard is
+  // the right answer for most sends, so it stays a summary until the user asks
+  // to change it; anything that needs attention keeps the full list open.
+  const feeCollapsed = props.compact === true && !feeExpanded && feeTier !== 'custom' &&
+    !quoteUnavailable && selectedFeeTier !== undefined;
+  const feeChooser = feeCollapsed && selectedFeeTier !== undefined ? (
+    <button
+      type="button"
+      className={styles['feeSummary']}
+      aria-expanded={false}
+      onClick={() => setFeeExpanded(true)}
+    >
+      <span className={styles['feeSummaryCopy']}>
+        <span className={styles['feeSummaryLabel']}>
+          {t('send.fee')}
+          <span
+            className={styles['feeRefreshStatus']}
+            data-loading={quoteLoading}
+            role="status"
+            aria-label={quoteLoading ? t('send.fee.loading') : undefined}
+            title={quoteLoading ? t('send.fee.loading') : undefined}
+          />
+        </span>
+        <span className={styles['feeSummaryChoice']}>
+          <strong>{t(selectedFeeTier[2])}</strong>
+          <span className={styles['feeOptionEta']}>{t(selectedFeeTier[3])}</span>
+        </span>
+      </span>
+      <span className={styles['feeOptionRate']}>
+        {selectedFeeTier[1] === undefined
+          ? <span className={styles['feeOptionRateSecondary']}>{t('send.fee.loading')}</span>
+          : feeEstimate(BigInt(selectedFeeTier[1])) ??
+            <span>{displaySatPerVb(selectedFeeTier[1])} sat/vB</span>}
+      </span>
+      <span className={styles['feeSummaryChange']}>{t('send.fee.change')}</span>
+    </button>
+  ) : (
     <fieldset className={styles['fieldset']}>
       <legend>
         <span className={styles['feeLegend']}>
@@ -1305,11 +1370,7 @@ export function Transactions(props: {
           />
         </span>
       </legend>
-      {([
-        ['priority', quote?.prioritySatPerKvB, 'send.fee.priority', 'send.fee.priority.eta'],
-        ['standard', quote?.standardSatPerKvB, 'send.fee.standard', 'send.fee.standard.eta'],
-        ['economy', quote?.economySatPerKvB, 'send.fee.economy', 'send.fee.economy.eta'],
-      ] as const).map(([tier, rate, label, eta]) => (
+      {feeTiers.map(([tier, rate, label, eta]) => (
         <label className={styles['feeOption']} key={tier}>
           <input
             type="radio"
@@ -1368,12 +1429,37 @@ export function Transactions(props: {
   const inscriptionReviewValid = inscriptionReview.valid && inscriptionEffectCountValid;
   const requiresPreviewAcknowledgement = reviewRecord?.['requiresPreviewAcknowledgement'] === true ||
     inscriptionReview.items.some((item) => item.preview.kind === 'placeholder');
+  // Fee and total stay in sats whatever unit the amount was typed in, so the
+  // three numbers add up at a glance (0.00000282 BTC is not glanceable). The
+  // headline amount above shows both units.
+  const reviewCostRows = review === undefined ? null : (
+    <dl className={`${styles['summaryRows']} ${styles['reviewCostRows']}`}>
+      <div>
+        <dt>{t('send.review.fee')}</dt>
+        <dd>
+          {BigInt(review.feeSats).toLocaleString(lang)} sats
+          {reviewFiat(BigInt(review.feeSats)) !== null ? (
+            <span className={styles['reviewFiat']}>≈ {reviewFiat(BigInt(review.feeSats))}</span>
+          ) : null}
+        </dd>
+      </div>
+      <div className={styles['summaryTotal']}>
+        <dt>{t('send.review.total')}</dt>
+        <dd>
+          {BigInt(review.totalSats).toLocaleString(lang)} sats
+          {reviewFiat(BigInt(review.totalSats)) !== null ? (
+            <span className={styles['reviewFiat']}>≈ {reviewFiat(BigInt(review.totalSats))}</span>
+          ) : null}
+        </dd>
+      </div>
+    </dl>
+  );
   const validAmountSats = amountAsSats(amount, sendUnit);
   const batchRecipientsReady = additionalRecipients.length === 0 || additionalRecipients.every(
     (entry) => entry.address !== '' && amountAsSats(entry.amount, sendUnit) !== null,
   );
   return (
-    <div className={props.compact ? styles['compactTransactions'] : undefined}>
+    <div ref={transactionsRoot} className={props.compact ? styles['compactTransactions'] : undefined}>
       {!props.compact ? (
         <FullpageNav
           current={props.initialSection}
@@ -1524,7 +1610,7 @@ export function Transactions(props: {
             )}
             {review.ordinalAction?.action === 'manage_postage' ? (
               <>
-                <dl className={`${styles['details']} ${styles['ordinalReviewSummary']}`}>
+                <dl className={`${styles['summaryRows']} ${styles['ordinalReviewSummary']}`}>
                   <div>
                     <dt>{t('ordinal.postage.recovered')}</dt>
                     <dd>{BigInt(review.ordinalAction.returnedBtcSats).toLocaleString(lang)} sats</dd>
@@ -1541,7 +1627,7 @@ export function Transactions(props: {
                 {review.ordinalAction.items.map((item) => (
                   <section className={styles['ordinalBatchGroup']} key={item.inscriptionId}>
                     <code className={styles['code']}>{item.inscriptionId}</code>
-                    <dl className={styles['details']}>
+                    <dl className={styles['summaryRows']}>
                       <div>
                         <dt>{t('ordinal.postage.current')}</dt>
                         <dd>{BigInt(item.currentPostageSats).toLocaleString(lang)} sats</dd>
@@ -1568,10 +1654,10 @@ export function Transactions(props: {
               </>
             ) : review.ordinalAction?.action === 'batch_transfer' ? (
               <>
-                <dl className={`${styles['details']} ${styles['ordinalReviewSummary']}`}>
+                <dl className={`${styles['summaryRows']} ${styles['ordinalReviewSummary']}`}>
                   <div className={styles['ordinalDestination']}>
                     <dt>{t('ordinal.review.destination')}</dt>
-                    <dd>{review.ordinalAction.destination.address}</dd>
+                    <dd><AddressChunks address={review.ordinalAction.destination.address} /></dd>
                     <span className={styles['ordinalOwnership']}>
                       {review.ordinalAction.destination.ownership === 'wallet'
                         ? t('ordinal.review.owned')
@@ -1636,10 +1722,10 @@ export function Transactions(props: {
               </>
             ) : review.ordinalAction ? (
               <>
-                <dl className={`${styles['details']} ${styles['ordinalReviewSummary']}`}>
+                <dl className={`${styles['summaryRows']} ${styles['ordinalReviewSummary']}`}>
                   <div className={styles['ordinalDestination']}>
                     <dt>{t('ordinal.review.destination')}</dt>
-                    <dd>{review.ordinalAction.destination.address}</dd>
+                    <dd><AddressChunks address={review.ordinalAction.destination.address} /></dd>
                     <span className={styles['ordinalOwnership']}>
                       {review.ordinalAction.destination.ownership === 'wallet'
                         ? t('ordinal.review.owned')
@@ -1736,39 +1822,23 @@ export function Transactions(props: {
                     <ul className={styles['reviewRecipients']}>
                       {review.recipients.map((output, index) => (
                         <li key={`${output.address}:${index}`}>
-                          <span className={styles['reviewAddress']}>{output.address}</span>
+                          <AddressChunks address={output.address} className={styles['reviewAddress']} />
                           {review.recipients.length > 1 ? (
                             <strong>{formatReviewAmount(BigInt(output.valueSats))}</strong>
                           ) : null}
                         </li>
                       ))}
                     </ul>
+                    {reviewCostRows}
                   </div>
-                ) : null}
-                <dl className={styles['details']}>
-                  {review.recipients.length === 0 ? (
-                    <div><dt>{t('send.review.amount')}</dt><dd>{formatReviewAmount(BigInt(review.amountSats))}</dd></div>
-                  ) : null}
-                  <div>
-                    <dt>{t('send.review.fee')}</dt>
-                    <dd>
-                      {/* Fees read best in sats: 0.00000282 BTC is not glanceable. */}
-                      {BigInt(review.feeSats).toLocaleString(lang)} sats
-                      {reviewFiat(BigInt(review.feeSats)) !== null ? (
-                        <span className={styles['reviewFiat']}> ≈ {reviewFiat(BigInt(review.feeSats))}</span>
-                      ) : null}
-                    </dd>
+                ) : (
+                  <div className={styles['reviewHero']} data-testid="send-review-summary">
+                    <dl className={styles['summaryRows']}>
+                      <div><dt>{t('send.review.amount')}</dt><dd>{formatReviewAmount(BigInt(review.amountSats))}</dd></div>
+                    </dl>
+                    {reviewCostRows}
                   </div>
-                  <div>
-                    <dt>{t('send.review.total')}</dt>
-                    <dd>
-                      {formatReviewAmount(BigInt(review.totalSats))}
-                      {reviewFiat(BigInt(review.totalSats)) !== null ? (
-                        <span className={styles['reviewFiat']}> ≈ {reviewFiat(BigInt(review.totalSats))}</span>
-                      ) : null}
-                    </dd>
-                  </div>
-                </dl>
+                )}
                 {paymentRequestLabel !== '' || paymentRequestMessage !== '' ? (
                   <div className={styles['advisory']} role="note">
                     <strong>{t('send.paymentInstruction.reviewMetadata')}</strong>
@@ -1791,7 +1861,7 @@ export function Transactions(props: {
                 ) : null}
                 <details>
                   <summary>{t('send.review.details')}</summary>
-                  <dl className={styles['details']}>
+                  <dl className={styles['summaryRows']}>
                     <div><dt>{t('send.review.change')}</dt><dd>{reviewChangeSats(review).toLocaleString(lang)} sats</dd></div>
                     <div><dt>{t('send.review.rate')}</dt><dd>{displaySatPerVb(review.feeRateSatPerKvB)} sat/vB</dd></div>
                     <div><dt>{t('send.review.inputs')}</dt><dd>{review.inputs.length}</dd></div>
@@ -1855,7 +1925,7 @@ export function Transactions(props: {
               <p className={styles['advisory']} role="note">{t('send.watchOnlyReview')}</p>
             ) : null}
             {error ? <p role="alert" className={styles['error']}>{error}</p> : null}
-            <div className={styles['row']}>
+            <div className={`${styles['row']} ${styles['stickyActions']}`}>
               <Button variant="secondary" onClick={() => void cancelPlan()} disabled={busy}>{t('common.cancel')}</Button>
               {props.capabilities.canSignTransactions ? (
               <Button onClick={() => void approve()} disabled={!props.capabilities.canSignPsbt || busy ||
@@ -1979,7 +2049,7 @@ export function Transactions(props: {
             </details>
             {ordinalDraft.kind === 'ordinal_transfer' ||
             ordinalDraft.kind === 'ordinal_batch_transfer' ? (
-              <>
+              <div className={styles['recipientField']}>
                 <Field
                   label={t('send.recipient')}
                   value={recipient}
@@ -1987,7 +2057,7 @@ export function Transactions(props: {
                   autoComplete="off"
                 />
                 {recipientPicker()}
-              </>
+              </div>
             ) : null}
             {ordinalDraft.kind === 'ordinal_postage_manage' ? (
               <fieldset className={styles['fieldset']}>
@@ -2024,6 +2094,7 @@ export function Transactions(props: {
             {error !== null ? (
               <p ref={sendFormError} tabIndex={-1} role="alert" className={styles['error']}>{error}</p>
             ) : null}
+            <div className={styles['stickyActions']}>
             <Button
               type="submit"
               disabled={!props.capabilities.canBuildUnsignedPsbt || busy || !feeSelectionReady ||
@@ -2033,17 +2104,16 @@ export function Transactions(props: {
                   postageTarget === 'custom' && customPostageSats === '') ||
                 (feeTier === 'custom' && !customFeeValid)}
             >{t('send.review')}</Button>
+            </div>
           </form>
         ) : (
           <form className={styles['section']} onSubmit={submitSend}>
             <h1 className={styles['title']}>{t('send.title')}</h1>
-            <label>
-              {t('send.account')}{' '}
-              {Number(account) + 1}
-            </label>
+            {/* The popup and full-page headers already name the active account. */}
+            <div className={styles['recipientField']}>
             <Field
               ref={recipientInput}
-              label={t('send.recipient.paymentInstruction')}
+              label={t(props.compact ? 'send.recipient' : 'send.recipient.paymentInstruction')}
               value={recipient}
               maxLength={8 * 1024}
               error={recipientError}
@@ -2052,12 +2122,13 @@ export function Transactions(props: {
               onPaste={(event) => void pastePaymentInstruction(event)}
               autoComplete="off"
             />
+            {recipientPicker()}
+            </div>
             {paymentImportBusy ? (
               <p className={styles['advisory']} role="status">
                 {t('send.paymentInstruction.resolving')}
               </p>
             ) : null}
-            {recipientPicker()}
             {paymentRequestLabel !== '' || paymentRequestMessage !== '' ? (
               <div className={styles['advisory']} role="note">
                 <strong>{t('send.paymentInstruction.reviewMetadata')}</strong>
@@ -2192,19 +2263,21 @@ export function Transactions(props: {
                 {additionalRecipients.map((entry, index) => (
                   <fieldset className={styles['batchRecipient']} key={entry.id}>
                     <legend>{t('send.batch.recipient', { number: index + 2 })}</legend>
-                    <Field
-                      ref={(element) => {
-                        if (element === null) batchAddressInputs.current.delete(entry.id);
-                        else batchAddressInputs.current.set(entry.id, element);
-                      }}
-                      label={t('send.recipient')}
-                      value={entry.address}
-                      onChange={(event) => changeAdditionalRecipient(
-                        entry.id, 'address', event.target.value.trim(),
-                      )}
-                      autoComplete="off"
-                    />
-                    {recipientPicker(entry.id)}
+                    <div className={styles['recipientField']}>
+                      <Field
+                        ref={(element) => {
+                          if (element === null) batchAddressInputs.current.delete(entry.id);
+                          else batchAddressInputs.current.set(entry.id, element);
+                        }}
+                        label={t('send.recipient')}
+                        value={entry.address}
+                        onChange={(event) => changeAdditionalRecipient(
+                          entry.id, 'address', event.target.value.trim(),
+                        )}
+                        autoComplete="off"
+                      />
+                      {recipientPicker(entry.id)}
+                    </div>
                     <Field
                       label={t('send.amount', { unit: sendUnit === 'btc' ? 'BTC' : 'sats' })}
                       inputMode="decimal"
@@ -2225,23 +2298,25 @@ export function Transactions(props: {
                 ))}
               </div>
             ) : null}
-            <div className={styles['row']}>
-              <Button
-                ref={addRecipientButton}
-                type="button"
-                variant="secondary"
-                disabled={additionalRecipients.length + 1 >= MAX_NATIVE_BATCH_RECIPIENTS}
-                onClick={addRecipient}
-              >
-                {t('send.batch.add')}
-              </Button>
-            </div>
+            {/* Splitting a payment is the exception, so it reads as a link
+                rather than competing with Review for attention. */}
+            <button
+              ref={addRecipientButton}
+              type="button"
+              className={styles['textAction']}
+              disabled={additionalRecipients.length + 1 >= MAX_NATIVE_BATCH_RECIPIENTS}
+              onClick={addRecipient}
+            >
+              <span aria-hidden="true">+ </span>{t('send.batch.add')}
+            </button>
             {selected.size > 0 ? <p className={styles['success']}>{t('send.manualInputs', { count: selected.size })}</p> : null}
             {feeChooser}
             {error !== null ? (
               <p ref={sendFormError} tabIndex={-1} role="alert" className={styles['error']}>{error}</p>
             ) : null}
-            <Button type="submit" disabled={!props.capabilities.canBuildUnsignedPsbt || busy || !feeSelectionReady || recipient === '' || (!sendMax && validAmountSats === null) || !batchRecipientsReady || (feeTier === 'custom' && !customFeeValid)}>{t('send.review')}</Button>
+            <div className={styles['stickyActions']}>
+              <Button type="submit" disabled={!props.capabilities.canBuildUnsignedPsbt || busy || !feeSelectionReady || recipient === '' || (!sendMax && validAmountSats === null) || !batchRecipientsReady || (feeTier === 'custom' && !customFeeValid)}>{t('send.review')}</Button>
+            </div>
           </form>
         )
       ) : null}

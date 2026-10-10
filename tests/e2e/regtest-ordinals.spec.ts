@@ -48,6 +48,13 @@ async function refreshUntilCount(page: Page, count: number): Promise<void> {
   });
 }
 
+/** The popup shows the fee choice as one summary line until it is opened;
+ *  with no automatic quote the full list is already showing. */
+async function openFeeChoices(page: Page): Promise<void> {
+  const summary = page.getByRole('button', { name: /Network fee/iu });
+  if (await summary.isVisible()) await summary.click();
+}
+
 test('@ordinals receives, verifies, displays, and transfers a real inscription', async ({
   onboarding,
   popup,
@@ -67,7 +74,7 @@ test('@ordinals receives, verifies, displays, and transfers a real inscription',
   await popup.page.getByRole('radio', { name: 'Ordinals' }).click();
   const ordinalAddress = await receiveAddress(popup.page, 'Ordinals');
   expect(ordinalAddress).not.toBe(paymentAddress);
-  await popup.page.getByRole('button', { name: 'Close' }).click();
+  await popup.page.getByRole('button', { name: 'Back', exact: true }).click();
 
   const feeFunding = await fundWithoutConfirmation(paymentAddress, 80_000);
   const fixture = await createOrdinalFixture(ordinalAddress);
@@ -104,6 +111,7 @@ test('@ordinals receives, verifies, displays, and transfers a real inscription',
   await expect(popup.page.getByText("You're sending")).toBeVisible();
   const destination = await freshExternalOrdinalAddress();
   await fillPrivate(popup.page.getByLabel('Recipient address'), destination);
+  await openFeeChoices(popup.page);
   await popup.page.getByRole('radio', { name: 'Custom' }).check();
   await popup.page.getByLabel('Fee rate (sat/vB)').fill('1');
   await popup.page.getByRole('button', { name: 'Review transaction' }).click();
@@ -168,7 +176,7 @@ test('@ordinals rescues a real wrong-lane inscription and returns directly to Ga
   const paymentAddress = await receiveAddress(popup.page, 'Bitcoin');
   await popup.page.getByRole('radio', { name: 'Ordinals' }).click();
   const ordinalAddress = await receiveAddress(popup.page, 'Ordinals');
-  await popup.page.getByRole('button', { name: 'Close' }).click();
+  await popup.page.getByRole('button', { name: 'Back', exact: true }).click();
 
   const feeFunding = await fundWithoutConfirmation(paymentAddress, 80_000);
   const wrongLaneFixture = await createOrdinalFixture(paymentAddress, 'payment');
@@ -187,7 +195,7 @@ test('@ordinals rescues a real wrong-lane inscription and returns directly to Ga
     timeout: 60_000,
   });
   await expect(popup.page.getByText(
-    'Rescue inscriptions in the Bitcoin lane or sweep excess bitcoin from the Ordinals lane.',
+    'Move inscriptions that landed at your Bitcoin address, or return extra bitcoin from your Ordinals address.',
   )).toBeVisible();
   await expect(popup.page.getByText(wrongLaneFixture.inscriptionId)).toBeVisible();
 
@@ -196,9 +204,10 @@ test('@ordinals rescues a real wrong-lane inscription and returns directly to Ga
   await rescueButton.click();
   await expect(popup.page.getByRole('heading', { name: 'Rescue inscription' })).toBeVisible();
   await expect(popup.page.getByText(
-    'Move this inscription from the Bitcoin lane to your owned Ordinals address.',
+    'This inscription is at your Bitcoin address. Move it to your Ordinals address so it isn’t spent by accident.',
   )).toBeVisible();
   await expect(popup.page.getByLabel('Recipient address')).toHaveCount(0);
+  await openFeeChoices(popup.page);
   await popup.page.getByRole('radio', { name: 'Custom' }).check();
   await popup.page.getByLabel('Fee rate (sat/vB)').fill('1');
   await popup.page.getByRole('button', { name: 'Review transaction' }).click();
@@ -259,7 +268,7 @@ test('@ordinals safely reduces real inscription postage and returns excess bitco
   const paymentAddress = await receiveAddress(popup.page, 'Bitcoin');
   await popup.page.getByRole('radio', { name: 'Ordinals' }).click();
   const ordinalAddress = await receiveAddress(popup.page, 'Ordinals');
-  await popup.page.getByRole('button', { name: 'Close' }).click();
+  await popup.page.getByRole('button', { name: 'Back', exact: true }).click();
 
   const feeFunding = await fundWithoutConfirmation(paymentAddress, 80_000);
   const fixture = await createOrdinalFixture(ordinalAddress);
@@ -286,6 +295,7 @@ test('@ordinals safely reduces real inscription postage and returns excess bitco
     'Currently with this collectible: 10,000 sats',
   )).toBeVisible();
   await popup.page.getByRole('radio', { name: 'Common — 546 sats' }).check();
+  await openFeeChoices(popup.page);
   await popup.page.getByRole('group', { name: /Network fee/iu })
     .getByRole('radio', { name: 'Custom' }).check();
   await popup.page.getByLabel('Fee rate (sat/vB)').fill('1');
@@ -337,7 +347,7 @@ test('@ordinals batch-sends two real inscriptions with isolated postage and clea
   const paymentAddress = await receiveAddress(popup.page, 'Bitcoin');
   await popup.page.getByRole('radio', { name: 'Ordinals' }).click();
   const ordinalAddress = await receiveAddress(popup.page, 'Ordinals');
-  await popup.page.getByRole('button', { name: 'Close' }).click();
+  await popup.page.getByRole('button', { name: 'Back', exact: true }).click();
 
   const feeFunding = await fundWithoutConfirmation(paymentAddress, 120_000);
   const fixtures = [
@@ -363,6 +373,7 @@ test('@ordinals batch-sends two real inscriptions with isolated postage and clea
   await expect(popup.page.getByRole('heading', { name: 'Send 2 inscriptions' })).toBeVisible();
   const destination = await freshExternalOrdinalAddress();
   await fillPrivate(popup.page.getByLabel('Recipient address'), destination);
+  await openFeeChoices(popup.page);
   await popup.page.getByRole('radio', { name: 'Custom' }).check();
   await popup.page.getByLabel('Fee rate (sat/vB)').fill('1');
   await popup.page.getByRole('button', { name: 'Review transaction' }).click();
@@ -372,7 +383,7 @@ test('@ordinals batch-sends two real inscriptions with isolated postage and clea
   });
   await expect(batchHeading).toBeVisible({ timeout: 45_000 });
   const review = batchHeading.locator('xpath=ancestor::section[1]');
-  await expect(review.getByText(destination, { exact: true })).toBeVisible();
+  await expect(review.getByTitle(destination, { exact: true })).toBeVisible();
   await expect(review.getByText('External address', { exact: true })).toBeVisible();
   await expect(review.getByText('20,000 sats', { exact: true })).toBeVisible();
   await expect(review.getByText('1 sat/vB', { exact: true })).toBeVisible();
@@ -426,7 +437,7 @@ test('@ordinals sweeps real excess bitcoin while retaining calm fixed postage', 
   await popup.page.getByRole('button', { name: 'Receive Bitcoin', exact: true }).click();
   await popup.page.getByRole('radio', { name: 'Ordinals' }).click();
   const ordinalAddress = await receiveAddress(popup.page, 'Ordinals');
-  await popup.page.getByRole('button', { name: 'Close' }).click();
+  await popup.page.getByRole('button', { name: 'Back', exact: true }).click();
 
   const source = await fundWithoutConfirmation(ordinalAddress, 50_000);
   await mineBlock();
@@ -441,13 +452,14 @@ test('@ordinals sweeps real excess bitcoin while retaining calm fixed postage', 
   await expect(popup.page.getByRole('heading', { name: 'Needs attention' })).toBeVisible({
     timeout: 60_000,
   });
-  await expect(popup.page.getByText('50,000 sats in the Ordinals lane')).toBeVisible();
+  await expect(popup.page.getByText('50,000 sats of extra bitcoin at your Ordinals address')).toBeVisible();
   await popup.page.getByRole('button', { name: 'Sweep', exact: true }).click();
   await expect(popup.page.getByRole('heading', { name: 'Sweep excess bitcoin' })).toBeVisible();
   await expect(popup.page.getByText(
-    'Return economic excess to your Bitcoin balance while reserving fixed postage in the Ordinals lane.',
+    'Move extra bitcoin back to your Bitcoin balance, keeping the small amount each inscription needs at your Ordinals address.',
   )).toBeVisible();
   await expect(popup.page.getByLabel('Recipient address')).toHaveCount(0);
+  await openFeeChoices(popup.page);
   await popup.page.getByRole('radio', { name: 'Custom' }).check();
   await popup.page.getByLabel('Fee rate (sat/vB)').fill('1');
   await popup.page.getByRole('button', { name: 'Review transaction' }).click();
@@ -479,7 +491,7 @@ test('@ordinals sweeps real excess bitcoin while retaining calm fixed postage', 
   );
   await expect.poll(async () => ({
     restingPostage: await restingPostage.count(),
-    oldSweep: await popup.page.getByText('50,000 sats in the Ordinals lane').count(),
+    oldSweep: await popup.page.getByText('50,000 sats of extra bitcoin at your Ordinals address').count(),
     sweepButtons: await popup.page.getByRole('button', { name: 'Sweep', exact: true }).count(),
     error: await popup.page.getByText(
       'Verified inscription details are unavailable. Your inscriptions remain protected.',

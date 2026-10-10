@@ -742,7 +742,7 @@ describe('transaction screen orchestration', () => {
     const stale = await screen.findByText(/not fresh enough to spend/iu);
     expect(stale).toHaveFocus();
     // The message sits beside the action that produced it.
-    expect(stale.nextElementSibling).toBe(review);
+    expect(stale.nextElementSibling).toContainElement(review);
     expect(amount).not.toHaveAttribute('aria-invalid');
   });
 
@@ -848,7 +848,8 @@ describe('transaction screen orchestration', () => {
     );
     expect(screen.getByText('≈ $0.28', { exact: false })).toBeInTheDocument();
     expect(screen.getByText('282 sats')).toBeInTheDocument();
-    expect(screen.getByText('0.00010282 BTC')).toBeInTheDocument();
+    // Fee and total stay in sats so the numbers add up at a glance.
+    expect(screen.getByText('10,282 sats')).toBeInTheDocument();
     // Change, rate and inputs are still available, but only as detail.
     expect(screen.getByText('Change returning').closest('details')).not.toBeNull();
     expect(screen.getByText('Fee rate').closest('details')).not.toBeNull();
@@ -1328,7 +1329,7 @@ describe('transaction screen orchestration', () => {
     });
 
     render(view('utxos'));
-    expect(await screen.findByText(/below Bitcoin's script dust limit/iu))
+    expect(await screen.findByText(/Too small to spend, so set aside automatically/iu))
       .toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Freeze' })).not.toBeInTheDocument();
     expect(screen.queryByText('dust_quarantined')).not.toBeInTheDocument();
@@ -2208,7 +2209,7 @@ describe('transaction screen orchestration', () => {
     expect(screen.getByText(
       'The recipient and amount stay the same. Drey replaces the pending transaction with a higher-fee version.',
     )).toBeInTheDocument();
-    expect(screen.getByText('bc1qrecipient')).toBeInTheDocument();
+    expect(screen.getByTitle('bc1qrecipient')).toBeInTheDocument();
     expect(screen.getAllByText('2,500 sats').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('300 sats')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Sign and speed up' })).toBeInTheDocument();
